@@ -1,4 +1,4 @@
-# Busi Pos Web
+# Shop+
 
 Flutter POS (Point of Sale) management system with Supabase backend. Designed for multi-branch retail operations in the Dominican Republic.
 

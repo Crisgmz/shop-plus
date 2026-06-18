@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Centralized design tokens for Busi Pos Web.
+/// Centralized design tokens for Shop+.
 ///
 /// Follows the SHOP_PLUS_RD_DISENO_COMPLETO.txt specifications.
 abstract final class AppTokens {

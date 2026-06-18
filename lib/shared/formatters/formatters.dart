@@ -1,4 +1,4 @@
-/// Centralized formatters for Busi Pos Web.
+/// Centralized formatters for Shop+.
 ///
 /// Replaces per-page `_money()`, `_date()`, `_pretty()` helpers with a single
 /// import. All pages should use these instead of defining local copies.

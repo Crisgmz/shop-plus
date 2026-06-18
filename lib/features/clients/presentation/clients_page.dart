@@ -653,7 +653,7 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
             ),
             pw.SizedBox(height: 4),
             pw.Text(
-              'Busi Pos Web — Sistema de Gestión Comercial',
+              'Shop+ — Sistema de Gestión Comercial',
               style: pw.TextStyle(fontSize: 9, color: muted),
             ),
             pw.SizedBox(height: 12),
@@ -670,7 +670,7 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
                 pw.Text(
-                  'Busi Pos Web — Reporte generado automáticamente',
+                  'Shop+ — Reporte generado automáticamente',
                   style: pw.TextStyle(fontSize: 8, color: muted),
                 ),
                 pw.Text(

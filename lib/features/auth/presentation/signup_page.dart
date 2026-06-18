@@ -135,7 +135,7 @@ class _SignupPageState extends ConsumerState<SignupPage> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Empezá a usar Busi Pos Web — registrate y configurá tu '
+                          'Empezá a usar Shop+ — registrate y configurá tu '
                           'empresa en un minuto.',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),

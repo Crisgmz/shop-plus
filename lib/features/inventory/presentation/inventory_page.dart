@@ -911,7 +911,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
   Future<Uint8List> _buildInventoryPdf(List<InventoryProduct> products) async {
     final pdf = pw.Document(
       title: 'Reporte de Inventario',
-      author: 'Busi Pos Web',
+      author: 'Shop+',
     );
 
     final theme = pw.ThemeData.withFont(
@@ -949,7 +949,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
                     pw.Text(
-                      'Busi Pos Web',
+                      'Shop+',
                       style: pw.TextStyle(
                         fontSize: 14,
                         fontWeight: pw.FontWeight.bold,
@@ -994,7 +994,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
             child: pw.Row(
               children: [
                 pw.Text(
-                  'Busi Pos Web · Reporte de Inventario',
+                  'Shop+ · Reporte de Inventario',
                   style: pw.TextStyle(fontSize: 8, color: muted),
                 ),
                 pw.Spacer(),

@@ -117,7 +117,7 @@ class AppShell extends ConsumerWidget {
           Expanded(
             child: Scaffold(
               appBar: _TopBar(
-                title: currentNavItem?.label ?? 'Busi Pos Web',
+                title: currentNavItem?.label ?? 'Shop+',
                 currentPath: currentPath,
                 branchName: branchName,
                 branchOptions: branches,
@@ -533,7 +533,7 @@ class _DesktopSidebarState extends State<_DesktopSidebar> {
           const SizedBox(width: AppTokens.s10),
           const Expanded(
             child: Text(
-              'Busi Pos Web',
+              'Shop+',
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 22,
@@ -584,7 +584,7 @@ class _MobileMenuDrawer extends StatelessWidget {
                     const SizedBox(width: AppTokens.s8),
                     const Expanded(
                       child: Text(
-                        'Busi Pos Web',
+                        'Shop+',
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,

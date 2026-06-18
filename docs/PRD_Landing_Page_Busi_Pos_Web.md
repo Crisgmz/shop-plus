@@ -1,4 +1,4 @@
-# PRD — Landing Page Busi Pos Web
+# PRD — Landing Page Shop+
 
 ---
 
@@ -7,7 +7,7 @@
 > Copiar/pegar este prompt en Claude / v0 / Lovable / Cursor / la IA que vayas a usar para generar la landing. El PRD completo está debajo del prompt como contexto.
 
 ```
-Necesito que generes una landing page completa para "Busi Pos Web", un
+Necesito que generes una landing page completa para "Shop+", un
 sistema de Punto de Venta (POS) multi-sucursal para el mercado dominicano.
 El PRD detallado está debajo de este prompt — léelo entero antes de empezar.
 
@@ -41,7 +41,7 @@ REQUISITOS DE CONTENIDO:
 
 ESTRUCTURA OBLIGATORIA (en este orden):
 1. Hero (3.1) — above-the-fold con CTAs
-2. "Por qué Busi Pos Web" — 3 columnas (3.2)
+2. "Por qué Shop+" — 3 columnas (3.2)
 3. Demo visual — placeholder para GIF/video (3.3)
 4. Features detalladas — grid 3×2 (3.4)
 5. "Cómo funciona" — 3 pasos (3.5)
@@ -111,7 +111,7 @@ Captar dueños de negocios retail / mayoristas en República Dominicana que nece
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│  [Logo Busi Pos Web]                  Iniciar sesión │
+│  [Logo Shop+]                  Iniciar sesión │
 ├────────────────────────────────────────────────────────┤
 │                                                        │
 │    El POS dominicano que vende, factura y cumple      │
@@ -136,11 +136,11 @@ Captar dueños de negocios retail / mayoristas en República Dominicana que nece
 - Primario: `Empezar gratis` → /registro
 - Secundario: `Ver demo en vivo` → modal con video 60-90s del POS en acción
 
-**Social proof inline:** "+XXX comercios usan Busi Pos Web hoy" (placeholder hasta tener data real).
+**Social proof inline:** "+XXX comercios usan Shop+ hoy" (placeholder hasta tener data real).
 
 ---
 
-### 3.2 Bloque "Por qué Busi Pos Web" (3 columnas)
+### 3.2 Bloque "Por qué Shop+" (3 columnas)
 
 Tres beneficios fundamentales, no listas de features. Cada uno con un ícono custom + headline corto + 2 líneas.
 
@@ -250,12 +250,12 @@ Fondo de color brand (`#0B5ED7`), texto blanco grande:
 ### 3.10 Footer
 
 ```
-Busi Pos Web                    Producto       Empresa        Recursos
+Shop+                    Producto       Empresa        Recursos
 [logo]                          POS            Sobre nosotros Documentación
 "Sistema POS multi-sucursal      Reportes       Contacto       Guía DGII
  para RD"                       Cotizaciones   WhatsApp       Status
 
-© 2026 Busi Pos Web · Términos · Privacidad
+© 2026 Shop+ · Términos · Privacidad
 ```
 
 ---
@@ -282,7 +282,7 @@ Busi Pos Web                    Producto       Empresa        Recursos
 ## 5. SEO / Metadata
 
 ```html
-<title>Busi Pos Web — POS multi-sucursal con NCF automático para RD</title>
+<title>Shop+ — POS multi-sucursal con NCF automático para RD</title>
 <meta name="description" content="Sistema de punto de venta dominicano con NCF, 606/607/IT-1, multi-sucursal y reportes en tiempo real. Empezás gratis.">
 <meta property="og:image" content="/og-image.png"> <!-- 1200×630 -->
 ```

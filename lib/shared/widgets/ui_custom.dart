@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/tokens.dart';
 
-/// Custom UI components for Busi Pos Web based on the design documentation.
+/// Custom UI components for Shop+ based on the design documentation.
 /// Replicates the "Componentes Reutilizables" section of the Design Doc.
 
 class KPICard extends StatelessWidget {

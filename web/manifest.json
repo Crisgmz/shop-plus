@@ -1,11 +1,11 @@
 {
-    "name": "Busi Pos Web",
-    "short_name": "Busi Pos Web",
+    "name": "Shop+",
+    "short_name": "Shop+",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0B5ED7",
     "theme_color": "#0B5ED7",
-    "description": "Busi Pos Web — sistema de punto de venta y gestión comercial.",
+    "description": "Shop+ — sistema de punto de venta y gestión comercial.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
