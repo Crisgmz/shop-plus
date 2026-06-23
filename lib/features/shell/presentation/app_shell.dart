@@ -39,7 +39,47 @@ class AppShell extends ConsumerWidget {
     final showSidebar = context.showDesktopSidebar;
 
     Future<void> signOut() async {
-      await authRepository.signOut();
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Cerrar sesión'),
+          content: const Text(
+            '¿Seguro que querés cerrar la sesión? Si tenés una venta o '
+            'cotización a medias sin guardar, se perderá.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTokens.destructive,
+              ),
+              icon: const Icon(Icons.logout_rounded, size: 18),
+              label: const Text('Cerrar sesión'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+
+      try {
+        await authRepository.signOut();
+        // En WEB: hard reload (limpia caches + service workers) para que el
+        // próximo usuario arranque con un ProviderContainer 100% limpio. Sin
+        // esto, providers sin autoDispose (dashboard, appSettings, etc.) podían
+        // conservar los datos del usuario anterior — es caché del cliente, no
+        // RLS. En nativo es no-op: ahí limpia el listener de authStateChanges.
+        await clearWebCachesAndReload();
+      } catch (error) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('No se pudo cerrar sesión: $error')),
+          );
+        }
+      }
     }
 
     Future<void> selectBranch(String branchId) async {
@@ -525,23 +565,12 @@ class _DesktopSidebarState extends State<_DesktopSidebar> {
       ),
       child: Row(
         children: [
-          const Icon(
-            Icons.storefront_outlined,
-            color: Colors.white,
-            size: AppTokens.iconSizeL,
+          Image.asset(
+            'assets/shopplus_logo_white.png',
+            height: 30,
+            fit: BoxFit.contain,
           ),
-          const SizedBox(width: AppTokens.s10),
-          const Expanded(
-            child: Text(
-              'Shop+',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
+          const Spacer(),
           toggleButton,
         ],
       ),
@@ -580,18 +609,12 @@ class _MobileMenuDrawer extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.storefront_outlined, color: Colors.white),
-                    const SizedBox(width: AppTokens.s8),
-                    const Expanded(
-                      child: Text(
-                        'Shop+',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 20,
-                        ),
-                      ),
+                    Image.asset(
+                      'assets/shopplus_logo_white.png',
+                      height: 28,
+                      fit: BoxFit.contain,
                     ),
+                    const Spacer(),
                     IconButton(
                       tooltip: 'Cerrar menú',
                       onPressed: () => Navigator.of(context).pop(),

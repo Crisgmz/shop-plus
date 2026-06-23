@@ -441,6 +441,43 @@ class _RowActions extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Cuentas GUARDADAS (pendientes): acciones propias — reabrir para cobrar o
+    // descartar (devuelve el stock reservado). No aplica reimprimir/editar/
+    // anular porque todavía no es una venta real.
+    if (row.status == 'pending') {
+      return Wrap(
+        spacing: 4,
+        children: [
+          IconButton(
+            tooltip: 'Ver detalle',
+            icon: const Icon(Icons.visibility_outlined, size: 18),
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _showDetail(context, ref, row.id),
+          ),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF22C55E),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              visualDensity: VisualDensity.compact,
+            ),
+            icon: const Icon(Icons.play_arrow, size: 18),
+            label: const Text('Reabrir'),
+            onPressed: () => _reopenHeldSale(context, ref, row),
+          ),
+          IconButton(
+            tooltip: 'Descartar cuenta (devuelve stock)',
+            icon: const Icon(
+              Icons.delete_outline,
+              size: 18,
+              color: AppTokens.error,
+            ),
+            visualDensity: VisualDensity.compact,
+            onPressed: () => _discardHeldSale(context, ref, row),
+          ),
+        ],
+      );
+    }
+
     return Wrap(
       spacing: 4,
       children: [
@@ -481,6 +518,90 @@ class _RowActions extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  /// Reabre una cuenta guardada: carga sus productos al carrito del POS y
+  /// navega a Ventas. Al completarla allí, el POS descarta esta pendiente
+  /// (devuelve su stock) y registra la venta real.
+  Future<void> _reopenHeldSale(
+    BuildContext context,
+    WidgetRef ref,
+    SalesHistoryRow row,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final draft =
+          await ref.read(salesRepositoryProvider).loadHeldSaleForReopen(row.id);
+      if (draft == null || draft.items.isEmpty) {
+        messenger.showSnackBar(const SnackBar(
+          content: Text('No se pudo cargar la cuenta (sin productos válidos).'),
+        ));
+        return;
+      }
+      // Carga el carrito en el draft del POS y marca la cuenta como reabierta
+      // (heldSaleId viaja en el draft y sobrevive recargas en web).
+      final saleDraft = SaleDraft(
+        items: draft.items,
+        receiptType: draft.receiptType,
+        clientId: draft.clientId,
+        notes: draft.notes,
+        heldSaleId: row.id,
+      );
+      ref.read(saleDraftProvider.notifier).state = saleDraft;
+      saveSaleDraftToStore(saleDraft);
+      if (!context.mounted) return;
+      context.go('/ventas');
+    } catch (error) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('No se pudo reabrir la cuenta: $error')),
+      );
+    }
+  }
+
+  /// Descarta una cuenta guardada: devuelve el stock reservado y la elimina.
+  Future<void> _discardHeldSale(
+    BuildContext context,
+    WidgetRef ref,
+    SalesHistoryRow row,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final saleLabel =
+        row.saleNumber.isEmpty ? row.id.substring(0, 8) : row.saleNumber;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Descartar cuenta guardada'),
+        content: Text(
+          '¿Descartar la cuenta $saleLabel?\n\n'
+          'Se devolverá el stock reservado y la cuenta desaparecerá del '
+          'historial. Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTokens.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Descartar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await ref.read(salesRepositoryProvider).discardHeldSale(row.id);
+      ref.invalidate(salesHistoryPageProvider);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Cuenta descartada y stock devuelto.')),
+      );
+    } catch (error) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('No se pudo descartar: $error')),
+      );
+    }
   }
 
   Future<void> _voidSale(

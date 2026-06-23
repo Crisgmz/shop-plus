@@ -21,6 +21,11 @@ class SalePrintSource {
     this.branchPhone,
     this.branchTaxId,
     this.branchLogoBytes,
+    this.branchEmail,
+    this.bankInfo,
+    this.signatoryName,
+    this.signatoryTitle,
+    this.observation,
     this.clientName,
     this.clientDocument,
     this.clientAddress,
@@ -34,6 +39,8 @@ class SalePrintSource {
     this.priceTierLabel,
     this.changeAmount,
     this.showBarcode = true,
+    this.showItbis = true,
+    this.qrBytes,
   });
 
   final String saleId;
@@ -47,6 +54,11 @@ class SalePrintSource {
   final String? branchPhone;
   final String? branchTaxId;
   final List<int>? branchLogoBytes;
+  final String? branchEmail;
+  final String? bankInfo;
+  final String? signatoryName;
+  final String? signatoryTitle;
+  final String? observation;
   final String? clientName;
   final String? clientDocument;
   final String? clientAddress;
@@ -77,6 +89,12 @@ class SalePrintSource {
   /// Si false oculta el barcode del recibo (alineado con
   /// `app_settings.receipt_hide_barcode`).
   final bool showBarcode;
+
+  /// Si false, nunca se muestra el ITBIS en el documento A4 (toggle de config).
+  final bool showItbis;
+
+  /// Bytes del QR (descargado de company_qr_url). Null → fallback al asset.
+  final List<int>? qrBytes;
 }
 
 class SalePrintItemSource {
@@ -125,10 +143,14 @@ class SalePrintDocumentAdapter {
       issuedAt: source.saleDate,
       branch: PrintBranchIdentity(
         name: source.branchName,
-        address: source.branchAddress,
-        phone: source.branchPhone,
-        taxId: source.branchTaxId,
+        address: _nullIfBlank(source.branchAddress),
+        phone: _nullIfBlank(source.branchPhone),
+        email: _nullIfBlank(source.branchEmail),
+        taxId: _nullIfBlank(source.branchTaxId),
         logoBytes: source.branchLogoBytes,
+        bankInfo: _nullIfBlank(source.bankInfo),
+        signatoryName: _nullIfBlank(source.signatoryName),
+        signatoryTitle: _nullIfBlank(source.signatoryTitle),
       ),
       customer: _customerForSale(source),
       cashierName: _nullIfBlank(source.cashierName),
@@ -137,6 +159,14 @@ class SalePrintDocumentAdapter {
       changeAmount: source.changeAmount,
       showBarcode: source.showBarcode,
       receiptTypeLabel: _receiptTypeLabel(source.receiptType),
+      paymentTermsLabel: source.balanceDue > 0.0049 ? 'CRÉDITO' : 'CONTADO',
+      // ITBIS solo si: el toggle de config está activo, NO es venta sin
+      // comprobante, y al menos un ítem realmente lleva impuesto.
+      showTax: source.showItbis &&
+          source.receiptType != 'none' &&
+          source.items.any((i) => i.lineTax > 0.0049),
+      qrBytes: source.qrBytes,
+      observation: _nullIfBlank(source.observation),
       ncf: _nullIfBlank(source.ncf),
       notes: _nullIfBlank(source.notes),
       footerMessage: 'Gracias por su compra',
@@ -207,6 +237,8 @@ PrintParty? _customerForSale(SalePrintSource source) {
 
 String _receiptTypeLabel(String value) {
   switch (value) {
+    case 'none':
+      return 'Sin comprobante';
     case 'consumer_final':
       return 'Consumidor final';
     case 'fiscal_credit':

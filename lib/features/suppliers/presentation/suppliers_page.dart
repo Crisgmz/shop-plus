@@ -9,6 +9,8 @@ import 'package:printing/printing.dart';
 import '../../../core/theme/tokens.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
+import '../../../shared/services/dgii_lookup_service.dart';
+import '../../../shared/widgets/app_snackbar.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/ui_custom.dart';
@@ -636,6 +638,9 @@ class _SupplierDialogState extends State<_SupplierDialog> {
   String _documentType = 'rnc';
   bool _isActive = true;
 
+  final _dgii = DgiiLookupService();
+  bool _rncLookupLoading = false;
+
   static const _docTypes = ['rnc', 'cedula', 'pasaporte', 'otro'];
 
   @override
@@ -683,6 +688,54 @@ class _SupplierDialogState extends State<_SupplierDialog> {
     super.dispose();
   }
 
+  /// Consulta el RNC/cédula contra DGII y auto-completa nombre legal (razón
+  /// social) y nombre comercial.
+  Future<void> _lookupRnc() async {
+    final raw = _rncController.text.trim();
+    if (raw.isEmpty) {
+      AppSnackBar.info(context, 'Escribe el RNC o cédula primero.');
+      return;
+    }
+    setState(() => _rncLookupLoading = true);
+    try {
+      final info = await _dgii.lookupByRnc(raw);
+      if (!mounted) return;
+      if (info == null) {
+        AppSnackBar.error(context, 'RNC/cédula no encontrado en DGII.');
+        return;
+      }
+      setState(() {
+        final legal = info.nombreRazonSocial ?? info.displayName;
+        if (legal != null &&
+            legal.isNotEmpty &&
+            _legalNameController.text.trim().isEmpty) {
+          _legalNameController.text = legal;
+        }
+        final comercial = info.nombreComercial;
+        if (comercial != null &&
+            comercial.isNotEmpty &&
+            _tradeNameController.text.trim().isEmpty) {
+          _tradeNameController.text = comercial;
+        }
+      });
+      if (info.isActivo) {
+        AppSnackBar.success(context, 'Encontrado: ${info.displayName ?? raw}');
+      } else {
+        AppSnackBar.info(
+          context,
+          'Encontrado (${info.estado ?? "estado desconocido"}): '
+          '${info.displayName ?? raw}',
+        );
+      }
+    } on InvalidRncException catch (e) {
+      if (mounted) AppSnackBar.error(context, e.reason);
+    } catch (e) {
+      if (mounted) AppSnackBar.error(context, 'No se pudo consultar el RNC', e);
+    } finally {
+      if (mounted) setState(() => _rncLookupLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMobile = ResponsiveLayout.isMobile(context);
@@ -715,7 +768,28 @@ class _SupplierDialogState extends State<_SupplierDialog> {
                 _formRow(isMobile, [
                   TextFormField(
                     controller: _rncController,
-                    decoration: const InputDecoration(labelText: 'RNC'),
+                    keyboardType: TextInputType.number,
+                    onFieldSubmitted: (_) => _lookupRnc(),
+                    decoration: InputDecoration(
+                      labelText: 'RNC',
+                      helperText: 'RNC (9) o cédula (11). Busca en DGII.',
+                      suffixIcon: _rncLookupLoading
+                          ? const Padding(
+                              padding: EdgeInsets.all(10),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            )
+                          : IconButton(
+                              tooltip: 'Buscar razón social en DGII',
+                              icon: const Icon(Icons.search),
+                              onPressed: _lookupRnc,
+                            ),
+                    ),
                   ),
                   DropdownButtonFormField<String>(
                     initialValue: _docTypes.contains(_documentType) ? _documentType : 'rnc',

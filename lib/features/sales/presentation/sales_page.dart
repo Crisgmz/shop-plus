@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/tokens.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
+import '../../../shared/services/dgii_lookup_service.dart';
+import '../../../shared/widgets/app_snackbar.dart';
 import '../../../shared/widgets/ncf_stock_banner.dart';
 import '../../../shared/widgets/print_receipt_dialog.dart';
 import '../../../shared/widgets/role_gate.dart';
@@ -31,15 +33,24 @@ class _SalesPageState extends ConsumerState<SalesPage> {
 
   bool _isSubmitting = false;
   bool _showCart = false;
-  String _receiptType = 'consumer_final';
+  // Default: vender sin comprobante (nota de venta no fiscal). El cajero elige
+  // un comprobante fiscal (B02/B01/...) solo cuando el cliente lo pide.
+  String _receiptType = 'none';
   // Método "primario" — se usa para el draft. El detalle del pago (mixto) se
   // arma en la página 2 (_PaymentDialog) al completar la venta.
   String _paymentMethod = 'cash';
   String? _clientId;
 
+  /// Id de la cuenta GUARDADA (venta `pending`) reabierta en este carrito. Si
+  /// no es null, al completar/guardar el POS descarta esa pendiente para
+  /// devolver su stock reservado y no duplicarla. Viaja en el draft.
+  String? _reopenedHeldSaleId;
+
   int get _cartLines => _cart.length;
-  double get _cartSubtotal => _cart.fold<double>(0, (sum, item) => sum + item.lineSubtotal);
-  double get _cartTax => _cart.fold<double>(0, (sum, item) => sum + item.lineTax);
+  double get _cartSubtotal =>
+      _cart.fold<double>(0, (sum, item) => sum + item.lineSubtotal);
+  double get _cartTax =>
+      _cart.fold<double>(0, (sum, item) => sum + item.lineTax);
   double get _cartTotal => _cartSubtotal + _cartTax;
 
   @override
@@ -55,6 +66,22 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     _paymentMethod = 'cash';
     _clientId = draft.clientId;
     _notesController.text = draft.notes;
+    _reopenedHeldSaleId = draft.heldSaleId;
+
+    // Default dinámico del comprobante: si la venta es fresca (sin elección
+    // explícita aún) y la sucursal tiene secuencia B02 configurada, arrancar
+    // en Consumidor Final (B02). Si no hay B02, queda "Sin comprobante".
+    if (_cart.isEmpty && _receiptType == 'none' && _reopenedHeldSaleId == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        final hasB02 = await ref.read(b02SequenceAvailableProvider.future);
+        if (!mounted) return;
+        if (hasB02 && _receiptType == 'none' && _cart.isEmpty) {
+          setState(() => _receiptType = 'consumer_final');
+          _persistDraft();
+        }
+      });
+    }
   }
 
   @override
@@ -77,6 +104,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       paymentMethod: _paymentMethod,
       clientId: _clientId,
       notes: _notesController.text,
+      heldSaleId: _reopenedHeldSaleId,
     );
     ref.read(saleDraftProvider.notifier).state = draft;
     // Persistir también a localStorage (web) para sobrevivir recargas.
@@ -96,9 +124,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     if (isMobile && _showCart) {
       return Scaffold(
         appBar: AppBar(
-          title: Text(posMode == PosMode.sale
-              ? 'Carrito de Venta'
-              : 'Carrito de Devolución'),
+          title: Text(
+            posMode == PosMode.sale
+                ? 'Carrito de Venta'
+                : 'Carrito de Devolución',
+          ),
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
             onPressed: () => setState(() => _showCart = false),
@@ -199,7 +229,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     );
   }
 
-  Widget _buildSearchBar(AsyncValue<List<SalesCategory>> categoriesAsync, String? selectedCategoryId) {
+  Widget _buildSearchBar(
+    AsyncValue<List<SalesCategory>> categoriesAsync,
+    String? selectedCategoryId,
+  ) {
     return Row(
       children: [
         Expanded(
@@ -213,12 +246,17 @@ class _SalesPageState extends ConsumerState<SalesPage> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.search_rounded, color: Color(0xFF94A3B8), size: 20),
+                const Icon(
+                  Icons.search_rounded,
+                  color: Color(0xFF94A3B8),
+                  size: 20,
+                ),
                 const SizedBox(width: AppTokens.s12),
                 Expanded(
                   child: TextField(
                     controller: _searchController,
-                    onChanged: (v) => ref.read(salesSearchProvider.notifier).state = v,
+                    onChanged: (v) =>
+                        ref.read(salesSearchProvider.notifier).state = v,
                     // La pistola de código de barras "escribe" el código y
                     // manda Enter → lo agregamos directo al carrito.
                     onSubmitted: _onScanSubmitted,
@@ -252,13 +290,20 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                 hint: const Text('Categoría', style: TextStyle(fontSize: 13)),
                 items: [
                   const DropdownMenuItem(value: null, child: Text('Todas')),
-                  ...categories.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))),
+                  ...categories.map(
+                    (c) => DropdownMenuItem(value: c.id, child: Text(c.name)),
+                  ),
                 ],
-                onChanged: (v) => ref.read(salesSelectedCategoryProvider.notifier).state = v,
+                onChanged: (v) =>
+                    ref.read(salesSelectedCategoryProvider.notifier).state = v,
               ),
             ),
           ),
-          loading: () => const SizedBox(width: 48, height: 48, child: Center(child: CircularProgressIndicator(strokeWidth: 2))),
+          loading: () => const SizedBox(
+            width: 48,
+            height: 48,
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          ),
           error: (_, _) => const SizedBox.shrink(),
         ),
       ],
@@ -272,7 +317,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         // por (productsAsync × search × categoryId). Evita recalcular en
         // cada keystroke / rebuild.
         final filtered = ref.watch(salesFilteredProductsProvider);
-        if (filtered.isEmpty) return const Center(child: Text('No hay productos.'));
+        if (filtered.isEmpty) {
+          return const Center(child: Text('No hay productos.'));
+        }
 
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -281,8 +328,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
             // saltar a cualquier fila sin medir las anteriores — mucho
             // más rápido en grids con muchos productos.
             final tileSize =
-                ((constraints.maxWidth - (columns - 1) * 12) / columns)
-                    .clamp(110.0, 220.0);
+                ((constraints.maxWidth - (columns - 1) * 12) / columns).clamp(
+                  110.0,
+                  220.0,
+                );
             return GridView.builder(
               padding: const EdgeInsets.only(bottom: 20),
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -325,7 +374,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                   children: [
                     Text(
                       'Carrito ($_cartLines)',
-                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
                     ),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -337,9 +389,20 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                       child: DropdownButtonHideUnderline(
                         child: DropdownButton<String>(
                           value: _receiptType,
-                          icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF475569)),
+                          icon: const Icon(
+                            Icons.keyboard_arrow_down_rounded,
+                            size: 18,
+                          ),
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF475569),
+                          ),
                           items: const [
+                            DropdownMenuItem(
+                              value: 'none',
+                              child: Text('Sin comprobante'),
+                            ),
                             DropdownMenuItem(
                               value: 'consumer_final',
                               child: Text('Consumidor Final (B02)'),
@@ -385,8 +448,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                       IconButton(
                         tooltip: 'Nuevo cliente',
                         visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.person_add_alt_1,
-                            color: AppTokens.primary),
+                        icon: const Icon(
+                          Icons.person_add_alt_1,
+                          color: AppTokens.primary,
+                        ),
                         onPressed: _onCreateClientInline,
                       ),
                     ],
@@ -408,7 +473,12 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           const Divider(height: 1),
           Expanded(
             child: _cart.isEmpty
-                ? const Center(child: Text('Carrito vacío', style: TextStyle(color: Color(0xFF94A3B8))))
+                ? const Center(
+                    child: Text(
+                      'Carrito vacío',
+                      style: TextStyle(color: Color(0xFF94A3B8)),
+                    ),
+                  )
                 : ListView.builder(
                     padding: const EdgeInsets.all(AppTokens.s12),
                     itemCount: _cart.length,
@@ -423,23 +493,34 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                   ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppTokens.s16, vertical: 8),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppTokens.s16,
+              vertical: 8,
+            ),
             child: TextField(
               controller: _notesController,
               onChanged: (_) => _persistDraft(),
               decoration: InputDecoration(
                 hintText: 'Notas de venta...',
                 hintStyle: const TextStyle(fontSize: 12),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 filled: true,
                 fillColor: const Color(0xFFF8FAFC),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
               ),
             ),
           ),
           Container(
             padding: const EdgeInsets.symmetric(
-                horizontal: AppTokens.s16, vertical: AppTokens.s12),
+              horizontal: AppTokens.s16,
+              vertical: AppTokens.s12,
+            ),
             decoration: const BoxDecoration(
               color: Colors.white,
               border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
@@ -450,96 +531,156 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                 const SizedBox(height: 2),
                 _totalLine('ITBIS (18%)', money(_cartTax)),
                 const SizedBox(height: 8),
-                Builder(builder: (context) {
-                  final isReturn =
-                      ref.watch(posModeProvider) == PosMode.returnMode;
-                  final totalColor = isReturn
-                      ? const Color(0xFFEF4444)
-                      : const Color(0xFF2563EB);
-                  final totalLabel = isReturn
-                      ? '- ${money(_cartTotal)}'
-                      : money(_cartTotal);
-                  return Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Total', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Color(0xFF1E293B))),
-                      Text(totalLabel,
+                Builder(
+                  builder: (context) {
+                    final isReturn =
+                        ref.watch(posModeProvider) == PosMode.returnMode;
+                    final totalColor = isReturn
+                        ? const Color(0xFFEF4444)
+                        : const Color(0xFF2563EB);
+                    final totalLabel = isReturn
+                        ? '- ${money(_cartTotal)}'
+                        : money(_cartTotal);
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Total',
                           style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900,
-                              color: totalColor)),
-                    ],
-                  );
-                }),
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF1E293B),
+                          ),
+                        ),
+                        Text(
+                          totalLabel,
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            color: totalColor,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
                 const SizedBox(height: 14),
-                Builder(builder: (context) {
-                  final isReturn =
-                      ref.watch(posModeProvider) == PosMode.returnMode;
-                  final enabled = !_isSubmitting && _cart.isNotEmpty;
-                  // Página 1: solo la venta. El botón muestra el total y, al
-                  // tocarlo (en venta), abre la página 2 de cobro.
-                  return Row(
-                    children: [
-                      Expanded(
-                        child: SizedBox(
-                          height: 50,
-                          child: FilledButton.icon(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: !enabled
-                                  ? const Color(0xFF94A3B8)
-                                  : (isReturn
-                                      ? const Color(0xFFEF4444)
-                                      : const Color(0xFF22C55E)),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8)),
-                            ),
-                            onPressed: !enabled
-                                ? null
-                                : () => isReturn
-                                    ? _processReturn()
-                                    : _onCompletePressed(),
-                            icon: _isSubmitting
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                        color: Colors.white, strokeWidth: 2))
-                                : Icon(
-                                    isReturn
-                                        ? Icons.assignment_return_outlined
-                                        : Icons.check_circle_outline,
-                                    size: 18),
-                            label: Text(
+                Builder(
+                  builder: (context) {
+                    final isReturn =
+                        ref.watch(posModeProvider) == PosMode.returnMode;
+                    final enabled = !_isSubmitting && _cart.isNotEmpty;
+                    // Página 1: solo la venta. El botón muestra el total y, al
+                    // tocarlo (en venta), abre la página 2 de cobro.
+                    return Row(
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: 50,
+                            child: FilledButton.icon(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: !enabled
+                                    ? const Color(0xFF94A3B8)
+                                    : (isReturn
+                                          ? const Color(0xFFEF4444)
+                                          : const Color(0xFF22C55E)),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                              onPressed: !enabled
+                                  ? null
+                                  : () => isReturn
+                                        ? _processReturn()
+                                        : _onCompletePressed(),
+                              icon: _isSubmitting
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      isReturn
+                                          ? Icons.assignment_return_outlined
+                                          : Icons.check_circle_outline,
+                                      size: 18,
+                                    ),
+                              label: Text(
                                 isReturn
                                     ? 'PROCESAR DEVOLUCIÓN'
                                     : 'COMPLETAR VENTA · ${money(_cartTotal)}',
                                 style: const TextStyle(
-                                    fontWeight: FontWeight.w700)),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        height: 50,
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 14),
-                            foregroundColor: const Color(0xFFEF4444),
-                            shape: RoundedRectangleBorder(
+                        // Guardar la cuenta como pendiente (cuenta abierta): la
+                        // manda al historial en gris y libera el POS para el
+                        // siguiente cliente. Solo en modo venta.
+                        if (!isReturn) ...[
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            height: 50,
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                ),
+                                foregroundColor: const Color(0xFF6B7280),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  side: const BorderSide(
+                                    color: Color(0xFFCBD5E1),
+                                  ),
+                                ),
+                              ),
+                              onPressed: !enabled ? null : _holdSale,
+                              icon: const Icon(Icons.save_outlined, size: 18),
+                              label: const Text(
+                                'Guardar',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          height: 50,
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                              ),
+                              foregroundColor: const Color(0xFFEF4444),
+                              shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(8),
                                 side: const BorderSide(
-                                    color: Color(0xFFFECACA))),
-                          ),
-                          onPressed: _isSubmitting ? null : _clearCart,
-                          child: const Text('Cancelar',
+                                  color: Color(0xFFFECACA),
+                                ),
+                              ),
+                            ),
+                            onPressed: _isSubmitting ? null : _clearCart,
+                            child: const Text(
+                              'Cancelar',
                               style: TextStyle(
-                                  fontSize: 13, fontWeight: FontWeight.w600)),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
-                  );
-                }),
+                      ],
+                    );
+                  },
+                ),
               ],
             ),
           ),
@@ -552,8 +693,22 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: const TextStyle(color: Color(0xFF64748B), fontSize: 13, fontWeight: FontWeight.w500)),
-        Text(value, style: const TextStyle(color: Color(0xFF1E293B), fontSize: 13, fontWeight: FontWeight.w700)),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF64748B),
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Color(0xFF1E293B),
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ],
     );
   }
@@ -592,18 +747,18 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     if (_stockEnforced &&
         index != -1 &&
         _cart[index].quantity + 1 > product.stock) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sin stock suficiente')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Sin stock suficiente')));
       return;
     }
     final tier = _currentClientTier();
     final price = product.priceFor(tier);
     setState(() {
       if (index == -1) {
-        _cart.add(SaleCartItem(
-          product: product,
-          quantity: 1,
-          unitPrice: price,
-        ));
+        _cart.add(
+          SaleCartItem(product: product, quantity: 1, unitPrice: price),
+        );
       } else {
         final current = _cart[index];
         _cart[index] = SaleCartItem(
@@ -635,8 +790,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     for (final p in products) {
       if (p.imeis.contains(code)) {
         if (_selectedImeisFor(p.id).contains(code)) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Ese IMEI ya está en el carrito.')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ese IMEI ya está en el carrito.')),
+          );
         } else {
           _addImeiToCart(p, [code]);
         }
@@ -669,11 +825,17 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// los elegidos. Cada IMEI suma 1 a la cantidad de la línea.
   Future<void> _pickImeisAndAdd(SalesProduct product) async {
     final already = _selectedImeisFor(product.id);
-    final available =
-        product.imeis.where((i) => !already.contains(i)).toList(growable: false);
+    final available = product.imeis
+        .where((i) => !already.contains(i))
+        .toList(growable: false);
     if (available.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Todos los IMEIs de este producto ya están en el carrito.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Todos los IMEIs de este producto ya están en el carrito.',
+          ),
+        ),
+      );
       return;
     }
     final selected = await showDialog<List<String>>(
@@ -692,12 +854,14 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     setState(() {
       final index = _cart.indexWhere((it) => it.product.id == product.id);
       if (index == -1) {
-        _cart.add(SaleCartItem(
-          product: product,
-          quantity: imeis.length.toDouble(),
-          unitPrice: price,
-          imeis: List<String>.from(imeis),
-        ));
+        _cart.add(
+          SaleCartItem(
+            product: product,
+            quantity: imeis.length.toDouble(),
+            unitPrice: price,
+            imeis: List<String>.from(imeis),
+          ),
+        );
       } else {
         final cur = _cart[index];
         final merged = [...cur.imeis, ...imeis];
@@ -722,18 +886,20 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     }
     final item = _cart[index];
     if (_stockEnforced && value > item.product.stock) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sin stock suficiente')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Sin stock suficiente')));
       return;
     }
-    setState(() => _cart[index] = SaleCartItem(
-          product: item.product,
-          quantity: value,
-          unitPrice: item.unitPrice,
-          discountPct: item.discountPct,
-          imeis: item.imeis,
-        ));
+    setState(
+      () => _cart[index] = SaleCartItem(
+        product: item.product,
+        quantity: value,
+        unitPrice: item.unitPrice,
+        discountPct: item.discountPct,
+        imeis: item.imeis,
+      ),
+    );
     _persistDraft();
   }
 
@@ -750,13 +916,15 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         ),
       );
     }
-    setState(() => _cart[index] = SaleCartItem(
-          product: item.product,
-          quantity: item.quantity,
-          unitPrice: value,
-          discountPct: item.discountPct,
-          imeis: item.imeis,
-        ));
+    setState(
+      () => _cart[index] = SaleCartItem(
+        product: item.product,
+        quantity: item.quantity,
+        unitPrice: value,
+        discountPct: item.discountPct,
+        imeis: item.imeis,
+      ),
+    );
     _persistDraft();
   }
 
@@ -764,13 +932,15 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   void _setDiscountPct(int index, double value) {
     final clamped = value.clamp(0, 100).toDouble();
     final item = _cart[index];
-    setState(() => _cart[index] = SaleCartItem(
-          product: item.product,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          discountPct: clamped,
-          imeis: item.imeis,
-        ));
+    setState(
+      () => _cart[index] = SaleCartItem(
+        product: item.product,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        discountPct: clamped,
+        imeis: item.imeis,
+      ),
+    );
     _persistDraft();
   }
 
@@ -806,7 +976,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     );
     if (result == null || !mounted) return;
     try {
-      final id = await ref.read(clientsRepositoryProvider).createQuickClient(
+      final id = await ref
+          .read(clientsRepositoryProvider)
+          .createQuickClient(
             fullName: result.name,
             phone: result.phone,
             documentNumber: result.document,
@@ -837,16 +1009,85 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       _notesController.clear();
       _clientId = null;
       _paymentMethod = 'cash';
+      _reopenedHeldSaleId = null;
       _searchController.clear();
       ref.read(salesSearchProvider.notifier).state = '';
     });
     _persistDraft();
   }
 
+  /// Guarda el carrito como una cuenta PENDIENTE (cuenta abierta). Reserva el
+  /// stock, la deja en el historial en gris y limpia el POS para atender al
+  /// siguiente cliente. No cobra ni entra al cierre de caja hasta completarla.
+  Future<void> _holdSale() async {
+    if (_cart.isEmpty) return;
+    setState(() => _isSubmitting = true);
+    try {
+      final repo = ref.read(salesRepositoryProvider);
+      final settings = ref.read(appSettingsProvider).valueOrNull;
+      // Si esta cuenta venía reabierta, el backend reemplaza la pendiente
+      // anterior conservando su MISMO número y liberando su stock, en una sola
+      // operación. Así una cuenta abierta mantiene su número aunque se le sigan
+      // agregando productos. _clearCart() limpia _reopenedHeldSaleId en éxito.
+      final result = await repo.holdSale(
+        HeldSaleInput(
+          items: List.from(_cart),
+          receiptType: _receiptType,
+          clientId: _clientId,
+          notes: _notesController.text.trim(),
+          disallowNoStock: settings?.invDisallowNoStock ?? false,
+          customerRequiredForSale: settings?.customerRequiredForSale ?? false,
+          replaceHoldSaleId: _reopenedHeldSaleId,
+        ),
+      );
+      ref.invalidate(salesProductsProvider);
+      if (!mounted) return;
+      _clearCart();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFF16A34A),
+          content: Text(
+            'Cuenta guardada como pendiente (${result.saleNumber}).',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Colors.red,
+          content: Text('No se pudo guardar la cuenta: $error'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
   /// Abre la página 2 (diálogo de cobro con métodos divididos). Según el
   /// resultado, finaliza la venta normal o la manda a crédito.
+  /// Pre-chequeo fiscal: un comprobante ≠ consumidor final (Crédito Fiscal,
+  /// Gubernamental, Especial, Exportación) exige un cliente con RNC/cédula.
+  /// Espeja la regla del trigger SQL `tg_sales_assert_fiscal_client` para
+  /// avisar ANTES de abrir el cobro, en vez de fallar al confirmar.
+  bool _assertFiscalClient() {
+    if (_receiptType == 'none' || _receiptType == 'consumer_final') return true;
+    final client = _clientId == null
+        ? null
+        : ref.read(salesClientsByIdProvider)[_clientId!];
+    if (client != null && client.hasFiscalData) return true;
+    AppSnackBar.error(
+      context,
+      client == null
+          ? 'Para un comprobante fiscal debe seleccionar un cliente con RNC/cédula.'
+          : 'El cliente "${client.fullName}" no tiene RNC/cédula. Edítalo o usa Consumidor Final.',
+    );
+    return false;
+  }
+
   Future<void> _onCompletePressed() async {
     if (_cart.isEmpty) return;
+    if (!_assertFiscalClient()) return;
     final result = await showDialog<_PaymentResult>(
       context: context,
       builder: (_) => _PaymentDialog(total: _cartTotal),
@@ -859,15 +1100,16 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     }
   }
 
-
   /// Abre un diálogo que pide los días de plazo (default desde settings) y
   /// luego ejecuta el checkout a crédito.
   Future<void> _confirmCreditCheckout() async {
     if (_cart.isEmpty) return;
     if (_clientId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Para ventas a crédito debe seleccionar un cliente.'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Para ventas a crédito debe seleccionar un cliente.'),
+        ),
+      );
       return;
     }
     final settings = ref.read(appSettingsProvider).valueOrNull;
@@ -892,16 +1134,18 @@ class _SalesPageState extends ConsumerState<SalesPage> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Total: ${money(_cartTotal)}',
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700)),
+                Text(
+                  'Total: ${money(_cartTotal)}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: controller,
                   keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                  ],
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   decoration: const InputDecoration(
                     labelText: 'Días de plazo',
                     isDense: true,
@@ -949,7 +1193,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   }) async {
     if (_cart.isEmpty) return;
     if (asCredit && _clientId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Para ventas a crédito debe seleccionar un cliente.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Para ventas a crédito debe seleccionar un cliente.'),
+        ),
+      );
       return;
     }
 
@@ -981,21 +1229,32 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       final pays = asCredit ? const <SalePaymentLine>[] : payments;
       // Para pago único, el método representativo es el de la línea efectiva.
       final repMethod = pays.isNotEmpty ? pays.first.method : 'cash';
-      final result = await repo.checkoutSale(SaleCheckoutInput(
-        items: List.from(_cart),
-        receiptType: _receiptType,
-        asCredit: asCredit,
-        paymentMethod: asCredit ? null : repMethod,
-        payments: pays,
-        clientId: _clientId,
-        notes: _notesController.text.trim(),
-        disallowNoStock: settings?.invDisallowNoStock ?? false,
-        customerRequiredForSale:
-            settings?.customerRequiredForSale ?? false,
-        creditAllowSales: settings?.creditAllowSales ?? true,
-        creditDueDays: creditDueDays,
-        cashSessionId: ref.read(activeCashSessionIdProvider),
-      ));
+      // Sobrepago = lo que el cliente pagó de más. Ese exceso se devuelve en
+      // efectivo (sale de la caja), sin importar el método facturado, así que
+      // lo mandamos para que el backend lo registre como cambio.
+      final paySum = pays.fold<double>(0, (s, p) => s + p.amount);
+      final change = paySum - _cartTotal;
+      final result = await repo.checkoutSale(
+        SaleCheckoutInput(
+          items: List.from(_cart),
+          receiptType: _receiptType,
+          asCredit: asCredit,
+          paymentMethod: asCredit ? null : repMethod,
+          payments: pays,
+          changeAmount: change > 0.005 ? change : 0,
+          clientId: _clientId,
+          notes: _notesController.text.trim(),
+          disallowNoStock: settings?.invDisallowNoStock ?? false,
+          customerRequiredForSale: settings?.customerRequiredForSale ?? false,
+          creditAllowSales: settings?.creditAllowSales ?? true,
+          creditDueDays: creditDueDays,
+          cashSessionId: ref.read(activeCashSessionIdProvider),
+          // Si esta venta viene de una cuenta GUARDADA reabierta, el backend la
+          // absorbe: conserva su mismo número y libera su stock reservado. En
+          // éxito, _clearCart() limpia _reopenedHeldSaleId.
+          holdSaleIdToComplete: _reopenedHeldSaleId,
+        ),
+      );
 
       _clearCart();
       ref.invalidate(salesProductsProvider);
@@ -1020,9 +1279,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           SnackBar(
             backgroundColor: AppTokens.success,
             content: Text(
-              'Venta #${result.saleNumber} registrada.',
-              style:
-                  const TextStyle(color: AppTokens.successForeground),
+              result.ncf != null
+                  ? 'Venta #${result.saleNumber} registrada. NCF: ${result.ncf}'
+                  : 'Venta #${result.saleNumber} registrada.',
+              style: const TextStyle(color: AppTokens.successForeground),
             ),
           ),
         );
@@ -1032,7 +1292,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           builder: (ctx) => AlertDialog(
             title: const Text('¡Venta exitosa!'),
             content: Text(
-              'Venta #${result.saleNumber} registrada correctamente.',
+              result.ncf != null
+                  ? 'Venta #${result.saleNumber} registrada correctamente.\n'
+                        'Comprobante NCF: ${result.ncf}'
+                  : 'Venta #${result.saleNumber} registrada correctamente.',
             ),
             actions: [
               TextButton(
@@ -1054,7 +1317,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error al procesar venta: $e'), backgroundColor: Colors.red));
+        AppSnackBar.error(context, 'No se pudo procesar la venta', e);
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -1109,7 +1372,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       if (result == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('No se encontró la venta "$cleaned" en esta sucursal.'),
+            content: Text(
+              'No se encontró la venta "$cleaned" en esta sucursal.',
+            ),
             backgroundColor: const Color(0xFFEF4444),
           ),
         );
@@ -1136,8 +1401,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           _clientId = result.clientId;
         }
         // Notas con referencia a la venta original
-        _notesController.text =
-            'Devolución de venta ${result.saleNumber}';
+        _notesController.text = 'Devolución de venta ${result.saleNumber}';
         _saleNumberController.clear();
       });
       _persistDraft();
@@ -1154,9 +1418,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error al cargar la venta: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error al cargar la venta: $e')));
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -1170,11 +1434,13 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     setState(() => _isSubmitting = true);
     try {
       final repo = ref.read(salesRepositoryProvider);
-      final result = await repo.processReturn(ReturnInput(
-        items: List.from(_cart),
-        clientId: _clientId,
-        notes: _notesController.text.trim(),
-      ));
+      final result = await repo.processReturn(
+        ReturnInput(
+          items: List.from(_cart),
+          clientId: _clientId,
+          notes: _notesController.text.trim(),
+        ),
+      );
 
       _clearCart();
       ref.invalidate(salesProductsProvider);
@@ -1193,10 +1459,12 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Error al procesar devolución: $e'),
-          backgroundColor: Colors.red,
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al procesar devolución: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -1230,6 +1498,8 @@ class _QuickClientDialogState extends State<_QuickClientDialog> {
   final _name = TextEditingController();
   final _phone = TextEditingController();
   final _doc = TextEditingController();
+  final _dgii = DgiiLookupService();
+  bool _rncLookupLoading = false;
 
   @override
   void dispose() {
@@ -1237,6 +1507,43 @@ class _QuickClientDialogState extends State<_QuickClientDialog> {
     _phone.dispose();
     _doc.dispose();
     super.dispose();
+  }
+
+  /// Consulta el RNC/cédula contra DGII y auto-completa el nombre.
+  Future<void> _lookupRnc() async {
+    final raw = _doc.text.trim();
+    if (raw.isEmpty) {
+      AppSnackBar.info(context, 'Escribe el RNC o cédula primero.');
+      return;
+    }
+    setState(() => _rncLookupLoading = true);
+    try {
+      final info = await _dgii.lookupByRnc(raw);
+      if (!mounted) return;
+      if (info == null) {
+        AppSnackBar.error(context, 'RNC/cédula no encontrado en DGII.');
+        return;
+      }
+      final name = info.nombreRazonSocial ?? info.displayName;
+      if (name != null && name.isNotEmpty && _name.text.trim().isEmpty) {
+        setState(() => _name.text = name);
+      }
+      if (info.isActivo) {
+        AppSnackBar.success(context, 'Encontrado: ${info.displayName ?? raw}');
+      } else {
+        AppSnackBar.info(
+          context,
+          'Encontrado (${info.estado ?? "estado desconocido"}): '
+          '${info.displayName ?? raw}',
+        );
+      }
+    } on InvalidRncException catch (e) {
+      if (mounted) AppSnackBar.error(context, e.reason);
+    } catch (e) {
+      if (mounted) AppSnackBar.error(context, 'No se pudo consultar el RNC', e);
+    } finally {
+      if (mounted) setState(() => _rncLookupLoading = false);
+    }
   }
 
   @override
@@ -1254,8 +1561,7 @@ class _QuickClientDialogState extends State<_QuickClientDialog> {
                 controller: _name,
                 autofocus: true,
                 textCapitalization: TextCapitalization.words,
-                decoration:
-                    const InputDecoration(labelText: 'Nombre completo'),
+                decoration: const InputDecoration(labelText: 'Nombre completo'),
                 validator: (v) =>
                     (v ?? '').trim().isEmpty ? 'Campo requerido' : null,
               ),
@@ -1263,14 +1569,32 @@ class _QuickClientDialogState extends State<_QuickClientDialog> {
               TextFormField(
                 controller: _phone,
                 keyboardType: TextInputType.phone,
-                decoration:
-                    const InputDecoration(labelText: 'Teléfono (opcional)'),
+                decoration: const InputDecoration(
+                  labelText: 'Teléfono (opcional)',
+                ),
               ),
               const SizedBox(height: 10),
               TextFormField(
                 controller: _doc,
-                decoration: const InputDecoration(
-                    labelText: 'Cédula / RNC (opcional)'),
+                keyboardType: TextInputType.number,
+                onFieldSubmitted: (_) => _lookupRnc(),
+                decoration: InputDecoration(
+                  labelText: 'Cédula / RNC (opcional)',
+                  suffixIcon: _rncLookupLoading
+                      ? const Padding(
+                          padding: EdgeInsets.all(10),
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : IconButton(
+                          tooltip: 'Buscar razón social en DGII',
+                          icon: const Icon(Icons.search),
+                          onPressed: _lookupRnc,
+                        ),
+                ),
               ),
             ],
           ),
@@ -1284,11 +1608,13 @@ class _QuickClientDialogState extends State<_QuickClientDialog> {
         FilledButton(
           onPressed: () {
             if (!_formKey.currentState!.validate()) return;
-            Navigator.of(context).pop(_QuickClientData(
-              name: _name.text.trim(),
-              phone: _phone.text.trim(),
-              document: _doc.text.trim(),
-            ));
+            Navigator.of(context).pop(
+              _QuickClientData(
+                name: _name.text.trim(),
+                phone: _phone.text.trim(),
+                document: _doc.text.trim(),
+              ),
+            );
           },
           child: const Text('Crear'),
         ),
@@ -1322,8 +1648,10 @@ class _ImeiPickerDialogState extends State<_ImeiPickerDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Selecciona los equipos que salen a la venta:',
-                style: TextStyle(fontSize: 13, color: Color(0xFF64748B))),
+            const Text(
+              'Selecciona los equipos que salen a la venta:',
+              style: TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+            ),
             const SizedBox(height: 8),
             Flexible(
               child: SingleChildScrollView(
@@ -1335,9 +1663,13 @@ class _ImeiPickerDialogState extends State<_ImeiPickerDialog> {
                         contentPadding: EdgeInsets.zero,
                         controlAffinity: ListTileControlAffinity.leading,
                         value: _selected.contains(imei),
-                        title: Text('IMEI  $imei',
-                            style: const TextStyle(
-                                fontFamily: 'monospace', fontSize: 14)),
+                        title: Text(
+                          'IMEI  $imei',
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 14,
+                          ),
+                        ),
                         onChanged: (v) => setState(() {
                           if (v == true) {
                             _selected.add(imei);
@@ -1457,8 +1789,7 @@ class _PaymentDialogState extends State<_PaymentDialog> {
   double get _sum => _lines.fold<double>(0, (s, l) => s + l.value);
   // Válido cuando los pagos cubren el total (pueden pagar de más → cambio).
   bool get _valid => widget.total > 0 && _sum + 0.01 >= widget.total;
-  bool get _anyCredit =>
-      _lines.any((l) => l.method == 'credit' && l.value > 0);
+  bool get _anyCredit => _lines.any((l) => l.method == 'credit' && l.value > 0);
 
   List<SalePaymentLine> _payments() => _lines
       .where((l) => l.value > 0)
@@ -1466,9 +1797,9 @@ class _PaymentDialogState extends State<_PaymentDialog> {
       .toList(growable: false);
 
   void _add() => setState(() {
-        _lines.add(_PayLine(method: 'cash'));
-        _sync();
-      });
+    _lines.add(_PayLine(method: 'cash'));
+    _sync();
+  });
 
   void _remove(int i) {
     if (_lines.length <= 2) return;
@@ -1479,17 +1810,17 @@ class _PaymentDialogState extends State<_PaymentDialog> {
   }
 
   void _onAmount() => setState(() {
-        _touched = true;
-        _sync();
-      });
+    _touched = true;
+    _sync();
+  });
 
   @override
   Widget build(BuildContext context) {
     const contentPad = EdgeInsets.symmetric(horizontal: 10, vertical: 8);
     OutlineInputBorder border() => OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
-        );
+      borderRadius: BorderRadius.circular(8),
+      borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+    );
 
     return AlertDialog(
       title: const Text('Completar venta'),
@@ -1502,14 +1833,18 @@ class _PaymentDialogState extends State<_PaymentDialog> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Total a pagar',
-                    style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w700)),
-                Text(money(widget.total),
-                    style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                        color: Color(0xFF2563EB))),
+                const Text(
+                  'Total a pagar',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+                Text(
+                  money(widget.total),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF2563EB),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 14),
@@ -1527,13 +1862,15 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                           readOnly: i == _lines.length - 1,
                           style: const TextStyle(fontSize: 14),
                           keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true),
+                            decimal: true,
+                          ),
                           onChanged: (_) => _onAmount(),
                           decoration: InputDecoration(
                             isDense: true,
                             contentPadding: contentPad,
-                            hintText:
-                                i == _lines.length - 1 ? 'Resto' : 'Monto',
+                            hintText: i == _lines.length - 1
+                                ? 'Resto'
+                                : 'Monto',
                             prefixText: 'RD\$ ',
                             filled: i == _lines.length - 1,
                             fillColor: const Color(0xFFF1F5F9),
@@ -1552,7 +1889,9 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                           initialValue: _lines[i].method,
                           isExpanded: true,
                           style: const TextStyle(
-                              fontSize: 14, color: Color(0xFF1E293B)),
+                            fontSize: 14,
+                            color: Color(0xFF1E293B),
+                          ),
                           decoration: InputDecoration(
                             isDense: true,
                             contentPadding: contentPad,
@@ -1560,15 +1899,19 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                             enabledBorder: border(),
                           ),
                           items: _methods
-                              .map((m) => DropdownMenuItem(
-                                    value: m.key,
-                                    child: Text(m.value,
-                                        style: const TextStyle(fontSize: 14),
-                                        overflow: TextOverflow.ellipsis),
-                                  ))
+                              .map(
+                                (m) => DropdownMenuItem(
+                                  value: m.key,
+                                  child: Text(
+                                    m.value,
+                                    style: const TextStyle(fontSize: 14),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
                               .toList(growable: false),
-                          onChanged: (v) => setState(
-                              () => _lines[i].method = v ?? 'cash'),
+                          onChanged: (v) =>
+                              setState(() => _lines[i].method = v ?? 'cash'),
                         ),
                       ),
                     ),
@@ -1579,52 +1922,68 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                               padding: EdgeInsets.zero,
                               visualDensity: VisualDensity.compact,
                               tooltip: 'Agregar método',
-                              icon: const Icon(Icons.add_circle_outline,
-                                  size: 22, color: Color(0xFF2563EB)),
+                              icon: const Icon(
+                                Icons.add_circle_outline,
+                                size: 22,
+                                color: Color(0xFF2563EB),
+                              ),
                               onPressed: _add,
                             )
                           : (_lines.length > 2
-                              ? IconButton(
-                                  padding: EdgeInsets.zero,
-                                  visualDensity: VisualDensity.compact,
-                                  tooltip: 'Quitar',
-                                  icon: const Icon(Icons.remove_circle_outline,
-                                      size: 20, color: Color(0xFFEF4444)),
-                                  onPressed: () => _remove(i),
-                                )
-                              : null),
+                                ? IconButton(
+                                    padding: EdgeInsets.zero,
+                                    visualDensity: VisualDensity.compact,
+                                    tooltip: 'Quitar',
+                                    icon: const Icon(
+                                      Icons.remove_circle_outline,
+                                      size: 20,
+                                      color: Color(0xFFEF4444),
+                                    ),
+                                    onPressed: () => _remove(i),
+                                  )
+                                : null),
                     ),
                   ],
                 ),
               ),
             if (_anyCredit)
-              const Text('Esta venta irá a crédito (requiere cliente).',
-                  style: TextStyle(
-                      color: Color(0xFF2563EB),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600))
+              const Text(
+                'Esta venta irá a crédito (requiere cliente).',
+                style: TextStyle(
+                  color: Color(0xFF2563EB),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              )
             else if (!_valid && widget.total > 0)
-              Text('Falta ${money(widget.total - _sum)} para cubrir el total',
-                  style: const TextStyle(
-                      color: Color(0xFFEF4444),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600)),
+              Text(
+                'Falta ${money(widget.total - _sum)} para cubrir el total',
+                style: const TextStyle(
+                  color: Color(0xFFEF4444),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             // Valor a devolver = lo que pagó de más (cambio en efectivo).
             if (!_anyCredit) ...[
               const Divider(height: 20),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Valor a devolver (cambio)',
-                      style: TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
-                  Text(money(_change),
-                      style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                          color: _change > 0
-                              ? const Color(0xFF2563EB)
-                              : const Color(0xFF64748B))),
+                  const Text(
+                    'Valor a devolver (cambio)',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    money(_change),
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                      color: _change > 0
+                          ? const Color(0xFF2563EB)
+                          : const Color(0xFF64748B),
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -1638,18 +1997,21 @@ class _PaymentDialogState extends State<_PaymentDialog> {
         ),
         FilledButton.icon(
           style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF22C55E)),
+            backgroundColor: const Color(0xFF22C55E),
+          ),
           onPressed: (_valid || _anyCredit)
               ? () => Navigator.of(context).pop(
-                    _PaymentResult(
-                      payments: _anyCredit ? const [] : _payments(),
-                      asCredit: _anyCredit,
-                    ),
-                  )
+                  _PaymentResult(
+                    payments: _anyCredit ? const [] : _payments(),
+                    asCredit: _anyCredit,
+                  ),
+                )
               : null,
           icon: const Icon(Icons.check_circle_outline, size: 18),
-          label: const Text('Confirmar venta',
-              style: TextStyle(fontWeight: FontWeight.w700)),
+          label: const Text(
+            'Confirmar venta',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
         ),
       ],
     );
@@ -1711,8 +2073,11 @@ class _SaleNumberSearch extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.assignment_return_outlined,
-              size: 18, color: Color(0xFFEF4444)),
+          const Icon(
+            Icons.assignment_return_outlined,
+            size: 18,
+            color: Color(0xFFEF4444),
+          ),
           const SizedBox(width: AppTokens.s8),
           Expanded(
             child: TextField(
@@ -1729,11 +2094,13 @@ class _SaleNumberSearch extends StatelessWidget {
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.search_rounded,
-                color: Color(0xFFEF4444), size: 20),
+            icon: const Icon(
+              Icons.search_rounded,
+              color: Color(0xFFEF4444),
+              size: 20,
+            ),
             tooltip: 'Cargar items de la venta',
-            onPressed:
-                isLoading ? null : () => onSearch(controller.text),
+            onPressed: isLoading ? null : () => onSearch(controller.text),
             visualDensity: VisualDensity.compact,
           ),
         ],
@@ -1773,8 +2140,7 @@ class _ModePill extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon,
-                  size: 18, color: isActive ? Colors.white : color),
+              Icon(icon, size: 18, color: isActive ? Colors.white : color),
               const SizedBox(width: AppTokens.s8),
               Text(
                 label,
@@ -1798,7 +2164,9 @@ class _ProductCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initial = product.name.isNotEmpty ? product.name[0].toUpperCase() : '?';
+    final initial = product.name.isNotEmpty
+        ? product.name[0].toUpperCase()
+        : '?';
     final isLowStock = product.stock <= 5;
 
     return InkWell(
@@ -1833,7 +2201,8 @@ class _ProductCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(10),
                         child: Container(
                           color: const Color(0xFFF1F5F9),
-                          child: product.imageUrl != null &&
+                          child:
+                              product.imageUrl != null &&
                                   product.imageUrl!.trim().isNotEmpty
                               ? Image.network(
                                   product.imageUrl!,
@@ -1898,7 +2267,9 @@ class _ProductCard extends StatelessWidget {
                   const SizedBox(height: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 2),
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
                       color: const Color(0xFFFEE2E2),
                       borderRadius: BorderRadius.circular(4),
@@ -2011,8 +2382,9 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
     super.initState();
     _priceCtrl = TextEditingController(text: _fmtNum(widget.item.unitPrice));
     _qtyCtrl = TextEditingController(text: _fmtNum(widget.item.quantity));
-    _discountCtrl =
-        TextEditingController(text: _fmtNum(widget.item.discountPct));
+    _discountCtrl = TextEditingController(
+      text: _fmtNum(widget.item.discountPct),
+    );
   }
 
   @override
@@ -2048,8 +2420,9 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final isReturn = ref.watch(posModeProvider) == PosMode.returnMode;
-    final bgColor =
-        isReturn ? const Color(0xFFFEF2F2) : const Color(0xFFF8FAFC);
+    final bgColor = isReturn
+        ? const Color(0xFFFEF2F2)
+        : const Color(0xFFF8FAFC);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -2096,7 +2469,9 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
                             for (final imei in item.imeis)
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2),
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
                                 decoration: BoxDecoration(
                                   color: const Color(0xFFEFF6FF),
                                   borderRadius: BorderRadius.circular(4),
@@ -2270,8 +2645,10 @@ class _CartFieldState extends State<_CartField> {
           onSubmitted: widget.onSubmit,
           decoration: InputDecoration(
             isDense: true,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 6,
+              vertical: 8,
+            ),
             suffixText: widget.suffix,
             suffixStyle: const TextStyle(
               fontSize: 11,
@@ -2317,8 +2694,7 @@ class _ActiveCashRegisterChip extends ConsumerWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.point_of_sale,
-              size: 16, color: Color(0xFF1D4ED8)),
+          const Icon(Icons.point_of_sale, size: 16, color: Color(0xFF1D4ED8)),
           const SizedBox(width: 6),
           Text(
             'Caja: $name',
@@ -2341,8 +2717,11 @@ class _ActiveCashRegisterChip extends ConsumerWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.arrow_back_rounded,
-                      size: 16, color: Color(0xFF1D4ED8)),
+                  Icon(
+                    Icons.arrow_back_rounded,
+                    size: 16,
+                    color: Color(0xFF1D4ED8),
+                  ),
                   SizedBox(width: 4),
                   Text(
                     'Cambiar',
@@ -2360,7 +2739,6 @@ class _ActiveCashRegisterChip extends ConsumerWidget {
       ),
     );
   }
-
 }
 
 /// Buscador de cliente que combina input por nombre + dropdown completo.
@@ -2436,8 +2814,7 @@ class _ClientSearchFieldState extends State<_ClientSearchField> {
         final q = textValue.text.trim().toLowerCase();
         // Si el campo está vacío o todavía muestra el label actual,
         // mostramos todos los clientes (modo "dropdown").
-        if (q.isEmpty ||
-            q == _labelForId(widget.currentId).toLowerCase()) {
+        if (q.isEmpty || q == _labelForId(widget.currentId).toLowerCase()) {
           return all;
         }
         return all
@@ -2487,10 +2864,7 @@ class _ClientSearchFieldState extends State<_ClientSearchField> {
                         _focusNode.unfocus();
                       },
                     )
-                  : const Icon(
-                      Icons.arrow_drop_down,
-                      color: Color(0xFF64748B),
-                    ),
+                  : const Icon(Icons.arrow_drop_down, color: Color(0xFF64748B)),
               border: InputBorder.none,
               contentPadding: const EdgeInsets.symmetric(vertical: 12),
             ),
@@ -2530,8 +2904,9 @@ class _ClientSearchFieldState extends State<_ClientSearchField> {
                       o.label,
                       style: TextStyle(
                         fontSize: 13,
-                        fontWeight:
-                            selected ? FontWeight.w700 : FontWeight.w500,
+                        fontWeight: selected
+                            ? FontWeight.w700
+                            : FontWeight.w500,
                       ),
                     ),
                     trailing: selected

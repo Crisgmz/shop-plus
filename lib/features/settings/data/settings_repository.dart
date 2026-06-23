@@ -704,6 +704,34 @@ class SettingsRepository {
         .eq('branch_id', branchId);
   }
 
+  /// Asigna el siguiente NCF disponible a las ventas emitidas (completed/credit)
+  /// que quedaron sin comprobante en la sucursal actual. Llama al RPC
+  /// `bulk_assign_missing_ncfs`. Devuelve cuántas se asignaron y cuántas
+  /// quedaron sin asignar (p. ej. secuencia agotada).
+  Future<({int assigned, int failed})> assignMissingNcfs() async {
+    final branchId = await _currentBranchId();
+    if (branchId == null) throw Exception('No hay sucursal actual asignada.');
+
+    final result = await _client.rpc(
+      'bulk_assign_missing_ncfs',
+      params: {'p_branch_id': branchId},
+    );
+
+    final rows = (result as List?) ?? const [];
+    var assigned = 0;
+    var failed = 0;
+    for (final row in rows) {
+      final map = Map<String, dynamic>.from(row as Map);
+      final ncf = (map['ncf'] ?? '').toString().trim();
+      if (ncf.isNotEmpty) {
+        assigned++;
+      } else {
+        failed++;
+      }
+    }
+    return (assigned: assigned, failed: failed);
+  }
+
   Future<BranchFiscalSettings?> fetchBranchFiscalSettings([
     String? branchId,
   ]) async {

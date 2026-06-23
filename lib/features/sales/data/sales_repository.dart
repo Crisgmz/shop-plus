@@ -157,6 +157,8 @@ class SalesClient {
     required this.id,
     required this.fullName,
     this.priceTier = 'retail',
+    this.documentNumber,
+    this.legalName,
   });
 
   final String id;
@@ -165,11 +167,32 @@ class SalesClient {
   /// 'retail' | 'tier_1' | 'tier_2' | 'tier_3'.
   final String priceTier;
 
+  /// RNC/cédula del cliente. Requerido para comprobantes fiscales
+  /// (≠ consumidor final). Null/vacío si no se registró.
+  final String? documentNumber;
+
+  /// Razón social. Cae a [fullName] cuando se usa para fines fiscales.
+  final String? legalName;
+
+  /// Tiene los datos mínimos para emitir un comprobante fiscal (crédito
+  /// fiscal, gubernamental, etc.): RNC/cédula presente. El nombre siempre
+  /// existe vía [fullName]. Refleja la regla del trigger SQL
+  /// `tg_sales_assert_fiscal_client`.
+  bool get hasFiscalData =>
+      (documentNumber != null && documentNumber!.trim().isNotEmpty);
+
   factory SalesClient.fromMap(Map<String, dynamic> map) {
+    String? nz(dynamic v) {
+      final s = v?.toString().trim() ?? '';
+      return s.isEmpty ? null : s;
+    }
+
     return SalesClient(
       id: (map['id'] ?? '').toString(),
       fullName: (map['full_name'] ?? '').toString(),
       priceTier: (map['price_tier'] ?? 'retail').toString(),
+      documentNumber: nz(map['document_number']),
+      legalName: nz(map['legal_name']),
     );
   }
 }
@@ -229,6 +252,7 @@ class SaleCheckoutInput {
     required this.asCredit,
     this.paymentMethod,
     this.payments = const <SalePaymentLine>[],
+    this.changeAmount = 0,
     this.clientId,
     this.notes,
     this.disallowNoStock = false,
@@ -236,6 +260,7 @@ class SaleCheckoutInput {
     this.creditAllowSales = true,
     this.creditDueDays,
     this.cashSessionId,
+    this.holdSaleIdToComplete,
   });
 
   final List<SaleCartItem> items;
@@ -246,6 +271,13 @@ class SaleCheckoutInput {
   /// Pago mixto: una o más líneas {método, monto}. Si está vacío, se usa
   /// `paymentMethod` por el total (flujo de pago único anterior).
   final List<SalePaymentLine> payments;
+
+  /// Monto pagado de más (cambio a devolver en efectivo). Cuando es > 0, el
+  /// repositorio fuerza el registro por líneas (`p_payments`) aunque haya un
+  /// solo método: así el backend guarda `sales.change_amount` y la caja
+  /// descuenta ese efectivo que el cajero sacó para devolver/dar de propina,
+  /// sin importar si la venta se facturó en efectivo, tarjeta o transferencia.
+  final double changeAmount;
 
   final String? clientId;
   final String? notes;
@@ -267,6 +299,12 @@ class SaleCheckoutInput {
   /// usuario tiene varias cajas abiertas (migration 42), el cliente
   /// manda la sesión activa. Si es null, el RPC usa la más reciente.
   final String? cashSessionId;
+
+  /// Id de la cuenta GUARDADA (venta `pending`) que esta venta completa. Cuando
+  /// no es null, el backend la ABSORBE: reusa su mismo número, libera su stock
+  /// reservado y la reemplaza por esta venta real, todo en una transacción. Así
+  /// la cuenta reabierta conserva su número original al cobrarse.
+  final String? holdSaleIdToComplete;
 }
 
 class SaleCheckoutResult {
@@ -282,6 +320,7 @@ class SaleCheckoutResult {
     required this.balanceDue,
     required this.itemsCount,
     this.cashSessionId,
+    this.ncf,
     this.preparedPrintJob,
   });
 
@@ -296,6 +335,11 @@ class SaleCheckoutResult {
   final double balanceDue;
   final int itemsCount;
   final String? cashSessionId;
+
+  /// NCF asignado a la venta (lo pone el trigger SQL al emitirla). Null si la
+  /// venta no llevó comprobante (p. ej. faltó secuencia) o no aplica.
+  final String? ncf;
+
   final PreparedPrintJobData? preparedPrintJob;
 }
 
@@ -374,7 +418,7 @@ class SalesRepository {
 
     final rows = await _client
         .from('clients')
-        .select('id, full_name, price_tier')
+        .select('id, full_name, legal_name, document_number, price_tier')
         .eq('branch_id', branchId)
         .eq('is_active', true)
         .order('full_name');
@@ -436,12 +480,19 @@ class SalesRepository {
       'p_notes': normalizedCheckout.notes,
       'p_credit_due_days': input.creditDueDays,
       'p_cash_session_id': _nullIfEmpty(input.cashSessionId),
+      'p_hold_sale_id': _nullIfEmpty(input.holdSaleIdToComplete),
     };
 
-    // Pago mixto: solo cuando hay 2+ métodos. El parámetro p_payments solo
-    // existe tras aplicar la migración 50; mandarlo solo en split real evita
-    // romper ventas normales si el app se despliega antes que la migración.
-    if (!input.asCredit && input.payments.length >= 2) {
+    // Mandamos p_payments cuando hay 2+ métodos (pago mixto) o cuando se pagó
+    // de más con un solo método (sobrepago). En ambos casos el backend (camino
+    // split) registra el monto realmente entregado por método y guarda el
+    // cambio en sales.change_amount; así la caja descuenta del efectivo
+    // esperado lo que el cajero sacó para devolver, aunque la venta se haya
+    // facturado en tarjeta o transferencia. p_payments solo existe tras la
+    // migración 50/52, por eso la venta simple exacta sigue por el camino
+    // único (no rompe si el app se despliega antes que la migración).
+    final hasOverpay = input.changeAmount > 0.005;
+    if (!input.asCredit && (input.payments.length >= 2 || hasOverpay)) {
       params['p_payments'] =
           input.payments.map((p) => p.toJson()).toList(growable: false);
     }
@@ -478,7 +529,143 @@ class SalesRepository {
       balanceDue: _toDouble(payload['balance_due']),
       itemsCount: _toInt(payload['items_count']),
       cashSessionId: _nullIfEmpty(payload['cash_session_id']?.toString()),
+      // El NCF lo asigna el trigger durante el INSERT; lo recuperamos de la
+      // venta que el preparador del recibo ya volvió a consultar (sin query
+      // extra). El checkout RPC no lo devuelve en su payload.
+      ncf: _nullIfEmpty(preparedPrintJob?.document.ncf),
       preparedPrintJob: preparedPrintJob,
+    );
+  }
+
+  /// Guarda el carrito como una venta GUARDADA (cuenta abierta) en estado
+  /// `pending`. Reserva el stock (el backend inserta las líneas y el trigger
+  /// descuenta), pero NO crea caja, NO registra cobro y NO asigna NCF. Así la
+  /// cuenta queda en el historial (chip gris "Pendiente") y NO entra al cierre
+  /// de caja hasta que se reabra y se complete. Ver `hold_sale_transactional`.
+  Future<HeldSaleResult> holdSale(HeldSaleInput input) async {
+    final branchId = await _currentBranchId();
+    if (branchId == null) {
+      throw Exception('No hay sucursal asignada para este usuario.');
+    }
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) {
+      throw Exception('La sesión no es válida. Inicia sesión de nuevo.');
+    }
+
+    // Reutiliza la misma normalización/validación del checkout (productos
+    // activos, cantidades, stock si el flag está activo, cliente requerido).
+    final normalized = _saleCheckoutService.normalize(
+      SaleCheckoutServiceInput(
+        items: input.items
+            .map(
+              (item) => SaleCheckoutSourceItem(
+                product: SaleCheckoutSourceProduct(
+                  id: item.product.id,
+                  name: item.product.name,
+                  price: item.unitPrice,
+                  taxRate: item.product.taxRate,
+                  stock: item.product.stock,
+                  isActive: item.product.isActive,
+                ),
+                quantity: item.quantity,
+                imeis: item.imeis,
+              ),
+            )
+            .toList(growable: false),
+        receiptType: input.receiptType,
+        asCredit: false,
+        clientId: _nullIfEmpty(input.clientId),
+        notes: input.notes,
+        disallowNoStock: input.disallowNoStock,
+        customerRequiredForSale: input.customerRequiredForSale,
+      ),
+    );
+
+    final rpcResult = await _client.rpc(
+      'hold_sale_transactional',
+      params: <String, dynamic>{
+        'p_items': normalized.toRpcItems(),
+        'p_receipt_type': normalized.receiptType,
+        'p_client_id': normalized.clientId,
+        'p_notes': normalized.notes,
+        'p_replace_hold_sale_id': _nullIfEmpty(input.replaceHoldSaleId),
+      },
+    );
+
+    final payload = Map<String, dynamic>.from(rpcResult as Map);
+    final saleId = (payload['sale_id'] ?? '').toString();
+    if (saleId.isEmpty) {
+      throw Exception('No se pudo guardar la cuenta.');
+    }
+    return HeldSaleResult(
+      saleId: saleId,
+      saleNumber: (payload['sale_number'] ?? '').toString(),
+      totalAmount: _toDouble(payload['total_amount']),
+      itemsCount: _toInt(payload['items_count']),
+    );
+  }
+
+  /// Descarta una cuenta GUARDADA (estado `pending`): devuelve el stock
+  /// reservado y borra la fila. Solo opera sobre ventas pendientes.
+  Future<void> discardHeldSale(String saleId) async {
+    await _client.rpc('discard_held_sale', params: {'p_sale_id': saleId});
+  }
+
+  /// Carga una cuenta GUARDADA para reabrirla en el POS: devuelve sus líneas
+  /// como [SaleCartItem] (preservando precio unitario e IMEIs) más el cliente,
+  /// tipo de comprobante y notas. Devuelve `null` si no existe o no está
+  /// pendiente. Los productos que ya no existan/estén inactivos se omiten.
+  Future<HeldSaleDraftData?> loadHeldSaleForReopen(String saleId) async {
+    final branchId = await _currentBranchId();
+    if (branchId == null) return null;
+
+    final saleRows = await _client
+        .from('sales')
+        .select('id, status, client_id, receipt_type, notes')
+        .eq('id', saleId)
+        .eq('branch_id', branchId)
+        .limit(1);
+    if (saleRows.isEmpty) return null;
+    final sale = Map<String, dynamic>.from(saleRows.first as Map);
+    if ((sale['status'] ?? '').toString() != 'pending') return null;
+
+    final itemRows = await _client
+        .from('sale_items')
+        .select('product_id, quantity, unit_price, imeis')
+        .eq('branch_id', branchId)
+        .eq('sale_id', saleId)
+        .order('created_at');
+
+    final products = await fetchProducts();
+    final productsById = {for (final p in products) p.id: p};
+
+    final items = <SaleCartItem>[];
+    for (final raw in itemRows) {
+      final row = Map<String, dynamic>.from(raw as Map);
+      final productId = row['product_id']?.toString();
+      if (productId == null) continue;
+      final product = productsById[productId];
+      if (product == null) continue;
+      final qty = _toDouble(row['quantity']);
+      if (qty <= 0) continue;
+      items.add(SaleCartItem(
+        product: product,
+        quantity: qty,
+        unitPrice: _toDouble(row['unit_price']),
+        imeis: row['imeis'] is List
+            ? (row['imeis'] as List)
+                .map((e) => e.toString())
+                .where((e) => e.trim().isNotEmpty)
+                .toList(growable: false)
+            : const <String>[],
+      ));
+    }
+
+    return HeldSaleDraftData(
+      items: items,
+      clientId: _nullIfEmpty(sale['client_id']?.toString()),
+      receiptType: (sale['receipt_type'] ?? 'consumer_final').toString(),
+      notes: sale['notes']?.toString() ?? '',
     );
   }
 
@@ -522,10 +709,10 @@ class SalesRepository {
 
     // app_settings (multi-tenant: la RLS filtra a la fila de la empresa
     // del usuario). RNC, logo, ocultar barcode.
-    final settingsRows = await _client
-        .from('app_settings')
-        .select('company_tax_id, company_logo_url, receipt_hide_barcode')
-        .limit(1);
+    // Se piden todas las columnas (no una lista explícita) para que la venta
+    // NO se rompa si la migración de campos del emisor (company_address, etc.)
+    // todavía no se aplicó: las columnas ausentes simplemente vienen nulas.
+    final settingsRows = await _client.from('app_settings').select().limit(1);
     final settings = settingsRows.isEmpty
         ? const <String, dynamic>{}
         : Map<String, dynamic>.from(settingsRows.first as Map);
@@ -534,6 +721,10 @@ class SalesRepository {
     debugPrint('Logo URL en app_settings: $logoUrl');
     final logoBytes = await _downloadBytes(logoUrl);
     debugPrint('Logo bytes descargados: ${logoBytes?.length ?? 0}');
+
+    // QR del pie: descarga en runtime (como el logo) para no depender del
+    // asset bundleado ni del caché del service worker en web.
+    final qrBytes = await _downloadBytes(settings['company_qr_url']?.toString());
 
     // Cash session → nombre legible para "Caja registradora".
     final cashSessionId = sale['cash_session_id']?.toString();
@@ -613,12 +804,25 @@ class SalesRepository {
           DateTime.now(),
       receiptType: (sale['receipt_type'] ?? '').toString(),
       branchName: (branch['name'] ?? 'Sucursal').toString(),
-      branchAddress: branch['address']?.toString(),
-      branchPhone: branch['phone']?.toString(),
+      branchAddress: _firstNonEmpty([
+        settings['company_address'],
+        branch['address'],
+      ]),
+      branchPhone: _firstNonEmpty([
+        settings['company_phone'],
+        branch['phone'],
+      ]),
+      branchEmail: _firstNonEmpty([settings['company_email']]),
       branchTaxId: settings['company_tax_id']?.toString(),
       branchLogoBytes: logoBytes,
+      qrBytes: qrBytes,
+      bankInfo: _firstNonEmpty([settings['company_bank_info']]),
+      signatoryName: _firstNonEmpty([settings['company_signatory_name']]),
+      signatoryTitle: _firstNonEmpty([settings['company_signatory_title']]),
+      observation: _firstNonEmpty([settings['invoice_observation']]),
       cashRegisterName: cashRegisterName,
       showBarcode: settings['receipt_hide_barcode'] != true,
+      showItbis: settings['invoice_show_itbis'] != false,
       clientName: client['full_name']?.toString(),
       clientDocument: _buildClientDocumentLabel(
         documentType: client['document_type']?.toString(),
@@ -891,6 +1095,62 @@ class SalesRepository {
   }
 }
 
+/// Entrada para guardar una cuenta (venta suspendida) en estado `pending`.
+class HeldSaleInput {
+  HeldSaleInput({
+    required this.items,
+    required this.receiptType,
+    this.clientId,
+    this.notes,
+    this.disallowNoStock = false,
+    this.customerRequiredForSale = false,
+    this.replaceHoldSaleId,
+  });
+
+  final List<SaleCartItem> items;
+  final String receiptType;
+  final String? clientId;
+  final String? notes;
+  final bool disallowNoStock;
+  final bool customerRequiredForSale;
+
+  /// Id de la cuenta GUARDADA que esta vuelve a guardar (re-guardado de una
+  /// cuenta reabierta). Si no es null, el backend reusa su mismo número, libera
+  /// su stock reservado y la reemplaza. Así la cuenta conserva su número aunque
+  /// se le sigan agregando productos. Null = cuenta nueva.
+  final String? replaceHoldSaleId;
+}
+
+/// Resultado de guardar una cuenta como pendiente.
+class HeldSaleResult {
+  HeldSaleResult({
+    required this.saleId,
+    required this.saleNumber,
+    required this.totalAmount,
+    required this.itemsCount,
+  });
+
+  final String saleId;
+  final String saleNumber;
+  final double totalAmount;
+  final int itemsCount;
+}
+
+/// Datos de una cuenta guardada listos para reabrir en el POS.
+class HeldSaleDraftData {
+  HeldSaleDraftData({
+    required this.items,
+    required this.receiptType,
+    required this.notes,
+    this.clientId,
+  });
+
+  final List<SaleCartItem> items;
+  final String receiptType;
+  final String notes;
+  final String? clientId;
+}
+
 class ReturnInput {
   ReturnInput({
     required this.items,
@@ -1016,6 +1276,16 @@ String? _nullIfEmpty(String? value) {
   if (value == null) return null;
   final trimmed = value.trim();
   return trimmed.isEmpty ? null : trimmed;
+}
+
+/// Primer valor no vacío de la lista (tras trim), o null. Para preferir un
+/// campo de configuración sobre el de la sucursal.
+String? _firstNonEmpty(List<dynamic> values) {
+  for (final v in values) {
+    final s = v?.toString().trim();
+    if (s != null && s.isNotEmpty) return s;
+  }
+  return null;
 }
 
 String? _buildClientDocumentLabel({

@@ -44,6 +44,11 @@ final quotationDraftProvider = StateProvider<QuotationDraft>(
 
 const _quotationDraftKey = 'bpw.quotation_draft.v1';
 
+/// Borra el borrador de cotización persistido (store global). Usar al cambiar
+/// de usuario: la clave NO es por-usuario, así que sin esto el borrador del
+/// usuario anterior reaparece. Invalidar `quotationDraftProvider` después.
+void clearQuotationDraftStore() => kvRemove(_quotationDraftKey);
+
 /// Persiste el borrador en el store. Si quedó vacío, borra la entrada.
 void saveQuotationDraftToStore(QuotationDraft draft) {
   if (draft.isEmpty) {

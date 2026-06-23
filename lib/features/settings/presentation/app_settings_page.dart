@@ -560,6 +560,7 @@ class _TextRow extends StatefulWidget {
     this.maxLength,
     this.uppercase = false,
     this.helper,
+    this.maxLines = 1,
   });
 
   final String label;
@@ -568,6 +569,7 @@ class _TextRow extends StatefulWidget {
   final String? helper;
   final int? maxLength;
   final bool uppercase;
+  final int maxLines;
   final String column;
   final bool isReadOnly;
   final void Function(String column, dynamic value) onSave;
@@ -638,6 +640,10 @@ class _TextRowState extends State<_TextRow> {
             focusNode: _focus,
             enabled: !widget.isReadOnly,
             maxLength: widget.maxLength,
+            maxLines: widget.maxLines,
+            keyboardType: widget.maxLines > 1
+                ? TextInputType.multiline
+                : null,
             inputFormatters: widget.uppercase
                 ? [
                     FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
@@ -882,8 +888,89 @@ class _CompanyInfoSection extends StatelessWidget {
           isReadOnly: isReadOnly,
           onSave: onSave,
         ),
+        // ── Datos para factura / cotización (formato A4) ──
+        _TextRow(
+          label: 'Dirección (factura/cotización)',
+          value: settings.companyAddress,
+          column: 'company_address',
+          hint: 'Calle / sector\nCiudad, provincia',
+          helper: 'Aparece en el encabezado. Una línea por renglón.',
+          maxLines: 3,
+          isReadOnly: isReadOnly,
+          onSave: onSave,
+        ),
+        _TextRow(
+          label: 'Teléfono(s)',
+          value: settings.companyPhone,
+          column: 'company_phone',
+          hint: '829-000-0000 / 809-000-0000',
+          isReadOnly: isReadOnly,
+          onSave: onSave,
+        ),
+        _TextRow(
+          label: 'Correo (factura/cotización)',
+          value: settings.companyEmail,
+          column: 'company_email',
+          hint: 'ventas@minegocio.com',
+          isReadOnly: isReadOnly,
+          onSave: onSave,
+        ),
+        _TextRow(
+          label: 'Datos bancarios para pago',
+          value: settings.companyBankInfo,
+          column: 'company_bank_info',
+          hint: 'BANCO POPULAR : 000000000 CUENTA CORRIENTE\n'
+              'NOMBRE TITULAR   CEDULA: 000-0000000-0',
+          helper: 'Bloque de pago al pie. Una línea por renglón.',
+          maxLines: 3,
+          isReadOnly: isReadOnly,
+          onSave: onSave,
+        ),
+        _TextRow(
+          label: 'Firmante (nombre)',
+          value: settings.companySignatoryName,
+          column: 'company_signatory_name',
+          hint: 'Nombre que va sobre la línea de firma',
+          isReadOnly: isReadOnly,
+          onSave: onSave,
+        ),
+        _TextRow(
+          label: 'Firmante (cargo)',
+          value: settings.companySignatoryTitle,
+          column: 'company_signatory_title',
+          hint: 'Ej. Gerente de Finanzas',
+          isReadOnly: isReadOnly,
+          onSave: onSave,
+        ),
+        _TextRow(
+          label: 'Observación (factura/cotización)',
+          value: settings.invoiceObservation,
+          column: 'invoice_observation',
+          helper: 'Texto opcional impreso en el bloque de observación.',
+          maxLines: 2,
+          isReadOnly: isReadOnly,
+          onSave: onSave,
+        ),
+        _BoolRow(
+          label: 'Mostrar ITBIS en factura/cotización',
+          value: settings.invoiceShowItbis,
+          column: 'invoice_show_itbis',
+          helper: 'Si se apaga, nunca se desglosa el ITBIS aunque los '
+              'productos tengan tasa. Igual se oculta si ningún ítem lo lleva.',
+          isReadOnly: isReadOnly,
+          onSave: onSave,
+        ),
         _CompanyLogoPicker(
           value: settings.companyLogoUrl,
+          isReadOnly: isReadOnly,
+          onSave: onSave,
+        ),
+        _CompanyLogoPicker(
+          value: settings.companyQrUrl,
+          column: 'company_qr_url',
+          label: 'Código QR (factura/cotización)',
+          noun: 'QR',
+          uploadKind: 'qr',
           isReadOnly: isReadOnly,
           onSave: onSave,
         ),
@@ -911,11 +998,27 @@ class _CompanyLogoPicker extends ConsumerStatefulWidget {
     required this.value,
     required this.isReadOnly,
     required this.onSave,
+    this.column = 'company_logo_url',
+    this.label = 'Logo de la empresa',
+    this.noun = 'logo',
+    this.uploadKind = 'logo',
   });
 
   final String? value;
   final bool isReadOnly;
   final void Function(String column, dynamic value) onSave;
+
+  /// Columna de app_settings donde se guarda el URL.
+  final String column;
+
+  /// Etiqueta arriba del control.
+  final String label;
+
+  /// Sustantivo para los botones (ej. "Cambiar logo", "No se pudo subir el QR").
+  final String noun;
+
+  /// Prefijo del archivo en Storage: `_company/[kind]-[timestamp].[ext]`.
+  final String uploadKind;
 
   @override
   ConsumerState<_CompanyLogoPicker> createState() =>
@@ -936,12 +1039,13 @@ class _CompanyLogoPickerState extends ConsumerState<_CompanyLogoPicker> {
       final url = await repo.uploadCompanyLogo(
         bytes: picked.bytes,
         extension: picked.extension,
+        kind: widget.uploadKind,
       );
       if (!mounted) return;
-      widget.onSave('company_logo_url', url);
+      widget.onSave(widget.column, url);
     } catch (error) {
       if (!mounted) return;
-      AppSnackBar.error(context, 'No se pudo subir el logo', error);
+      AppSnackBar.error(context, 'No se pudo subir el ${widget.noun}', error);
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -949,7 +1053,7 @@ class _CompanyLogoPickerState extends ConsumerState<_CompanyLogoPicker> {
 
   void _clear() {
     if (widget.isReadOnly || _uploading) return;
-    widget.onSave('company_logo_url', null);
+    widget.onSave(widget.column, null);
   }
 
   @override
@@ -964,7 +1068,7 @@ class _CompanyLogoPickerState extends ConsumerState<_CompanyLogoPicker> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Logo de la empresa',
+            widget.label,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: AppTokens.s6),
@@ -1012,7 +1116,9 @@ class _CompanyLogoPickerState extends ConsumerState<_CompanyLogoPicker> {
                       label: Text(
                         _uploading
                             ? 'Subiendo…'
-                            : (hasImage ? 'Cambiar logo' : 'Seleccionar logo'),
+                            : (hasImage
+                                ? 'Cambiar ${widget.noun}'
+                                : 'Seleccionar ${widget.noun}'),
                       ),
                     ),
                     if (hasImage)
