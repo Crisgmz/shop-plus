@@ -23,6 +23,8 @@ import '../../cash_register/presentation/cash_register_providers.dart';
 import '../../inventory/data/file_io_helper.dart';
 import '../../inventory/data/inventory_repository.dart';
 import '../../inventory/presentation/inventory_providers.dart';
+import '../../printing/data/printing.dart';
+import '../../printing/presentation/network_printer_providers.dart';
 import '../../users/data/users_repository.dart';
 import '../../users/presentation/users_providers.dart';
 import '../data/app_settings.dart';
@@ -197,6 +199,10 @@ class _Body extends StatelessWidget {
           onSave: onSave,
         ),
         const SizedBox(height: AppTokens.s24),
+        _NetworkPrinterSection(
+          key: sectionKeys[AppSettingsSection.networkPrinter],
+        ),
+        const SizedBox(height: AppTokens.s24),
         _SuspendedSalesSection(
           key: sectionKeys[AppSettingsSection.suspendedSales],
           settings: settings,
@@ -295,6 +301,7 @@ class _SidebarItem extends StatelessWidget {
     AppSettingsSection.employee: Icons.badge_outlined,
     AppSettingsSection.taxCurrency: Icons.attach_money_outlined,
     AppSettingsSection.salesReceipt: Icons.receipt_long_outlined,
+    AppSettingsSection.networkPrinter: Icons.print_outlined,
     AppSettingsSection.suspendedSales: Icons.pause_circle_outline,
     AppSettingsSection.application: Icons.tune,
   };
@@ -1765,6 +1772,311 @@ class _SuspendedSalesSection extends StatelessWidget {
           onSave: onSave,
         ),
       ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sección: Impresora de red (TCP / ESC-POS)
+// ─────────────────────────────────────────────────────────────────────────
+
+class _NetworkPrinterSection extends ConsumerStatefulWidget {
+  const _NetworkPrinterSection({super.key});
+
+  @override
+  ConsumerState<_NetworkPrinterSection> createState() =>
+      _NetworkPrinterSectionState();
+}
+
+class _NetworkPrinterSectionState
+    extends ConsumerState<_NetworkPrinterSection> {
+  final _hostCtrl = TextEditingController();
+  final _portCtrl = TextEditingController();
+  bool _initialized = false;
+  bool _testing = false;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _hostCtrl.dispose();
+    _portCtrl.dispose();
+    super.dispose();
+  }
+
+  void _syncControllers(NetworkPrinterConfig c) {
+    if (_initialized) return;
+    _hostCtrl.text = c.host;
+    _portCtrl.text = c.port.toString();
+    _initialized = true;
+  }
+
+  /// Combina los valores de los campos de texto con la config base.
+  NetworkPrinterConfig _merge(NetworkPrinterConfig base) {
+    final port = int.tryParse(_portCtrl.text.trim());
+    return base.copyWith(
+      host: _hostCtrl.text.trim(),
+      port: (port != null && port > 0 && port <= 65535) ? port : base.port,
+    );
+  }
+
+  Future<void> _save(NetworkPrinterConfig config) async {
+    setState(() => _saving = true);
+    try {
+      await ref.read(networkPrinterConfigProvider.notifier).save(config);
+      if (mounted) {
+        AppSnackBar.success(context, 'Configuración de impresora guardada.');
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _test(NetworkPrinterConfig config) async {
+    final merged = _merge(config);
+    if (!merged.isConfigured) {
+      AppSnackBar.info(context, 'Ingresa la IP de la impresora primero.');
+      return;
+    }
+    setState(() => _testing = true);
+    try {
+      await ref.read(networkPrinterConfigProvider.notifier).save(merged);
+      final result =
+          await ref.read(networkPrintServiceProvider).printTestTicket(merged);
+      if (!mounted) return;
+      if (result.ok) {
+        AppSnackBar.success(context, 'Ticket de prueba enviado.');
+      } else {
+        AppSnackBar.error(context, 'Falló la prueba', result.error);
+      }
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final asyncConfig = ref.watch(networkPrinterConfigProvider);
+    final supported = ref.read(networkPrintServiceProvider).isSupported;
+
+    return _SectionCard(
+      section: AppSettingsSection.networkPrinter,
+      children: [
+        asyncConfig.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.only(top: AppTokens.s16),
+            child: LinearProgressIndicator(),
+          ),
+          error: (e, _) => Padding(
+            padding: const EdgeInsets.only(top: AppTokens.s16),
+            child: Text('No se pudo cargar la configuración: $e'),
+          ),
+          data: (config) {
+            _syncControllers(config);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (!supported)
+                  Padding(
+                    padding: const EdgeInsets.only(top: AppTokens.s12),
+                    child: _InfoNote(
+                      'La impresión por TCP solo está disponible en la '
+                      'aplicación de escritorio para Windows.',
+                    ),
+                  ),
+                _BoolRowLocal(
+                  label: 'Activar impresión por TCP',
+                  helper: 'Muestra el botón "Imprimir en red" en el recibo.',
+                  value: config.enabled,
+                  onChanged: (v) => _save(_merge(config).copyWith(enabled: v)),
+                ),
+                const SizedBox(height: AppTokens.s8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: TextField(
+                        controller: _hostCtrl,
+                        keyboardType: TextInputType.url,
+                        decoration: const InputDecoration(
+                          labelText: 'Dirección IP de la impresora',
+                          hintText: '192.168.1.50',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: AppTokens.s12),
+                    Expanded(
+                      child: TextField(
+                        controller: _portCtrl,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        decoration: const InputDecoration(
+                          labelText: 'Puerto',
+                          hintText: '9100',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppTokens.s12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<int>(
+                        initialValue: config.paperColumns,
+                        decoration: const InputDecoration(
+                          labelText: 'Ancho de papel',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        items: const [
+                          DropdownMenuItem(value: 48, child: Text('80 mm (48 col)')),
+                          DropdownMenuItem(value: 32, child: Text('58 mm (32 col)')),
+                        ],
+                        onChanged: (v) {
+                          if (v != null) {
+                            _save(_merge(config).copyWith(paperColumns: v));
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: AppTokens.s12),
+                    Expanded(
+                      child: DropdownButtonFormField<int>(
+                        initialValue: config.copies.clamp(1, 3),
+                        decoration: const InputDecoration(
+                          labelText: 'Copias',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                        items: const [
+                          DropdownMenuItem(value: 1, child: Text('1')),
+                          DropdownMenuItem(value: 2, child: Text('2')),
+                          DropdownMenuItem(value: 3, child: Text('3')),
+                        ],
+                        onChanged: (v) {
+                          if (v != null) {
+                            _save(_merge(config).copyWith(copies: v));
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppTokens.s8),
+                _BoolRowLocal(
+                  label: 'Abrir gaveta de efectivo al imprimir',
+                  helper: 'Envía el pulso de apertura en ventas en efectivo.',
+                  value: config.openDrawerOnCashSale,
+                  onChanged: (v) =>
+                      _save(_merge(config).copyWith(openDrawerOnCashSale: v)),
+                ),
+                const SizedBox(height: AppTokens.s16),
+                Wrap(
+                  spacing: AppTokens.s12,
+                  runSpacing: AppTokens.s8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: _saving ? null : () => _save(_merge(config)),
+                      icon: const Icon(Icons.save_outlined, size: 18),
+                      label: const Text('Guardar'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: (_testing || !supported)
+                          ? null
+                          : () => _test(config),
+                      icon: _testing
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.print_outlined, size: 18),
+                      label: Text(_testing ? 'Enviando…' : 'Probar impresión'),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+/// Switch row para configuración local (no auto-save a Supabase).
+class _BoolRowLocal extends StatelessWidget {
+  const _BoolRowLocal({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+    this.helper,
+  });
+
+  final String label;
+  final String? helper;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppTokens.s4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: Theme.of(context).textTheme.bodyMedium),
+                if (helper != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      helper!,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppTokens.mutedForeground,
+                          ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Switch.adaptive(value: value, onChanged: onChanged),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoNote extends StatelessWidget {
+  const _InfoNote(this.message);
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: BoxDecoration(
+        color: AppTokens.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, size: 18, color: AppTokens.primary),
+          const SizedBox(width: AppTokens.s8),
+          Expanded(
+            child: Text(message, style: Theme.of(context).textTheme.bodySmall),
+          ),
+        ],
+      ),
     );
   }
 }

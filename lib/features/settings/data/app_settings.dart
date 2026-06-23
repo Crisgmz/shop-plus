@@ -310,6 +310,7 @@ enum AppSettingsSection {
   employee,
   taxCurrency,
   salesReceipt,
+  networkPrinter,
   suspendedSales,
   application;
 
@@ -325,6 +326,8 @@ enum AppSettingsSection {
         return 'Impuestos y moneda';
       case AppSettingsSection.salesReceipt:
         return 'Ventas y recibo';
+      case AppSettingsSection.networkPrinter:
+        return 'Impresora de red (TCP)';
       case AppSettingsSection.suspendedSales:
         return 'Cuentas abiertas';
       case AppSettingsSection.application:
@@ -344,6 +347,8 @@ enum AppSettingsSection {
         return 'ITBIS, símbolo de moneda y denominaciones para arqueo.';
       case AppSettingsSection.salesReceipt:
         return 'Recibo, prefijos, métodos de pago y políticas de venta.';
+      case AppSettingsSection.networkPrinter:
+        return 'Impresión térmica ESC/POS directa por IP (puerto 9100).';
       case AppSettingsSection.suspendedSales:
         return 'Cuentas en curso y su comportamiento al suspender.';
       case AppSettingsSection.application:

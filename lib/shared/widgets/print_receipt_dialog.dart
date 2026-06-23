@@ -1,12 +1,14 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../features/printing/data/printing.dart';
+import '../../features/printing/presentation/network_printer_providers.dart';
 import 'app_snackbar.dart';
 
-class PrintReceiptDialog extends StatefulWidget {
+class PrintReceiptDialog extends ConsumerStatefulWidget {
   const PrintReceiptDialog({super.key, required this.printData});
 
   final PreparedPrintJobData printData;
@@ -19,12 +21,13 @@ class PrintReceiptDialog extends StatefulWidget {
   }
 
   @override
-  State<PrintReceiptDialog> createState() => _PrintReceiptDialogState();
+  ConsumerState<PrintReceiptDialog> createState() => _PrintReceiptDialogState();
 }
 
-class _PrintReceiptDialogState extends State<PrintReceiptDialog> {
+class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
   late PrintPaperSize _selectedSize;
   final _templateService = const PrintingTemplateService();
+  bool _sendingTcp = false;
 
   @override
   void initState() {
@@ -90,9 +93,48 @@ class _PrintReceiptDialogState extends State<PrintReceiptDialog> {
     }
   }
 
+  /// Envía el recibo directamente a la impresora térmica de red por TCP
+  /// (ESC/POS crudo, sin diálogo del sistema). Solo disponible en escritorio
+  /// cuando hay una impresora configurada.
+  Future<void> _onNetworkPrintPressed(BuildContext context) async {
+    final config = ref.read(networkPrinterConfigProvider).valueOrNull;
+    if (config == null || !config.isReady) return;
+
+    final service = ref.read(networkPrintServiceProvider);
+    final messengerContext = context;
+    final navigator = Navigator.of(context);
+
+    setState(() => _sendingTcp = true);
+    try {
+      final result = await service.printDocument(
+        widget.printData.document,
+        config,
+        openDrawer: true,
+      );
+      if (!messengerContext.mounted) return;
+      if (result.ok) {
+        AppSnackBar.success(messengerContext, 'Enviado a la impresora de red.');
+        if (navigator.mounted) navigator.pop();
+      } else {
+        AppSnackBar.error(
+          messengerContext,
+          'No se pudo imprimir por TCP',
+          result.error,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sendingTcp = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isThermal = _selectedSize == PrintPaperSize.thermal80mm;
+    final networkConfig = ref.watch(networkPrinterConfigProvider).valueOrNull;
+    final canNetworkPrint = isThermal &&
+        networkConfig != null &&
+        networkConfig.isReady &&
+        ref.read(networkPrintServiceProvider).isSupported;
 
     return AlertDialog(
       titlePadding: const EdgeInsets.fromLTRB(20, 16, 12, 0),
@@ -142,11 +184,24 @@ class _PrintReceiptDialogState extends State<PrintReceiptDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: _sendingTcp ? null : () => Navigator.pop(context),
           child: const Text('Cerrar'),
         ),
+        if (canNetworkPrint)
+          OutlinedButton.icon(
+            onPressed:
+                _sendingTcp ? null : () => _onNetworkPrintPressed(context),
+            icon: _sendingTcp
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.lan_rounded, size: 18),
+            label: Text(_sendingTcp ? 'Enviando…' : 'Imprimir en red'),
+          ),
         FilledButton.icon(
-          onPressed: () => _onPrintPressed(context),
+          onPressed: _sendingTcp ? null : () => _onPrintPressed(context),
           icon: const Icon(Icons.print_rounded, size: 18),
           label: const Text('Imprimir'),
         ),
