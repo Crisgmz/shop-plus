@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../shared/formatters/formatters.dart' as fmt;
+import '../../../shared/io/storage_image_loader.dart';
 import '../../printing/data/printing.dart';
 import 'quotations_models.dart';
 
@@ -517,6 +518,22 @@ class QuotationsRepository implements QuotationsRepositoryContract {
         ? const <String, dynamic>{}
         : Map<String, dynamic>.from(branchRows.first as Map);
 
+    // app_settings (emisor + banco + firmante + observación). RLS por tenant.
+    // Se piden todas las columnas para no romper la cotización si la migración
+    // de campos del emisor todavía no se aplicó (columnas ausentes → nulas).
+    final settingsRows = await _client.from('app_settings').select().limit(1);
+    final settings = settingsRows.isEmpty
+        ? const <String, dynamic>{}
+        : Map<String, dynamic>.from(settingsRows.first as Map);
+    final logoBytes = await downloadStorageImageBytes(
+      _client,
+      settings['company_logo_url']?.toString(),
+    );
+    final qrBytes = await downloadStorageImageBytes(
+      _client,
+      settings['company_qr_url']?.toString(),
+    );
+
     final itemRows = await _client
         .from('quotation_items')
         .select(
@@ -539,8 +556,23 @@ class QuotationsRepository implements QuotationsRepositoryContract {
           DateTime.tryParse(quote['valid_until']?.toString() ?? '') ??
           DateTime.now(),
       branchName: (branch['name'] ?? 'Sucursal').toString(),
-      branchAddress: branch['address']?.toString(),
-      branchPhone: branch['phone']?.toString(),
+      branchAddress: _firstNonEmpty([
+        settings['company_address'],
+        branch['address'],
+      ]),
+      branchPhone: _firstNonEmpty([
+        settings['company_phone'],
+        branch['phone'],
+      ]),
+      branchEmail: _firstNonEmpty([settings['company_email']]),
+      branchTaxId: _firstNonEmpty([settings['company_tax_id']]),
+      branchLogoBytes: logoBytes,
+      qrBytes: qrBytes,
+      bankInfo: _firstNonEmpty([settings['company_bank_info']]),
+      signatoryName: _firstNonEmpty([settings['company_signatory_name']]),
+      signatoryTitle: _firstNonEmpty([settings['company_signatory_title']]),
+      observation: _firstNonEmpty([settings['invoice_observation']]),
+      showItbis: settings['invoice_show_itbis'] != false,
       notes: _nullIfEmpty(quote['notes']?.toString()),
       subtotal: _toDouble(quote['subtotal']),
       taxAmount: _toDouble(quote['tax_amount']),
@@ -607,6 +639,16 @@ String? _nullIfEmpty(String? value) {
   if (value == null) return null;
   final trimmed = value.trim();
   return trimmed.isEmpty ? null : trimmed;
+}
+
+/// Primer valor no vacío de la lista (tras trim), o null. Para preferir un
+/// campo de configuración sobre el de la sucursal.
+String? _firstNonEmpty(List<dynamic> values) {
+  for (final v in values) {
+    final s = v?.toString().trim();
+    if (s != null && s.isNotEmpty) return s;
+  }
+  return null;
 }
 
 double _toDouble(dynamic value) {

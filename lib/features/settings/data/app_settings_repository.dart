@@ -30,14 +30,16 @@ class AppSettingsRepository {
   /// de empresa se guardan bajo el prefijo `_company/` para diferenciarlos.
   static const _assetsBucket = 'product_images';
 
-  /// Sube los bytes del logo de la empresa a Storage y devuelve el URL público.
-  /// El path se construye como `_company/logo-<timestamp>.<ext>`.
+  /// Sube los bytes de un asset de empresa (logo, QR, etc.) a Storage y
+  /// devuelve el URL público. El path se construye como
+  /// `_company/<kind>-<timestamp>.<ext>`.
   Future<String> uploadCompanyLogo({
     required Uint8List bytes,
     required String extension,
+    String kind = 'logo',
   }) async {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final path = '_company/logo-$timestamp.$extension';
+    final path = '_company/$kind-$timestamp.$extension';
 
     final storage = _client.storage.from(_assetsBucket);
     await storage.uploadBinary(

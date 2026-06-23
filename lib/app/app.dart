@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthState;
 
 import '../core/realtime/realtime_invalidator.dart';
 import '../core/theme/app_theme.dart';
+import '../features/auth/presentation/auth_providers.dart';
+import '../features/quotations/presentation/quotations_providers.dart';
+import '../features/sales/presentation/sales_providers.dart';
 import '../features/settings/presentation/app_settings_providers.dart';
 import '../features/shell/presentation/shell_providers.dart';
 import '../shared/formatters/live_settings.dart';
@@ -60,6 +64,26 @@ class ShopPlusApp extends ConsumerWidget {
         ref.read(realtimeInvalidatorProvider).attach(branchId);
       },
     );
+
+    // Cuando cambia el USUARIO autenticado (login, logout o switch de cuenta),
+    // invalidar TODA la data de sesión cacheada. Sin esto, providers que no son
+    // autoDispose (sobre todo appSettingsProvider) conservan los datos del
+    // usuario anterior — no es RLS, es caché en memoria del cliente. Se ignora
+    // el evento `tokenRefreshed` (mismo user) comparando el id.
+    ref.listen<AsyncValue<AuthState>>(authStateChangesProvider, (prev, next) {
+      final prevUserId = prev?.valueOrNull?.session?.user.id;
+      final nextUserId = next.valueOrNull?.session?.user.id;
+      if (prevUserId == nextUserId) return;
+
+      invalidateBranchScopedData(ref); // dashboard, ventas, clientes, etc.
+      ref.invalidate(appSettingsProvider); // config (no-autoDispose, faltaba)
+      // Borradores persistidos con clave global (no por-usuario): limpiar el
+      // store y la memoria para que no reaparezcan con el siguiente usuario.
+      clearSaleDraftStore();
+      clearQuotationDraftStore();
+      ref.invalidate(saleDraftProvider);
+      ref.invalidate(quotationDraftProvider);
+    });
 
     return MaterialApp.router(
       title: 'Shop+',

@@ -1008,9 +1008,10 @@ class ReportsRepository {
     if (voidedOnly) {
       query = query.eq('status', 'voided');
     } else {
-      // Para "Detallados" normales excluimos eliminadas; las eliminadas
-      // tienen su propio sub-reporte.
-      query = query.neq('status', 'voided');
+      // Para "Detallados" normales excluimos eliminadas (tienen su propio
+      // sub-reporte) y las cuentas GUARDADAS ('pending'): no son ventas reales
+      // todavía, no deben sumar al reporte hasta completarse.
+      query = query.neq('status', 'voided').neq('status', 'pending');
     }
 
     final salesRows =

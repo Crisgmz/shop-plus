@@ -15,8 +15,17 @@ class QuotePrintSource {
     required this.totalAmount,
     this.branchAddress,
     this.branchPhone,
+    this.branchEmail,
+    this.branchTaxId,
+    this.branchLogoBytes,
+    this.bankInfo,
+    this.signatoryName,
+    this.signatoryTitle,
+    this.observation,
     this.clientDocument,
     this.notes,
+    this.showItbis = true,
+    this.qrBytes,
   });
 
   final String quoteId;
@@ -28,8 +37,17 @@ class QuotePrintSource {
   final String branchName;
   final String? branchAddress;
   final String? branchPhone;
+  final String? branchEmail;
+  final String? branchTaxId;
+  final List<int>? branchLogoBytes;
+  final String? bankInfo;
+  final String? signatoryName;
+  final String? signatoryTitle;
+  final String? observation;
   final String? clientDocument;
   final String? notes;
+  final bool showItbis;
+  final List<int>? qrBytes;
   final List<QuotePrintItemSource> items;
   final double subtotal;
   final double taxAmount;
@@ -66,14 +84,25 @@ class QuotePrintDocumentAdapter {
       issuedAt: source.issuedAt,
       branch: PrintBranchIdentity(
         name: source.branchName,
-        address: source.branchAddress,
-        phone: source.branchPhone,
+        address: _nullIfBlank(source.branchAddress),
+        phone: _nullIfBlank(source.branchPhone),
+        email: _nullIfBlank(source.branchEmail),
+        taxId: _nullIfBlank(source.branchTaxId),
+        logoBytes: source.branchLogoBytes,
+        bankInfo: _nullIfBlank(source.bankInfo),
+        signatoryName: _nullIfBlank(source.signatoryName),
+        signatoryTitle: _nullIfBlank(source.signatoryTitle),
       ),
       customer: PrintParty(
         name: source.clientName,
         document: _nullIfBlank(source.clientDocument),
       ),
       receiptTypeLabel: 'Cotización',
+      paymentTermsLabel: 'CONTADO',
+      showTax: source.showItbis &&
+          source.items.any((i) => i.lineTax > 0.0049),
+      qrBytes: source.qrBytes,
+      observation: _nullIfBlank(source.observation),
       referenceNumber: 'Vigencia: ${_dateLabel(source.validUntil)}',
       notes: _nullIfBlank(source.notes),
       footerMessage: 'Gracias por su preferencia',

@@ -108,6 +108,9 @@ class PrintBranchIdentity {
     this.email,
     this.taxId,
     this.logoBytes,
+    this.bankInfo,
+    this.signatoryName,
+    this.signatoryTitle,
   });
 
   final String name;
@@ -120,6 +123,13 @@ class PrintBranchIdentity {
   /// del recibo. El caller es responsable de descargarlo de
   /// `app_settings.company_logo_url`.
   final List<int>? logoBytes;
+
+  /// Datos bancarios para pago (texto multilínea). Solo factura/cotización A4.
+  final String? bankInfo;
+
+  /// Firmante impreso sobre la línea de firma (factura/cotización A4).
+  final String? signatoryName;
+  final String? signatoryTitle;
 }
 
 class PrintParty {
@@ -211,6 +221,10 @@ class PrintDocumentData {
     this.cashRegisterName,
     this.changeAmount,
     this.showBarcode = true,
+    this.paymentTermsLabel,
+    this.observation,
+    this.showTax = true,
+    this.qrBytes,
   });
 
   final PrintDocumentType documentType;
@@ -241,6 +255,20 @@ class PrintDocumentData {
 
   /// Si false, no se imprime el código de barras al final del recibo.
   final bool showBarcode;
+
+  /// Etiqueta de "Forma de pago" (ej. "CONTADO", "CRÉDITO"). Factura/cotización.
+  final String? paymentTermsLabel;
+
+  /// Observación opcional impresa al pie (factura/cotización A4).
+  final String? observation;
+
+  /// Si false, se oculta la columna ITBIS y el desglose de impuestos en el
+  /// PDF A4 (ventas "sin comprobante", sin impuesto, o toggle apagado).
+  final bool showTax;
+
+  /// Bytes del código QR para el pie del A4 (descargado de `company_qr_url`).
+  /// Si es null, el builder usa el asset `assets/QR.png` como fallback.
+  final List<int>? qrBytes;
 }
 
 class ThermalTicketRow {

@@ -9,6 +9,29 @@ import '../data/sales_repository.dart';
 final salesSearchProvider = StateProvider<String>((ref) => '');
 final salesSelectedCategoryProvider = StateProvider<String?>((ref) => null);
 
+/// True si la sucursal actual tiene una secuencia NCF de Consumidor Final (B02)
+/// activa, vigente y con stock. Define el comprobante por defecto del POS: con
+/// B02 disponible la venta arranca en 'consumer_final'; si no, en 'none' (sin
+/// comprobante). Si la vista no existe o falla, devuelve false (no asume B02).
+final b02SequenceAvailableProvider =
+    FutureProvider.autoDispose<bool>((ref) async {
+  final client = ref.watch(supabaseClientProvider);
+  try {
+    final rows = await client
+        .from('vw_ncf_stock')
+        .select('remaining, is_active, is_expired')
+        .eq('receipt_type', 'consumer_final')
+        .eq('is_active', true)
+        .eq('is_expired', false);
+    return (rows as List).any((row) {
+      final remaining = (row['remaining'] as num?)?.toInt();
+      return remaining == null || remaining > 0; // null = secuencia sin tope
+    });
+  } catch (_) {
+    return false;
+  }
+});
+
 /// Modo del POS: venta normal o registro de devolución (PRD F5).
 enum PosMode { sale, returnMode }
 
@@ -23,10 +46,11 @@ final posModeProvider = StateProvider<PosMode>((ref) => PosMode.sale);
 class SaleDraft {
   const SaleDraft({
     this.items = const [],
-    this.receiptType = 'consumer_final',
+    this.receiptType = 'none',
     this.paymentMethod,
     this.clientId,
     this.notes = '',
+    this.heldSaleId,
   });
 
   final List<SaleCartItem> items;
@@ -34,6 +58,13 @@ class SaleDraft {
   final String? paymentMethod;
   final String? clientId;
   final String notes;
+
+  /// Id de la cuenta GUARDADA (venta `pending`) que se reabrió en el POS. Se
+  /// setea desde el historial al "Reabrir" y viaja con el draft (sobrevive
+  /// recargas en web). Al completar la venta, el POS descarta esa pendiente
+  /// (devuelve su stock reservado) antes de registrar la venta real, para no
+  /// duplicar la cuenta ni el stock. Null en una venta nueva normal.
+  final String? heldSaleId;
 
   bool get isEmpty => items.isEmpty;
 }
@@ -47,13 +78,20 @@ final saleDraftProvider = StateProvider<SaleDraft>(
 
 const _saleDraftKey = 'bpw.sale_draft.v1';
 
+/// Borra el borrador persistido (store global). Usar al cambiar de usuario:
+/// la clave NO es por-usuario, así que sin esto el carrito del usuario anterior
+/// reaparece para el siguiente. El caller debe invalidar `saleDraftProvider`
+/// después para que la memoria también se limpie.
+void clearSaleDraftStore() => kvRemove(_saleDraftKey);
+
 /// Persiste el borrador en el store. Llamar tras cada cambio del carrito.
 /// Si el carrito quedó vacío y sin datos de cabecera, borra la entrada.
 void saveSaleDraftToStore(SaleDraft draft) {
   if (draft.items.isEmpty &&
       draft.notes.isEmpty &&
       draft.clientId == null &&
-      draft.paymentMethod == null) {
+      draft.paymentMethod == null &&
+      draft.heldSaleId == null) {
     kvRemove(_saleDraftKey);
   } else {
     kvWrite(_saleDraftKey, _encodeSaleDraft(draft));
@@ -65,6 +103,7 @@ String _encodeSaleDraft(SaleDraft d) => jsonEncode({
       'paymentMethod': d.paymentMethod,
       'clientId': d.clientId,
       'notes': d.notes,
+      'heldSaleId': d.heldSaleId,
       'items': [
         for (final it in d.items)
           {
@@ -98,10 +137,11 @@ SaleDraft? _decodeSaleDraft(String? raw) {
     ];
     return SaleDraft(
       items: items,
-      receiptType: map['receiptType']?.toString() ?? 'consumer_final',
+      receiptType: map['receiptType']?.toString() ?? 'none',
       paymentMethod: map['paymentMethod']?.toString(),
       clientId: map['clientId']?.toString(),
       notes: map['notes']?.toString() ?? '',
+      heldSaleId: map['heldSaleId']?.toString(),
     );
   } catch (_) {
     // JSON corrupto o de una versión vieja del modelo: empezar limpio.

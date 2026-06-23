@@ -31,6 +31,23 @@ class AppSettings {
   String? get companySignatureUrl => _strOrNull('company_signature_url');
   String? get defaultNcfSequenceId => _strOrNull('default_ncf_sequence_id');
 
+  // Emisor + datos para factura/cotización A4 (migración 58).
+  String? get companyAddress => _strOrNull('company_address');
+  String? get companyPhone => _strOrNull('company_phone');
+  String? get companyEmail => _strOrNull('company_email');
+  String? get companyBankInfo => _strOrNull('company_bank_info');
+  String? get companySignatoryName => _strOrNull('company_signatory_name');
+  String? get companySignatoryTitle => _strOrNull('company_signatory_title');
+  String? get invoiceObservation => _strOrNull('invoice_observation');
+
+  /// Si false, nunca se muestra el ITBIS en factura/cotización (aunque los
+  /// productos tengan tasa). Default true.
+  bool get invoiceShowItbis => _bool('invoice_show_itbis', true);
+
+  /// URL del código QR para el pie de factura/cotización. Se descarga en
+  /// runtime (como el logo), inmune al caché del bundle/service worker.
+  String? get companyQrUrl => _strOrNull('company_qr_url');
+
   // ─── Sección 2: Inventario ───────────────────────────────────────────────
   bool get invDefaultIsService => _bool('inv_default_is_service', false);
   String get invBarcodeIdSource => _str('inv_barcode_id_source', 'item_id');

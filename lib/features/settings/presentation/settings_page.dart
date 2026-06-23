@@ -4,8 +4,12 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
 import '../../../shared/responsive/responsive_layout.dart';
+import '../../../shared/services/dgii_lookup_service.dart';
+import '../../../shared/widgets/app_snackbar.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
+import '../../../shared/widgets/ncf_stock_banner.dart'
+    show missingNcfCountProvider;
 import '../../../shared/widgets/ui_custom.dart';
 import '../data/settings_repository.dart';
 import 'settings_providers.dart';
@@ -17,6 +21,23 @@ const _receiptTypeLabels = <String, String>{
   'special': 'Especial',
   'export': 'Exportación',
 };
+
+/// Prefijo NCF según DGII (RD): serie B + tipo de comprobante (2 dígitos). El
+/// NCF se forma como prefijo + 8 dígitos de secuencia (ej. B02 + 00000001 =
+/// B0200000001, 11 caracteres). Estos son los códigos oficiales por tipo.
+const _dgiiNcfPrefixes = <String, String>{
+  'consumer_final': 'B02', // Factura de Consumo (consumidor final)
+  'fiscal_credit': 'B01', // Factura de Crédito Fiscal
+  'governmental': 'B15', // Comprobante Gubernamental
+  'special': 'B14', // Comprobante de Regímenes Especiales
+  'export': 'B16', // Comprobante para Exportaciones
+};
+
+/// Tipos cuyas secuencias NCF NO vencen, según DGII (Guía de Comprobantes
+/// Fiscales, sección 6): Facturas de Consumo (B02), Notas de Crédito (B04) y
+/// Registro Único de Ingresos (B12). El resto vence el 31 de diciembre del año
+/// siguiente al que fue autorizado. De estos, el POS solo emite B02.
+const _dgiiNonExpiringTypes = <String>{'consumer_final'};
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -156,7 +177,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 FilledButton.tonalIcon(
-                  onPressed: branch == null ? null : () => _onEditBranch(branch),
+                  onPressed: branch == null
+                      ? null
+                      : () => _onEditBranch(branch),
                   icon: const Icon(Icons.storefront_outlined),
                   label: const Text('Editar'),
                 ),
@@ -176,15 +199,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     _detail('Razón social', branch.legalName!),
                   if (branch.tradeName != null)
                     _detail('Nombre comercial', branch.tradeName!),
-                  if (branch.taxId != null) _detail('RNC/Tax ID', branch.taxId!),
+                  if (branch.taxId != null)
+                    _detail('RNC/Tax ID', branch.taxId!),
                   if (branch.fiscalRegime != null)
                     _detail('Régimen fiscal', branch.fiscalRegime!),
                   if (branch.city != null || branch.province != null)
                     _detail(
                       'Ubicación',
-                      [branch.city, branch.province]
-                          .whereType<String>()
-                          .join(', '),
+                      [
+                        branch.city,
+                        branch.province,
+                      ].whereType<String>().join(', '),
                     ),
                   _detail('Dirección', branch.address ?? '-'),
                   if (branch.postalCode != null)
@@ -199,7 +224,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   _detail(
                     'ITBIS',
                     '${branch.defaultTaxRate.toStringAsFixed(0)}%'
-                    '${branch.taxIncludedByDefault ? ' (incluido)' : ''}',
+                        '${branch.taxIncludedByDefault ? ' (incluido)' : ''}',
                   ),
                   _detail(
                     'Serv. cargo',
@@ -212,9 +237,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             const SizedBox(height: 12),
             Text(
               'Sucursales asignadas',
-              style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
             if (data.userBranches.isEmpty)
@@ -273,9 +298,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   onPressed: data.currentBranch == null
                       ? null
                       : () => _onEditFiscalSettings(fiscal),
-                  icon: Icon(
-                    fiscal == null ? Icons.add : Icons.edit_outlined,
-                  ),
+                  icon: Icon(fiscal == null ? Icons.add : Icons.edit_outlined),
                   label: Text(fiscal == null ? 'Configurar' : 'Editar'),
                 ),
               ],
@@ -325,8 +348,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     'Validez cotización',
                     '${fiscal.quoteValidDays} días',
                   ),
-                  if (fiscal.email != null) _detail('Email fiscal', fiscal.email!),
-                  if (fiscal.phone != null) _detail('Teléfono fiscal', fiscal.phone!),
+                  if (fiscal.email != null)
+                    _detail('Email fiscal', fiscal.email!),
+                  if (fiscal.phone != null)
+                    _detail('Teléfono fiscal', fiscal.phone!),
                 ],
               ),
           ],
@@ -348,16 +373,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           children: [
             Text(
               'Perfil de facturación efectivo',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 2),
             Text(
               'Valores consolidados que aparecerán en las facturas',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: AppTokens.textSecondary,
-              ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: AppTokens.textSecondary),
             ),
             const SizedBox(height: 10),
             profileAsync.when(
@@ -368,9 +393,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     style: TextStyle(color: AppTokens.mutedForeground),
                   );
                 }
-                final location = [profile.city, profile.province]
-                    .whereType<String>()
-                    .join(', ');
+                final location = [
+                  profile.city,
+                  profile.province,
+                ].whereType<String>().join(', ');
                 return Wrap(
                   spacing: 24,
                   runSpacing: 8,
@@ -382,7 +408,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     if (profile.email != null) _detail('Email', profile.email!),
                     if (profile.phone != null)
                       _detail('Teléfono', profile.phone!),
-                    if (profile.website != null) _detail('Web', profile.website!),
+                    if (profile.website != null)
+                      _detail('Web', profile.website!),
                     if (profile.address != null)
                       _detail('Dirección', profile.address!),
                     if (location.isNotEmpty)
@@ -428,125 +455,196 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   // ─── NCF card ────────────────────────────────────────────────────────────────
 
   Widget _ncfCard(SettingsData data) {
-    return DataTableShell(
-      title: 'Secuencias NCF',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppTokens.s20,
-              AppTokens.s12,
-              AppTokens.s20,
-              0,
-            ),
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                onPressed: data.currentBranch == null ? null : _onCreateNcf,
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Nueva secuencia'),
+    // El aviso de "ventas sin NCF" va FUERA del DataTableShell. Ese shell
+    // envuelve su hijo en un scroll horizontal de ancho NO acotado (maxWidth
+    // infinito), y un Row con Expanded ahí dentro revienta el layout
+    // (RenderFlex unbounded width), lo que rompía la tarjeta y dejaba muerto el
+    // botón "Nueva secuencia". Aquí el ancho está acotado por la página.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _missingNcfBanner(),
+        DataTableShell(
+          title: 'Secuencias NCF',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppTokens.s20,
+                  AppTokens.s12,
+                  AppTokens.s20,
+                  0,
+                ),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.icon(
+                    onPressed: data.currentBranch == null ? null : _onCreateNcf,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Nueva secuencia'),
+                  ),
+                ),
               ),
-            ),
-          ),
-          if (data.currentBranch == null)
-            const Padding(
-              padding: EdgeInsets.all(AppTokens.s20),
-              child: Text(
-                'Asigna una sucursal actual para gestionar NCF.',
-                style: TextStyle(color: AppTokens.mutedForeground),
-              ),
-            )
-          else if (data.ncfSequences.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(AppTokens.s20),
-              child: Text(
-                'No hay secuencias NCF registradas.',
-                style: TextStyle(color: AppTokens.mutedForeground),
-              ),
-            )
-          else
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: DataTable(
-                columns: const [
-                  DataColumn(label: Text('Tipo')),
-                  DataColumn(label: Text('Prefijo')),
-                  DataColumn(label: Text('Serie')),
-                  DataColumn(label: Text('Actual'), numeric: true),
-                  DataColumn(label: Text('Máximo'), numeric: true),
-                  DataColumn(label: Text('Disponible'), numeric: true),
-                  DataColumn(label: Text('Alerta'), numeric: true),
-                  DataColumn(label: Text('Vence')),
-                  DataColumn(label: Text('Estado')),
-                  DataColumn(label: Text('Acciones')),
-                ],
-                rows: data.ncfSequences
-                    .map(
-                      (item) => DataRow(
-                        cells: [
-                          DataCell(Text(_receiptTypeLabel(item.receiptType))),
-                          DataCell(Text(
-                            item.prefix,
-                            style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                            ),
-                          )),
-                          DataCell(Text(item.series ?? '-')),
-                          DataCell(Text(item.currentNumber.toString())),
-                          DataCell(Text(item.maxNumber?.toString() ?? '-')),
-                          DataCell(
-                            Text(item.available?.toString() ?? 'Ilimitado'),
-                          ),
-                          DataCell(Text(item.warningThreshold.toString())),
-                          DataCell(Text(
-                            item.expiresOn == null
-                                ? '-'
-                                : _date(item.expiresOn!),
-                          )),
-                          DataCell(StatusBadge(
-                            label: item.isActive ? 'Activa' : 'Inactiva',
-                            status: item.isActive ? 'active' : 'inactive',
-                          )),
-                          DataCell(Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                tooltip: 'Editar',
-                                onPressed: () => _onEditNcf(item),
-                                icon: const Icon(
-                                  Icons.edit_outlined,
-                                  size: AppTokens.iconSizeS,
-                                ),
-                                visualDensity: VisualDensity.compact,
+              if (data.currentBranch == null)
+                const Padding(
+                  padding: EdgeInsets.all(AppTokens.s20),
+                  child: Text(
+                    'Asigna una sucursal actual para gestionar NCF.',
+                    style: TextStyle(color: AppTokens.mutedForeground),
+                  ),
+                )
+              else if (data.ncfSequences.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(AppTokens.s20),
+                  child: Text(
+                    'No hay secuencias NCF registradas.',
+                    style: TextStyle(color: AppTokens.mutedForeground),
+                  ),
+                )
+              else
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: DataTable(
+                    columns: const [
+                      DataColumn(label: Text('Tipo')),
+                      DataColumn(label: Text('Prefijo')),
+                      DataColumn(label: Text('Serie')),
+                      DataColumn(label: Text('Actual'), numeric: true),
+                      DataColumn(label: Text('Máximo'), numeric: true),
+                      DataColumn(label: Text('Disponible'), numeric: true),
+                      DataColumn(label: Text('Alerta'), numeric: true),
+                      DataColumn(label: Text('Vence')),
+                      DataColumn(label: Text('Estado')),
+                      DataColumn(label: Text('Acciones')),
+                    ],
+                    rows: data.ncfSequences
+                        .map(
+                          (item) => DataRow(
+                            cells: [
+                              DataCell(
+                                Text(_receiptTypeLabel(item.receiptType)),
                               ),
-                              IconButton(
-                                tooltip: item.isActive
-                                    ? 'Desactivar'
-                                    : 'Activar',
-                                onPressed: () => _onToggleNcf(item),
-                                icon: Icon(
-                                  item.isActive
-                                      ? Icons.block_outlined
-                                      : Icons.check_circle_outline,
-                                  size: AppTokens.iconSizeS,
-                                  color: item.isActive
-                                      ? AppTokens.destructive
-                                      : AppTokens.success,
+                              DataCell(
+                                Text(
+                                  item.prefix,
+                                  style: const TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 12,
+                                  ),
                                 ),
-                                visualDensity: VisualDensity.compact,
+                              ),
+                              DataCell(Text(item.series ?? '-')),
+                              DataCell(Text(item.currentNumber.toString())),
+                              DataCell(Text(item.maxNumber?.toString() ?? '-')),
+                              DataCell(
+                                Text(item.available?.toString() ?? 'Ilimitado'),
+                              ),
+                              DataCell(Text(item.warningThreshold.toString())),
+                              DataCell(
+                                Text(
+                                  item.expiresOn == null
+                                      ? '-'
+                                      : _date(item.expiresOn!),
+                                ),
+                              ),
+                              DataCell(
+                                StatusBadge(
+                                  label: item.isActive ? 'Activa' : 'Inactiva',
+                                  status: item.isActive ? 'active' : 'inactive',
+                                ),
+                              ),
+                              DataCell(
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      tooltip: 'Editar',
+                                      onPressed: () => _onEditNcf(item),
+                                      icon: const Icon(
+                                        Icons.edit_outlined,
+                                        size: AppTokens.iconSizeS,
+                                      ),
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                    IconButton(
+                                      tooltip: item.isActive
+                                          ? 'Desactivar'
+                                          : 'Activar',
+                                      onPressed: () => _onToggleNcf(item),
+                                      icon: Icon(
+                                        item.isActive
+                                            ? Icons.block_outlined
+                                            : Icons.check_circle_outline,
+                                        size: AppTokens.iconSizeS,
+                                        color: item.isActive
+                                            ? AppTokens.destructive
+                                            : AppTokens.success,
+                                      ),
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ],
+                                ),
                               ),
                             ],
-                          )),
-                        ],
-                      ),
-                    )
-                    .toList(growable: false),
+                          ),
+                        )
+                        .toList(growable: false),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Aviso de ventas emitidas SIN NCF + botón de backfill. Va fuera del
+  /// DataTableShell para tener ancho acotado (Expanded válido).
+  Widget _missingNcfBanner() {
+    return Consumer(
+      builder: (context, ref, _) {
+        final missing = ref.watch(missingNcfCountProvider).valueOrNull ?? 0;
+        if (missing == 0) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(bottom: AppTokens.s12),
+          child: Container(
+            padding: const EdgeInsets.all(AppTokens.s12),
+            decoration: BoxDecoration(
+              color: AppTokens.destructive.withValues(alpha: 0.10),
+              border: Border.all(
+                color: AppTokens.destructive.withValues(alpha: 0.40),
               ),
+              borderRadius: BorderRadius.circular(8),
             ),
-        ],
-      ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.receipt_long_outlined,
+                  color: AppTokens.destructive,
+                  size: 20,
+                ),
+                const SizedBox(width: AppTokens.s12),
+                Expanded(
+                  child: Text(
+                    '$missing venta(s) emitida(s) sin NCF. '
+                    'Faltó una secuencia o se agotó.',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                const SizedBox(width: AppTokens.s12),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTokens.destructive,
+                  ),
+                  onPressed: _onAssignMissingNcfs,
+                  icon: const Icon(Icons.auto_fix_high, size: 18),
+                  label: const Text('Asignar faltantes'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -558,9 +656,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       children: [
         Text(
           label,
-          style: Theme.of(context).textTheme.labelMedium?.copyWith(
-            color: AppTokens.textSecondary,
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.labelMedium?.copyWith(color: AppTokens.textSecondary),
         ),
         const SizedBox(height: 2),
         Text(value),
@@ -583,22 +681,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     if (result == null || !mounted) return;
 
     try {
-      await ref.read(settingsRepositoryProvider).updateProfile(
-        ProfileUpdateInput(
-          fullName: result.fullName,
-          phone: result.phone,
-          employeeCode: result.employeeCode,
-          jobTitle: result.jobTitle,
-          hireDate: result.hireDate,
-          notes: result.notes,
-          avatarUrl: result.avatarUrl,
-          pinCode: result.pinCode,
-        ),
-      );
+      await ref
+          .read(settingsRepositoryProvider)
+          .updateProfile(
+            ProfileUpdateInput(
+              fullName: result.fullName,
+              phone: result.phone,
+              employeeCode: result.employeeCode,
+              jobTitle: result.jobTitle,
+              hireDate: result.hireDate,
+              notes: result.notes,
+              avatarUrl: result.avatarUrl,
+              pinCode: result.pinCode,
+            ),
+          );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Perfil actualizado')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Perfil actualizado')));
       ref.invalidate(settingsDataProvider);
     } catch (error) {
       if (!mounted) return;
@@ -616,36 +716,38 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     if (result == null || !mounted) return;
 
     try {
-      await ref.read(settingsRepositoryProvider).updateCurrentBranch(
-        BranchUpdateInput(
-          name: result.name,
-          address: result.address,
-          phone: result.phone,
-          isActive: result.isActive,
-          legalName: result.legalName,
-          tradeName: result.tradeName,
-          taxId: result.taxId,
-          fiscalRegime: result.fiscalRegime,
-          email: result.email,
-          city: result.city,
-          province: result.province,
-          defaultTaxRate: result.defaultTaxRate,
-          defaultServiceChargeRate: result.defaultServiceChargeRate,
-          taxIncludedByDefault: result.taxIncludedByDefault,
-          invoiceFooter: result.invoiceFooter,
-          website: result.website,
-          whatsapp: result.whatsapp,
-          quoteTerms: result.quoteTerms,
-          postalCode: result.postalCode,
-          countryCode: result.countryCode,
-          currencyCode: result.currencyCode,
-          timezoneName: result.timezoneName,
-        ),
-      );
+      await ref
+          .read(settingsRepositoryProvider)
+          .updateCurrentBranch(
+            BranchUpdateInput(
+              name: result.name,
+              address: result.address,
+              phone: result.phone,
+              isActive: result.isActive,
+              legalName: result.legalName,
+              tradeName: result.tradeName,
+              taxId: result.taxId,
+              fiscalRegime: result.fiscalRegime,
+              email: result.email,
+              city: result.city,
+              province: result.province,
+              defaultTaxRate: result.defaultTaxRate,
+              defaultServiceChargeRate: result.defaultServiceChargeRate,
+              taxIncludedByDefault: result.taxIncludedByDefault,
+              invoiceFooter: result.invoiceFooter,
+              website: result.website,
+              whatsapp: result.whatsapp,
+              quoteTerms: result.quoteTerms,
+              postalCode: result.postalCode,
+              countryCode: result.countryCode,
+              currencyCode: result.currencyCode,
+              timezoneName: result.timezoneName,
+            ),
+          );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sucursal actualizada')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Sucursal actualizada')));
       ref.invalidate(settingsDataProvider);
     } catch (error) {
       if (!mounted) return;
@@ -663,30 +765,32 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     if (result == null || !mounted) return;
 
     try {
-      await ref.read(settingsRepositoryProvider).saveBranchFiscalSettings(
-        BranchFiscalSettingsInput(
-          taxpayerName: result.taxpayerName,
-          taxpayerRnc: result.taxpayerRnc,
-          commercialName: result.commercialName,
-          fiscalAddress: result.fiscalAddress,
-          invoiceCity: result.invoiceCity,
-          invoiceProvince: result.invoiceProvince,
-          countryCode: result.countryCode,
-          email: result.email,
-          phone: result.phone,
-          website: result.website,
-          defaultReceiptType: result.defaultReceiptType,
+      await ref
+          .read(settingsRepositoryProvider)
+          .saveBranchFiscalSettings(
+            BranchFiscalSettingsInput(
+              taxpayerName: result.taxpayerName,
+              taxpayerRnc: result.taxpayerRnc,
+              commercialName: result.commercialName,
+              fiscalAddress: result.fiscalAddress,
+              invoiceCity: result.invoiceCity,
+              invoiceProvince: result.invoiceProvince,
+              countryCode: result.countryCode,
+              email: result.email,
+              phone: result.phone,
+              website: result.website,
+              defaultReceiptType: result.defaultReceiptType,
 
-          serviceChargeEnabled: result.serviceChargeEnabled,
-          serviceChargeRate: result.serviceChargeRate,
-          taxEnabled: result.taxEnabled,
-          defaultTaxRate: result.defaultTaxRate,
-          allowCreditSales: result.allowCreditSales,
-          quoteValidDays: result.quoteValidDays,
-          invoiceFooter: result.invoiceFooter,
-          termsAndConditions: result.termsAndConditions,
-        ),
-      );
+              serviceChargeEnabled: result.serviceChargeEnabled,
+              serviceChargeRate: result.serviceChargeRate,
+              taxEnabled: result.taxEnabled,
+              defaultTaxRate: result.defaultTaxRate,
+              allowCreditSales: result.allowCreditSales,
+              quoteValidDays: result.quoteValidDays,
+              invoiceFooter: result.invoiceFooter,
+              termsAndConditions: result.termsAndConditions,
+            ),
+          );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Configuración fiscal guardada')),
@@ -722,28 +826,30 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Future<void> _saveNcf(_NcfDialogResult input) async {
     try {
-      await ref.read(settingsRepositoryProvider).saveNcfSequence(
-        NcfSequenceInput(
-          id: input.id,
-          receiptType: input.receiptType,
-          prefix: input.prefix,
-          currentNumber: input.currentNumber,
-          maxNumber: input.maxNumber,
-          expiresOn: input.expiresOn,
-          isActive: input.isActive,
-          series: input.series,
-          documentCode: input.documentCode,
-          sequenceStart: input.sequenceStart,
-          sequenceEnd: input.sequenceEnd,
-          warningThreshold: input.warningThreshold,
-          status: input.status,
-          notes: input.notes,
-        ),
-      );
+      await ref
+          .read(settingsRepositoryProvider)
+          .saveNcfSequence(
+            NcfSequenceInput(
+              id: input.id,
+              receiptType: input.receiptType,
+              prefix: input.prefix,
+              currentNumber: input.currentNumber,
+              maxNumber: input.maxNumber,
+              expiresOn: input.expiresOn,
+              isActive: input.isActive,
+              series: input.series,
+              documentCode: input.documentCode,
+              sequenceStart: input.sequenceStart,
+              sequenceEnd: input.sequenceEnd,
+              warningThreshold: input.warningThreshold,
+              status: input.status,
+              notes: input.notes,
+            ),
+          );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Secuencia NCF guardada')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Secuencia NCF guardada')));
       ref.invalidate(settingsDataProvider);
     } catch (error) {
       if (!mounted) return;
@@ -755,17 +861,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Future<void> _onToggleNcf(SettingsNcfSequence sequence) async {
     try {
-      await ref.read(settingsRepositoryProvider).setNcfSequenceActive(
-        sequenceId: sequence.id,
-        isActive: !sequence.isActive,
-      );
+      await ref
+          .read(settingsRepositoryProvider)
+          .setNcfSequenceActive(
+            sequenceId: sequence.id,
+            isActive: !sequence.isActive,
+          );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            sequence.isActive
-                ? 'Secuencia desactivada'
-                : 'Secuencia activada',
+            sequence.isActive ? 'Secuencia desactivada' : 'Secuencia activada',
           ),
         ),
       );
@@ -774,6 +880,55 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo actualizar secuencia: $error')),
+      );
+    }
+  }
+
+  /// Asigna NCF a las ventas emitidas que quedaron sin comprobante (backfill).
+  /// Acción manual y explícita: solo toca ventas SIN NCF (nunca sobrescribe una
+  /// que ya tenga comprobante). Pide confirmación para no dispararse por error.
+  Future<void> _onAssignMissingNcfs() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Asignar NCF a ventas sin comprobante'),
+        content: const Text(
+          'Se asignará el siguiente NCF disponible solo a las ventas que '
+          'quedaron SIN comprobante. Las ventas que ya tienen NCF no se tocan. '
+          'Ojo: recibirán números nuevos (posteriores a los más recientes). '
+          '¿Continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Asignar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final res = await ref
+          .read(settingsRepositoryProvider)
+          .assignMissingNcfs();
+      if (!mounted) return;
+      ref.invalidate(missingNcfCountProvider);
+      ref.invalidate(settingsDataProvider);
+      final msg = res.failed > 0
+          ? 'NCF asignados: ${res.assigned}. Sin asignar: ${res.failed} '
+                '(revisa la secuencia, puede estar agotada o vencida).'
+          : res.assigned > 0
+          ? '${res.assigned} NCF asignado(s) a ventas pendientes.'
+          : 'No había ventas sin NCF.';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudieron asignar los NCF: $error')),
       );
     }
   }
@@ -811,7 +966,11 @@ class _SettingsKpis extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth;
-        final cols = w >= 800 ? 3 : w >= 400 ? 2 : 1;
+        final cols = w >= 800
+            ? 3
+            : w >= 400
+            ? 2
+            : 1;
         final cardWidth = (w - (cols - 1) * AppTokens.s12) / cols;
         return Wrap(
           spacing: AppTokens.s12,
@@ -875,8 +1034,7 @@ class _ProfileDialogState extends State<_ProfileDialog> {
     final p = widget.profile;
     _fullNameController = TextEditingController(text: p.fullName);
     _phoneController = TextEditingController(text: p.phone ?? '');
-    _employeeCodeController =
-        TextEditingController(text: p.employeeCode ?? '');
+    _employeeCodeController = TextEditingController(text: p.employeeCode ?? '');
     _jobTitleController = TextEditingController(text: p.jobTitle ?? '');
     _hireDateController = TextEditingController(
       text: p.hireDate == null ? '' : _date(p.hireDate!),
@@ -915,8 +1073,9 @@ class _ProfileDialogState extends State<_ProfileDialog> {
               children: [
                 TextFormField(
                   controller: _fullNameController,
-                  decoration:
-                      const InputDecoration(labelText: 'Nombre completo'),
+                  decoration: const InputDecoration(
+                    labelText: 'Nombre completo',
+                  ),
                   validator: (value) {
                     if ((value ?? '').trim().isEmpty) {
                       return 'Este campo es requerido';
@@ -939,8 +1098,9 @@ class _ProfileDialogState extends State<_ProfileDialog> {
                   ),
                   TextFormField(
                     controller: _employeeCodeController,
-                    decoration:
-                        const InputDecoration(labelText: 'Código empleado'),
+                    decoration: const InputDecoration(
+                      labelText: 'Código empleado',
+                    ),
                   ),
                 ]),
                 const SizedBox(height: 12),
@@ -1037,17 +1197,17 @@ class _ProfileDialogState extends State<_ProfileDialog> {
   Widget _row(bool isMobile, List<Widget> children) {
     if (isMobile) {
       return Column(
-        children: children
-            .expand((w) => [w, const SizedBox(height: 12)])
-            .toList()
-          ..removeLast(),
+        children:
+            children.expand((w) => [w, const SizedBox(height: 12)]).toList()
+              ..removeLast(),
       );
     }
     return Row(
-      children: children
-          .expand((w) => [Expanded(child: w), const SizedBox(width: 12)])
-          .toList()
-        ..removeLast(),
+      children:
+          children
+              .expand((w) => [Expanded(child: w), const SizedBox(width: 12)])
+              .toList()
+            ..removeLast(),
     );
   }
 }
@@ -1146,9 +1306,7 @@ class _BranchDialogState extends State<_BranchDialog> {
     _legalNameController = TextEditingController(text: b.legalName ?? '');
     _tradeNameController = TextEditingController(text: b.tradeName ?? '');
     _taxIdController = TextEditingController(text: b.taxId ?? '');
-    _fiscalRegimeController = TextEditingController(
-      text: b.fiscalRegime ?? '',
-    );
+    _fiscalRegimeController = TextEditingController(text: b.fiscalRegime ?? '');
     _emailController = TextEditingController(text: b.email ?? '');
     _addressController = TextEditingController(text: b.address ?? '');
     _phoneController = TextEditingController(text: b.phone ?? '');
@@ -1242,8 +1400,9 @@ class _BranchDialogState extends State<_BranchDialog> {
                 _row(isMobile, [
                   TextFormField(
                     controller: _taxIdController,
-                    decoration:
-                        const InputDecoration(labelText: 'RNC / Tax ID'),
+                    decoration: const InputDecoration(
+                      labelText: 'RNC / Tax ID',
+                    ),
                   ),
                   TextFormField(
                     controller: _fiscalRegimeController,
@@ -1297,8 +1456,9 @@ class _BranchDialogState extends State<_BranchDialog> {
                 _row(isMobile, [
                   TextFormField(
                     controller: _postalCodeController,
-                    decoration:
-                        const InputDecoration(labelText: 'Código postal'),
+                    decoration: const InputDecoration(
+                      labelText: 'Código postal',
+                    ),
                   ),
                   TextFormField(
                     controller: _countryCodeController,
@@ -1313,7 +1473,9 @@ class _BranchDialogState extends State<_BranchDialog> {
                   ),
                   TextFormField(
                     controller: _timezoneController,
-                    decoration: const InputDecoration(labelText: 'Zona horaria'),
+                    decoration: const InputDecoration(
+                      labelText: 'Zona horaria',
+                    ),
                   ),
                 ]),
                 const SizedBox(height: 12),
@@ -1330,8 +1492,7 @@ class _BranchDialogState extends State<_BranchDialog> {
                       labelText: 'ITBIS por defecto (%)',
                     ),
                     validator: (value) {
-                      final parsed =
-                          double.tryParse((value ?? '').trim());
+                      final parsed = double.tryParse((value ?? '').trim());
                       if (parsed == null || parsed < 0) {
                         return 'Valor inválido';
                       }
@@ -1347,8 +1508,7 @@ class _BranchDialogState extends State<_BranchDialog> {
                       labelText: 'Cargo servicio (%)',
                     ),
                     validator: (value) {
-                      final parsed =
-                          double.tryParse((value ?? '').trim());
+                      final parsed = double.tryParse((value ?? '').trim());
                       if (parsed == null || parsed < 0) {
                         return 'Valor inválido';
                       }
@@ -1359,8 +1519,7 @@ class _BranchDialogState extends State<_BranchDialog> {
                 const SizedBox(height: 8),
                 SwitchListTile.adaptive(
                   value: _taxIncludedByDefault,
-                  onChanged: (v) =>
-                      setState(() => _taxIncludedByDefault = v),
+                  onChanged: (v) => setState(() => _taxIncludedByDefault = v),
                   title: const Text('ITBIS incluido en precio por defecto'),
                   contentPadding: EdgeInsets.zero,
                 ),
@@ -1447,17 +1606,17 @@ class _BranchDialogState extends State<_BranchDialog> {
   Widget _row(bool isMobile, List<Widget> children) {
     if (isMobile) {
       return Column(
-        children: children
-            .expand((w) => [w, const SizedBox(height: 12)])
-            .toList()
-          ..removeLast(),
+        children:
+            children.expand((w) => [w, const SizedBox(height: 12)]).toList()
+              ..removeLast(),
       );
     }
     return Row(
-      children: children
-          .expand((w) => [Expanded(child: w), const SizedBox(width: 12)])
-          .toList()
-        ..removeLast(),
+      children:
+          children
+              .expand((w) => [Expanded(child: w), const SizedBox(width: 12)])
+              .toList()
+            ..removeLast(),
     );
   }
 }
@@ -1539,24 +1698,78 @@ class _FiscalSettingsDialogState extends State<_FiscalSettingsDialog> {
   late bool _taxEnabled;
   late bool _allowCreditSales;
 
+  final _dgii = DgiiLookupService();
+  bool _rncLookupLoading = false;
+
+  /// Consulta el RNC del negocio contra DGII y auto-completa nombre del
+  /// contribuyente (razón social) y nombre comercial.
+  Future<void> _lookupRnc() async {
+    final raw = _taxpayerRncController.text.trim();
+    if (raw.isEmpty) {
+      AppSnackBar.info(context, 'Escribe el RNC primero.');
+      return;
+    }
+    setState(() => _rncLookupLoading = true);
+    try {
+      final info = await _dgii.lookupByRnc(raw);
+      if (!mounted) return;
+      if (info == null) {
+        AppSnackBar.error(context, 'RNC no encontrado en DGII.');
+        return;
+      }
+      setState(() {
+        final name = info.nombreRazonSocial ?? info.displayName;
+        if (name != null &&
+            name.isNotEmpty &&
+            _taxpayerNameController.text.trim().isEmpty) {
+          _taxpayerNameController.text = name;
+        }
+        final comercial = info.nombreComercial;
+        if (comercial != null &&
+            comercial.isNotEmpty &&
+            _commercialNameController.text.trim().isEmpty) {
+          _commercialNameController.text = comercial;
+        }
+      });
+      if (info.isActivo) {
+        AppSnackBar.success(context, 'Encontrado: ${info.displayName ?? raw}');
+      } else {
+        AppSnackBar.info(
+          context,
+          'Encontrado (${info.estado ?? "estado desconocido"}): '
+          '${info.displayName ?? raw}',
+        );
+      }
+    } on InvalidRncException catch (e) {
+      if (mounted) AppSnackBar.error(context, e.reason);
+    } catch (e) {
+      if (mounted) AppSnackBar.error(context, 'No se pudo consultar el RNC', e);
+    } finally {
+      if (mounted) setState(() => _rncLookupLoading = false);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     final c = widget.current;
-    _taxpayerNameController =
-        TextEditingController(text: c?.taxpayerName ?? '');
-    _taxpayerRncController =
-        TextEditingController(text: c?.taxpayerRnc ?? '');
-    _commercialNameController =
-        TextEditingController(text: c?.commercialName ?? '');
-    _fiscalAddressController =
-        TextEditingController(text: c?.fiscalAddress ?? '');
-    _invoiceCityController =
-        TextEditingController(text: c?.invoiceCity ?? '');
-    _invoiceProvinceController =
-        TextEditingController(text: c?.invoiceProvince ?? '');
-    _countryCodeController =
-        TextEditingController(text: c?.countryCode ?? 'DO');
+    _taxpayerNameController = TextEditingController(
+      text: c?.taxpayerName ?? '',
+    );
+    _taxpayerRncController = TextEditingController(text: c?.taxpayerRnc ?? '');
+    _commercialNameController = TextEditingController(
+      text: c?.commercialName ?? '',
+    );
+    _fiscalAddressController = TextEditingController(
+      text: c?.fiscalAddress ?? '',
+    );
+    _invoiceCityController = TextEditingController(text: c?.invoiceCity ?? '');
+    _invoiceProvinceController = TextEditingController(
+      text: c?.invoiceProvince ?? '',
+    );
+    _countryCodeController = TextEditingController(
+      text: c?.countryCode ?? 'DO',
+    );
     _emailController = TextEditingController(text: c?.email ?? '');
     _phoneController = TextEditingController(text: c?.phone ?? '');
     _websiteController = TextEditingController(text: c?.website ?? '');
@@ -1569,10 +1782,10 @@ class _FiscalSettingsDialogState extends State<_FiscalSettingsDialog> {
     _quoteValidDaysController = TextEditingController(
       text: (c?.quoteValidDays ?? 15).toString(),
     );
-    _invoiceFooterController =
-        TextEditingController(text: c?.invoiceFooter ?? '');
-    _termsController =
-        TextEditingController(text: c?.termsAndConditions ?? '');
+    _invoiceFooterController = TextEditingController(
+      text: c?.invoiceFooter ?? '',
+    );
+    _termsController = TextEditingController(text: c?.termsAndConditions ?? '');
     _defaultReceiptType = c?.defaultReceiptType ?? 'consumer_final';
     _serviceChargeEnabled = c?.serviceChargeEnabled ?? true;
     _taxEnabled = c?.taxEnabled ?? true;
@@ -1628,7 +1841,27 @@ class _FiscalSettingsDialogState extends State<_FiscalSettingsDialog> {
                 _row(isMobile, [
                   TextFormField(
                     controller: _taxpayerRncController,
-                    decoration: const InputDecoration(labelText: 'RNC'),
+                    keyboardType: TextInputType.number,
+                    onFieldSubmitted: (_) => _lookupRnc(),
+                    decoration: InputDecoration(
+                      labelText: 'RNC',
+                      suffixIcon: _rncLookupLoading
+                          ? const Padding(
+                              padding: EdgeInsets.all(10),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            )
+                          : IconButton(
+                              tooltip: 'Buscar en DGII',
+                              icon: const Icon(Icons.search),
+                              onPressed: _lookupRnc,
+                            ),
+                    ),
                   ),
                   TextFormField(
                     controller: _commercialNameController,
@@ -1814,17 +2047,16 @@ class _FiscalSettingsDialogState extends State<_FiscalSettingsDialog> {
                 defaultReceiptType: _defaultReceiptType,
                 serviceChargeEnabled: _serviceChargeEnabled,
                 serviceChargeRate: _serviceChargeEnabled
-                    ? double.parse(
-                        _serviceChargeRateController.text.trim(),
-                      )
+                    ? double.parse(_serviceChargeRateController.text.trim())
                     : 0,
                 taxEnabled: _taxEnabled,
                 defaultTaxRate: _taxEnabled
                     ? double.parse(_defaultTaxRateController.text.trim())
                     : 0,
                 allowCreditSales: _allowCreditSales,
-                quoteValidDays:
-                    int.parse(_quoteValidDaysController.text.trim()),
+                quoteValidDays: int.parse(
+                  _quoteValidDaysController.text.trim(),
+                ),
                 invoiceFooter: _invoiceFooterController.text.trim(),
                 termsAndConditions: _termsController.text.trim(),
               ),
@@ -1839,17 +2071,17 @@ class _FiscalSettingsDialogState extends State<_FiscalSettingsDialog> {
   Widget _row(bool isMobile, List<Widget> children) {
     if (isMobile) {
       return Column(
-        children: children
-            .expand((w) => [w, const SizedBox(height: 12)])
-            .toList()
-          ..removeLast(),
+        children:
+            children.expand((w) => [w, const SizedBox(height: 12)]).toList()
+              ..removeLast(),
       );
     }
     return Row(
-      children: children
-          .expand((w) => [Expanded(child: w), const SizedBox(width: 12)])
-          .toList()
-        ..removeLast(),
+      children:
+          children
+              .expand((w) => [Expanded(child: w), const SizedBox(width: 12)])
+              .toList()
+            ..removeLast(),
     );
   }
 }
@@ -1921,10 +2153,13 @@ class _NcfDialogState extends State<_NcfDialog> {
     final s = widget.sequence;
     _receiptType = s?.receiptType ?? _receiptTypeLabels.keys.first;
     _status = s?.status ?? 'active';
-    _prefixController = TextEditingController(text: s?.prefix ?? '');
+    _prefixController = TextEditingController(
+      text: s?.prefix ?? _dgiiNcfPrefixes[_receiptType] ?? '',
+    );
     _seriesController = TextEditingController(text: s?.series ?? '');
-    _documentCodeController =
-        TextEditingController(text: s?.documentCode ?? '');
+    _documentCodeController = TextEditingController(
+      text: s?.documentCode ?? '',
+    );
     _currentController = TextEditingController(
       text: s?.currentNumber.toString() ?? '0',
     );
@@ -1985,16 +2220,30 @@ class _NcfDialogState extends State<_NcfDialog> {
                     labelText: 'Tipo de comprobante',
                   ),
                   items: _receiptTypeLabels.entries
-                      .map(
-                        (entry) => DropdownMenuItem<String>(
+                      .map((entry) {
+                        final code = _dgiiNcfPrefixes[entry.key];
+                        return DropdownMenuItem<String>(
                           value: entry.key,
-                          child: Text(entry.value),
-                        ),
-                      )
+                          child: Text(
+                            code == null
+                                ? entry.value
+                                : '${entry.value} ($code)',
+                          ),
+                        );
+                      })
                       .toList(growable: false),
                   onChanged: (value) {
                     if (value == null) return;
-                    setState(() => _receiptType = value);
+                    setState(() {
+                      final prevPrefix = _dgiiNcfPrefixes[_receiptType];
+                      _receiptType = value;
+                      // Auto-completar el prefijo DGII al cambiar de tipo, sin
+                      // pisar uno que el usuario haya escrito a mano.
+                      final cur = _prefixController.text.trim();
+                      if (cur.isEmpty || cur == prevPrefix) {
+                        _prefixController.text = _dgiiNcfPrefixes[value] ?? cur;
+                      }
+                    });
                   },
                 ),
                 const SizedBox(height: 12),
@@ -2003,8 +2252,7 @@ class _NcfDialogState extends State<_NcfDialog> {
                     Expanded(
                       child: TextFormField(
                         controller: _prefixController,
-                        decoration:
-                            const InputDecoration(labelText: 'Prefijo'),
+                        decoration: const InputDecoration(labelText: 'Prefijo'),
                         validator: (value) {
                           if ((value ?? '').trim().isEmpty) {
                             return 'Este campo es requerido';
@@ -2042,8 +2290,7 @@ class _NcfDialogState extends State<_NcfDialog> {
                           labelText: 'Alerta (disponibles)',
                         ),
                         validator: (value) {
-                          final parsed =
-                              int.tryParse((value ?? '').trim());
+                          final parsed = int.tryParse((value ?? '').trim());
                           if (parsed == null || parsed < 0) {
                             return 'Valor inválido';
                           }
@@ -2108,8 +2355,7 @@ class _NcfDialogState extends State<_NcfDialog> {
                           labelText: 'Número actual',
                         ),
                         validator: (value) {
-                          final parsed =
-                              int.tryParse((value ?? '').trim());
+                          final parsed = int.tryParse((value ?? '').trim());
                           if (parsed == null || parsed < 0) {
                             return 'Valor inválido';
                           }
@@ -2144,6 +2390,11 @@ class _NcfDialogState extends State<_NcfDialog> {
                   readOnly: true,
                   decoration: InputDecoration(
                     labelText: 'Fecha vencimiento (opcional)',
+                    helperText: _dgiiNonExpiringTypes.contains(_receiptType)
+                        ? 'DGII: este comprobante no vence. Puedes dejarlo vacío.'
+                        : 'DGII: vence el 31 dic del año siguiente a la '
+                              'autorización.',
+                    helperMaxLines: 2,
                     suffixIcon: IconButton(
                       onPressed: _pickDate,
                       icon: const Icon(Icons.calendar_today_outlined),
@@ -2164,10 +2415,7 @@ class _NcfDialogState extends State<_NcfDialog> {
                       value: 'exhausted',
                       child: Text('Agotada'),
                     ),
-                    DropdownMenuItem(
-                      value: 'expired',
-                      child: Text('Vencida'),
-                    ),
+                    DropdownMenuItem(value: 'expired', child: Text('Vencida')),
                   ],
                   onChanged: (v) {
                     if (v == null) return;
@@ -2244,8 +2492,7 @@ class _NcfDialogState extends State<_NcfDialog> {
         documentCode: _documentCodeController.text.trim(),
         currentNumber: current,
         maxNumber: max,
-        sequenceStart:
-            seqStartText.isEmpty ? null : int.parse(seqStartText),
+        sequenceStart: seqStartText.isEmpty ? null : int.parse(seqStartText),
         sequenceEnd: seqEndText.isEmpty ? null : int.parse(seqEndText),
         warningThreshold: int.parse(_warningController.text.trim()),
         expiresOn: expires,

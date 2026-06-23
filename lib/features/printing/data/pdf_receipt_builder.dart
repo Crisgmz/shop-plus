@@ -1,10 +1,51 @@
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 import '../../../shared/formatters/formatters.dart';
 import 'printing_models.dart';
+
+/// Reduce una imagen a `maxDim` px en su lado mayor ANTES de embeberla en el
+/// PDF. Embeber un logo/QR de ~2000px hace que el `pdf` decodifique millones de
+/// píxeles de forma SÍNCRONA al generar — en web eso congela la UI varios
+/// segundos. Con ~400px el costo baja ~25x. Si la imagen ya es chica o el
+/// decode falla, devuelve los bytes originales.
+Future<Uint8List?> _shrinkImageForPdf(List<int>? bytes, {int maxDim = 420}) async {
+  if (bytes == null) return null;
+  final input = Uint8List.fromList(bytes);
+  try {
+    final probe = await ui.instantiateImageCodec(input);
+    final probeFrame = await probe.getNextFrame();
+    final w = probeFrame.image.width;
+    final h = probeFrame.image.height;
+    probeFrame.image.dispose();
+
+    final longest = w > h ? w : h;
+    if (longest <= maxDim) return input; // ya es chica
+
+    final scale = maxDim / longest;
+    final codec = await ui.instantiateImageCodec(
+      input,
+      targetWidth: (w * scale).round(),
+      targetHeight: (h * scale).round(),
+    );
+    final frame = await codec.getNextFrame();
+    final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+    frame.image.dispose();
+    return data?.buffer.asUint8List() ?? input;
+  } catch (_) {
+    return input;
+  }
+}
+
+/// Azul corporativo del encabezado (logo / título / número de documento).
+const PdfColor _kNavy = PdfColor.fromInt(0xFF1B3A6B);
+
+/// Rojo del "TOTAL A PAGAR".
+const PdfColor _kRed = PdfColor.fromInt(0xFFC0202A);
 
 class PdfReceiptBuilder {
   const PdfReceiptBuilder();
@@ -18,15 +59,37 @@ class PdfReceiptBuilder {
       author: data.branch.name,
     );
 
+    // QR: primero el configurado (descargado de company_qr_url, robusto en
+    // web); si no hay, fallback al asset bundleado assets/QR.png.
+    final qrRaw = data.qrBytes ?? await _loadQrBytes();
+    // Reducir imágenes antes de embeberlas: evita el freeze de la UI al generar.
+    final qrBytes = await _shrinkImageForPdf(qrRaw, maxDim: 420);
+    final logoBytes = await _shrinkImageForPdf(data.branch.logoBytes, maxDim: 320);
+
     doc.addPage(
       pw.Page(
         pageFormat: pageFormat,
-        margin: const pw.EdgeInsets.all(40),
-        build: (context) => _buildContent(data),
+        margin: const pw.EdgeInsets.all(36),
+        build: (context) =>
+            _buildContent(data, qrBytes: qrBytes, logoBytes: logoBytes),
       ),
     );
 
     return doc.save();
+  }
+
+  /// Carga el QR estático de `assets/QR.png` para el pie de factura/cotización.
+  /// Devuelve `null` si el asset no está presente (aún no subido) — el PDF se
+  /// genera igual, solo sin el QR.
+  static Future<Uint8List?> _loadQrBytes() async {
+    try {
+      final data = await rootBundle.load('assets/QR.png');
+      // Forma explícita offset/length: evita arrastrar bytes de más si el
+      // ByteData es una vista sobre un buffer mayor (puede pasar en web).
+      return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Construye el PDF en formato ticket térmico ~80mm de ancho.
@@ -45,51 +108,57 @@ class PdfReceiptBuilder {
       marginAll: 8 * PdfPageFormat.mm,
     );
 
+    final logoBytes = await _shrinkImageForPdf(data.branch.logoBytes, maxDim: 320);
+
     doc.addPage(
       pw.Page(
         pageFormat: format,
-        build: (context) => _buildThermalContent(data),
+        build: (context) => _buildThermalContent(data, logoBytes),
       ),
     );
 
     return doc.save();
   }
 
-  pw.Widget _buildContent(PrintDocumentData data) {
+  pw.Widget _buildContent(
+    PrintDocumentData data, {
+    Uint8List? qrBytes,
+    Uint8List? logoBytes,
+  }) {
     return pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
-        _header(data),
-        pw.SizedBox(height: 20),
-        if (data.customer != null) ...[
-          _customerBlock(data.customer!),
-          pw.SizedBox(height: 16),
-        ],
-        _itemsTable(data),
+        _header(data, logoBytes),
+        pw.SizedBox(height: 14),
+        _titleBand(data),
         pw.SizedBox(height: 12),
-        pw.Align(
-          alignment: pw.Alignment.centerRight,
-          child: _totalsBlock(data),
-        ),
+        _clientBlock(data),
+        pw.SizedBox(height: 12),
+        _itemsTable(data),
+        pw.SizedBox(height: 14),
+        _bankAndTotal(data),
         if (_hasText(data.notes)) ...[
-          pw.SizedBox(height: 16),
+          pw.SizedBox(height: 10),
           pw.Text(
             'Notas: ${data.notes}',
-            style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+            style: const pw.TextStyle(fontSize: 9.5, color: PdfColors.grey700),
           ),
         ],
         pw.Spacer(),
-        if (_hasText(data.footerMessage))
+        _signatureAndObservation(data, qrBytes),
+        if (_hasText(data.footerMessage)) ...[
+          pw.SizedBox(height: 8),
           pw.Center(
             child: pw.Text(
               data.footerMessage!,
               style: pw.TextStyle(
-                fontSize: 10,
+                fontSize: 9.5,
                 color: PdfColors.grey600,
                 fontStyle: pw.FontStyle.italic,
               ),
             ),
           ),
+        ],
       ],
     );
   }
@@ -98,7 +167,7 @@ class PdfReceiptBuilder {
   // Thermal (80mm) layout — sigue el formato del ticket de la foto.
   // ────────────────────────────────────────────────────────────────────────
 
-  pw.Widget _buildThermalContent(PrintDocumentData data) {
+  pw.Widget _buildThermalContent(PrintDocumentData data, Uint8List? logoBytes) {
     final mutedColor = PdfColors.grey700;
     final base = const pw.TextStyle(fontSize: 8.5);
     final muted = pw.TextStyle(fontSize: 8.5, color: mutedColor);
@@ -115,17 +184,15 @@ class PdfReceiptBuilder {
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
         // ── 1) Encabezado centrado: logo + empresa + dirección + teléfono ──
-        if (data.branch.logoBytes != null)
+        if (logoBytes != null)
           pw.Center(
             child: pw.SizedBox(
               width: 60,
               height: 60,
-              child: pw.Image(pw.MemoryImage(
-                Uint8List.fromList(data.branch.logoBytes!),
-              )),
+              child: pw.Image(pw.MemoryImage(logoBytes)),
             ),
           ),
-        if (data.branch.logoBytes != null) pw.SizedBox(height: 4),
+        if (logoBytes != null) pw.SizedBox(height: 4),
         pw.Center(
           child: pw.Text(
             data.branch.name.toUpperCase(),
@@ -394,7 +461,268 @@ class PdfReceiptBuilder {
     );
   }
 
-  pw.Widget _header(PrintDocumentData data) {
+  pw.Widget _header(PrintDocumentData data, Uint8List? logoBytes) {
+    return pw.Row(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        // Emisor (izquierda): RNC, dirección, teléfono(s), email.
+        pw.Expanded(
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              if (_hasText(data.branch.taxId))
+                pw.Text(
+                  'RNC: ${data.branch.taxId}',
+                  style: pw.TextStyle(
+                    fontSize: 10,
+                    fontWeight: pw.FontWeight.bold,
+                  ),
+                ),
+              for (final line in _lines(data.branch.address))
+                pw.Text(
+                  line,
+                  style: const pw.TextStyle(
+                    fontSize: 9.5,
+                    color: PdfColors.grey700,
+                  ),
+                ),
+              if (_hasText(data.branch.phone))
+                pw.Text(
+                  data.branch.phone!,
+                  style: const pw.TextStyle(
+                    fontSize: 9.5,
+                    color: PdfColors.grey700,
+                  ),
+                ),
+              if (_hasText(data.branch.email))
+                pw.Text(
+                  data.branch.email!,
+                  style: const pw.TextStyle(
+                    fontSize: 9.5,
+                    color: PdfColors.grey700,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        pw.SizedBox(width: 16),
+        // Logo + nombre comercial + número de documento (derecha).
+        pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.end,
+          children: [
+            if (logoBytes != null)
+              pw.Image(pw.MemoryImage(logoBytes), height: 50),
+            pw.SizedBox(height: 3),
+            pw.Text(
+              data.branch.name,
+              style: pw.TextStyle(
+                fontSize: 13,
+                fontWeight: pw.FontWeight.bold,
+                color: _kNavy,
+                letterSpacing: 1,
+              ),
+            ),
+            pw.SizedBox(height: 16),
+            pw.Text(
+              data.documentNumber,
+              style: pw.TextStyle(
+                fontSize: 12,
+                fontWeight: pw.FontWeight.bold,
+                color: _kNavy,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Banda central con líneas punteadas y el título según el comprobante.
+  pw.Widget _titleBand(PrintDocumentData data) {
+    return pw.Column(
+      children: [
+        _dottedLine(),
+        pw.SizedBox(height: 7),
+        pw.Center(
+          child: pw.Text(
+            _invoiceTitle(data),
+            style: pw.TextStyle(
+              fontSize: 13,
+              fontWeight: pw.FontWeight.bold,
+              color: _kNavy,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+        pw.SizedBox(height: 7),
+        _dottedLine(),
+      ],
+    );
+  }
+
+  pw.Widget _dottedLine() {
+    return pw.Container(
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(
+          bottom: pw.BorderSide(
+            color: PdfColors.grey500,
+            width: 0.8,
+            style: pw.BorderStyle.dotted,
+          ),
+        ),
+      ),
+      child: pw.SizedBox(width: double.infinity, height: 0),
+    );
+  }
+
+  pw.Widget _clientBlock(PrintDocumentData data) {
+    final c = data.customer;
+    pw.Widget row(String label, String value) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 1.5),
+        child: pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.SizedBox(
+              width: 96,
+              child: pw.Text(
+                label,
+                style: pw.TextStyle(
+                  fontSize: 10,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+            ),
+            pw.Expanded(
+              child: pw.Text(value, style: const pw.TextStyle(fontSize: 10)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        row('Cliente:', c?.name ?? 'Consumidor Final'),
+        row('RNC:', _docNumberOnly(c?.document) ?? 'N/A'),
+        row('Fecha:', _dateLabel(data.issuedAt)),
+        if (_hasText(data.paymentTermsLabel))
+          row('Forma de pago:', data.paymentTermsLabel!),
+        if (_hasText(data.ncf)) row('NCF:', data.ncf!),
+        if (_hasText(data.referenceNumber)) row('', data.referenceNumber!),
+      ],
+    );
+  }
+
+  pw.Widget _itemsTable(PrintDocumentData data) {
+    pw.Widget hCell(String text, {pw.Alignment align = pw.Alignment.centerLeft}) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 3),
+        child: pw.Align(
+          alignment: align,
+          child: pw.Text(
+            text,
+            style: pw.TextStyle(
+              fontSize: 8.5,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.grey800,
+            ),
+          ),
+        ),
+      );
+    }
+
+    pw.Widget cell(
+      String text, {
+      pw.Alignment align = pw.Alignment.centerLeft,
+      bool bold = false,
+    }) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 5, horizontal: 3),
+        child: pw.Align(
+          alignment: align,
+          child: pw.Text(
+            text,
+            style: pw.TextStyle(
+              fontSize: 9.5,
+              fontWeight: bold ? pw.FontWeight.bold : null,
+            ),
+          ),
+        ),
+      );
+    }
+
+    const right = pw.Alignment.centerRight;
+    final showTax = data.showTax;
+    // La columna ITBIS solo aparece si el documento lleva impuesto. Sin ITBIS
+    // se reparte su ancho entre las columnas numéricas (5 columnas).
+    final columnWidths = showTax
+        ? const <int, pw.TableColumnWidth>{
+            0: pw.FixedColumnWidth(58),
+            1: pw.FlexColumnWidth(3),
+            2: pw.FixedColumnWidth(68),
+            3: pw.FixedColumnWidth(74),
+            4: pw.FixedColumnWidth(36),
+            5: pw.FixedColumnWidth(80),
+          }
+        : const <int, pw.TableColumnWidth>{
+            0: pw.FixedColumnWidth(58),
+            1: pw.FlexColumnWidth(3),
+            2: pw.FixedColumnWidth(76),
+            3: pw.FixedColumnWidth(82),
+            4: pw.FixedColumnWidth(84),
+          };
+    return pw.Table(
+      columnWidths: columnWidths,
+      children: [
+        pw.TableRow(
+          decoration: const pw.BoxDecoration(
+            border: pw.Border(
+              top: pw.BorderSide(color: PdfColors.grey700, width: 0.8),
+              bottom: pw.BorderSide(color: PdfColors.grey700, width: 0.8),
+            ),
+          ),
+          children: [
+            hCell('CANTIDAD', align: pw.Alignment.center),
+            hCell('DESCRIPCION'),
+            hCell('MONTO', align: right),
+            hCell('SUB TOTAL', align: right),
+            if (showTax) hCell('ITBIS', align: right),
+            hCell('VALOR TOTAL', align: right),
+          ],
+        ),
+        for (final it in data.items)
+          pw.TableRow(
+            decoration: const pw.BoxDecoration(
+              border: pw.Border(
+                bottom: pw.BorderSide(color: PdfColors.grey200, width: 0.5),
+              ),
+            ),
+            children: [
+              cell(_qty(it.quantity), align: pw.Alignment.center),
+              cell(it.description),
+              cell(money(it.unitPrice), align: right),
+              cell(money(it.lineSubtotal), align: right),
+              if (showTax)
+                cell(
+                  it.lineTax > 0.0049 ? money(it.lineTax) : '-',
+                  align: right,
+                ),
+              cell(money(it.lineTotal), align: right, bold: true),
+            ],
+          ),
+      ],
+    );
+  }
+
+  /// Datos bancarios (izquierda) + "TOTAL A PAGAR" en rojo (derecha).
+  pw.Widget _bankAndTotal(PrintDocumentData data) {
+    final bankLines = _lines(data.branch.bankInfo);
+    // El ITBIS solo se desglosa si el documento lleva impuesto (data.showTax).
+    final showBreakdown = (data.showTax && data.totals.tax > 0.0049) ||
+        data.totals.discount > 0.0049 ||
+        data.totals.serviceCharge > 0.0049;
     return pw.Row(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
@@ -402,359 +730,224 @@ class PdfReceiptBuilder {
           child: pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              pw.Text(
-                data.branch.name,
-                style: pw.TextStyle(
-                  fontSize: 16,
-                  fontWeight: pw.FontWeight.bold,
-                ),
-              ),
-              if (_hasText(data.branch.address))
+              for (final line in bankLines)
                 pw.Text(
-                  data.branch.address!,
-                  style: const pw.TextStyle(
-                    fontSize: 10,
-                    color: PdfColors.grey700,
-                  ),
-                ),
-              if (_hasText(data.branch.phone))
-                pw.Text(
-                  'Tel: ${data.branch.phone}',
-                  style: const pw.TextStyle(
-                    fontSize: 10,
-                    color: PdfColors.grey700,
-                  ),
-                ),
-              if (_hasText(data.branch.taxId))
-                pw.Text(
-                  'RNC: ${data.branch.taxId}',
-                  style: const pw.TextStyle(
-                    fontSize: 10,
-                    color: PdfColors.grey700,
+                  line,
+                  style: pw.TextStyle(
+                    fontSize: 9.5,
+                    fontWeight: pw.FontWeight.bold,
+                    color: PdfColors.grey800,
                   ),
                 ),
             ],
           ),
         ),
+        pw.SizedBox(width: 16),
         pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.end,
           children: [
-            pw.Text(
-              _docTypeLabel(data.documentType),
-              style: pw.TextStyle(
-                fontSize: 20,
-                fontWeight: pw.FontWeight.bold,
-                color: const PdfColor.fromInt(0xFF2563EB),
-              ),
-            ),
-            pw.SizedBox(height: 4),
-            pw.Text(
-              data.documentNumber,
-              style: pw.TextStyle(
-                fontSize: 11,
-                fontWeight: pw.FontWeight.bold,
-              ),
-            ),
-            pw.Text(
-              formatDateTime(data.issuedAt),
-              style: const pw.TextStyle(
-                fontSize: 10,
-                color: PdfColors.grey700,
-              ),
-            ),
-            if (_hasText(data.receiptTypeLabel))
-              pw.Text(
-                data.receiptTypeLabel!,
-                style: const pw.TextStyle(
-                  fontSize: 10,
-                  color: PdfColors.grey700,
-                ),
-              ),
-            if (_hasText(data.ncf))
-              pw.Text(
-                'NCF: ${data.ncf}',
-                style: const pw.TextStyle(
-                  fontSize: 10,
-                  color: PdfColors.grey700,
-                ),
-              ),
-            if (_hasText(data.cashierName))
-              pw.Text(
-                'Cajero: ${data.cashierName}',
-                style: const pw.TextStyle(
-                  fontSize: 10,
-                  color: PdfColors.grey700,
-                ),
-              ),
-            if (_hasText(data.referenceNumber))
-              pw.Text(
-                data.referenceNumber!,
-                style: const pw.TextStyle(
-                  fontSize: 10,
-                  color: PdfColors.grey600,
-                ),
-              ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  pw.Widget _customerBlock(PrintParty customer) {
-    return pw.Container(
-      padding: const pw.EdgeInsets.all(10),
-      decoration: pw.BoxDecoration(
-        color: PdfColors.grey100,
-        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(6)),
-      ),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          pw.Text(
-            'DATOS DEL CLIENTE',
-            style: pw.TextStyle(
-              fontSize: 9,
-              fontWeight: pw.FontWeight.bold,
-              color: PdfColors.grey600,
-            ),
-          ),
-          pw.SizedBox(height: 4),
-          pw.Text(
-            customer.name,
-            style: pw.TextStyle(
-              fontSize: 11,
-              fontWeight: pw.FontWeight.bold,
-            ),
-          ),
-          if (_hasText(customer.document))
-            pw.Text(
-              'Doc: ${customer.document}',
-              style: const pw.TextStyle(
-                fontSize: 10,
-                color: PdfColors.grey700,
-              ),
-            ),
-          if (_hasText(customer.address))
-            pw.Text(
-              customer.address!,
-              style: const pw.TextStyle(
-                fontSize: 10,
-                color: PdfColors.grey700,
-              ),
-            ),
-          if (_hasText(customer.phone))
-            pw.Text(
-              'Tel: ${customer.phone}',
-              style: const pw.TextStyle(
-                fontSize: 10,
-                color: PdfColors.grey700,
-              ),
-            ),
-          if (_hasText(customer.email))
-            pw.Text(
-              customer.email!,
-              style: const pw.TextStyle(
-                fontSize: 10,
-                color: PdfColors.grey700,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  pw.Widget _itemsTable(PrintDocumentData data) {
-    const headerStyle = pw.TextStyle(fontSize: 10, color: PdfColors.grey800);
-    const cellStyle = pw.TextStyle(fontSize: 10);
-
-    return pw.Table(
-      border: pw.TableBorder(
-        bottom: const pw.BorderSide(color: PdfColors.grey400),
-        horizontalInside: const pw.BorderSide(
-          color: PdfColors.grey200,
-          width: 0.5,
-        ),
-      ),
-      columnWidths: const {
-        0: pw.FlexColumnWidth(4),
-        1: pw.FixedColumnWidth(50),
-        2: pw.FixedColumnWidth(72),
-        3: pw.FixedColumnWidth(72),
-      },
-      children: [
-        pw.TableRow(
-          decoration: const pw.BoxDecoration(
-            border: pw.Border(
-              bottom: pw.BorderSide(color: PdfColors.grey800, width: 1.5),
-            ),
-          ),
-          children: [
-            _tableCell(
-              'Descripción',
-              style: pw.TextStyle(
-                fontSize: 10,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.grey800,
-              ),
-            ),
-            _tableCell(
-              'Cant.',
-              style: pw.TextStyle(
-                fontSize: 10,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.grey800,
-              ),
-              align: pw.Alignment.centerRight,
-            ),
-            _tableCell(
-              'Precio unit.',
-              style: pw.TextStyle(
-                fontSize: 10,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.grey800,
-              ),
-              align: pw.Alignment.centerRight,
-            ),
-            _tableCell(
-              'Total',
-              style: pw.TextStyle(
-                fontSize: 10,
-                fontWeight: pw.FontWeight.bold,
-                color: PdfColors.grey800,
-              ),
-              align: pw.Alignment.centerRight,
-            ),
-          ],
-        ),
-        for (int i = 0; i < data.items.length; i++)
-          pw.TableRow(
-            decoration: i.isOdd
-                ? const pw.BoxDecoration(color: PdfColors.grey50)
-                : null,
-            children: [
-              _tableCell(data.items[i].description, style: cellStyle),
-              _tableCell(
-                _qty(data.items[i].quantity),
-                style: headerStyle,
-                align: pw.Alignment.centerRight,
-              ),
-              _tableCell(
-                money(data.items[i].unitPrice),
-                style: cellStyle,
-                align: pw.Alignment.centerRight,
-              ),
-              _tableCell(
-                money(data.items[i].lineTotal),
-                style: pw.TextStyle(
-                  fontSize: 10,
-                  fontWeight: pw.FontWeight.bold,
-                ),
-                align: pw.Alignment.centerRight,
-              ),
+            if (showBreakdown) ...[
+              _miniTotal('Subtotal', money(data.totals.subtotal)),
+              if (data.totals.discount > 0.0049)
+                _miniTotal('Descuento', '-${money(data.totals.discount)}'),
+              if (data.totals.serviceCharge > 0.0049)
+                _miniTotal('Ley / Servicio', money(data.totals.serviceCharge)),
+              if (data.showTax && data.totals.tax > 0.0049)
+                _miniTotal('ITBIS', money(data.totals.tax)),
+              pw.SizedBox(height: 3),
             ],
-          ),
+            pw.Row(
+              mainAxisSize: pw.MainAxisSize.min,
+              crossAxisAlignment: pw.CrossAxisAlignment.center,
+              children: [
+                pw.Text(
+                  'TOTAL A\nPAGAR',
+                  textAlign: pw.TextAlign.right,
+                  style: pw.TextStyle(
+                    fontSize: 10,
+                    fontWeight: pw.FontWeight.bold,
+                    color: PdfColors.grey600,
+                  ),
+                ),
+                pw.SizedBox(width: 12),
+                pw.Text(
+                  money(data.totals.total),
+                  style: pw.TextStyle(
+                    fontSize: 17,
+                    fontWeight: pw.FontWeight.bold,
+                    color: _kRed,
+                  ),
+                ),
+              ],
+            ),
+            if (data.totals.balance > 0.0049)
+              pw.Padding(
+                padding: const pw.EdgeInsets.only(top: 2),
+                child: _miniTotal(
+                  'Balance pendiente',
+                  money(data.totals.balance),
+                ),
+              ),
+          ],
+        ),
       ],
     );
   }
 
-  pw.Widget _tableCell(
-    String text, {
-    pw.TextStyle? style,
-    pw.Alignment? align,
-  }) {
+  pw.Widget _miniTotal(String label, String value) {
     return pw.Padding(
-      padding: const pw.EdgeInsets.symmetric(vertical: 5, horizontal: 4),
-      child: pw.Align(
-        alignment: align ?? pw.Alignment.centerLeft,
-        child: pw.Text(text, style: style),
-      ),
-    );
-  }
-
-  pw.Widget _totalsBlock(PrintDocumentData data) {
-    return pw.SizedBox(
-      width: 190,
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-        children: [
-          _totalLine('Subtotal', money(data.totals.subtotal)),
-          if (data.totals.discount > 0)
-            _totalLine('Descuento', '-${money(data.totals.discount)}'),
-          if (data.totals.serviceCharge > 0)
-            _totalLine('Ley / Servicio', money(data.totals.serviceCharge)),
-          _totalLine('ITBIS', money(data.totals.tax)),
-          pw.Divider(color: PdfColors.grey400, height: 8),
-          _totalLine(
-            'TOTAL',
-            money(data.totals.total),
-            bold: true,
-            large: true,
-          ),
-          if (data.totals.paid > 0)
-            _totalLine('Pagado', money(data.totals.paid)),
-          if (data.totals.balance > 0)
-            _totalLine(
-              'Balance pendiente',
-              money(data.totals.balance),
-              bold: true,
-            ),
-          if (data.payments.isNotEmpty) ...[
-            pw.SizedBox(height: 6),
-            for (final p in data.payments)
-              _totalLine(p.method, money(p.amount)),
-          ],
-        ],
-      ),
-    );
-  }
-
-  pw.Widget _totalLine(
-    String label,
-    String value, {
-    bool bold = false,
-    bool large = false,
-  }) {
-    final fontSize = large ? 13.0 : 10.0;
-    final weight = bold ? pw.FontWeight.bold : null;
-
-    return pw.Padding(
-      padding: const pw.EdgeInsets.symmetric(vertical: 2),
+      padding: const pw.EdgeInsets.symmetric(vertical: 1),
       child: pw.Row(
-        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        mainAxisSize: pw.MainAxisSize.min,
         children: [
           pw.Text(
-            label,
-            style: pw.TextStyle(
-              fontSize: fontSize,
-              fontWeight: weight,
-              color: PdfColors.grey700,
-            ),
+            '$label:',
+            style: const pw.TextStyle(fontSize: 9.5, color: PdfColors.grey600),
           ),
-          pw.Text(
-            value,
-            style: pw.TextStyle(
-              fontSize: fontSize,
-              fontWeight: weight,
-              color: large
-                  ? const PdfColor.fromInt(0xFF2563EB)
-                  : PdfColors.grey800,
-            ),
-          ),
+          pw.SizedBox(width: 8),
+          pw.Text(value, style: const pw.TextStyle(fontSize: 9.5)),
         ],
       ),
+    );
+  }
+
+  /// Firma del emisor + bloque OBSERVACION (formulario del receptor) + QR.
+  pw.Widget _signatureAndObservation(
+    PrintDocumentData data,
+    Uint8List? qrBytes,
+  ) {
+    pw.Widget formLine(String label) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(top: 6),
+        child: pw.Text(
+          '$label _______________________',
+          style: const pw.TextStyle(fontSize: 9.5),
+        ),
+      );
+    }
+
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        if (_hasText(data.branch.signatoryName)) ...[
+          pw.SizedBox(height: 4),
+          pw.Center(
+            child: pw.Column(
+              children: [
+                pw.Container(
+                  width: 220,
+                  decoration: const pw.BoxDecoration(
+                    border: pw.Border(
+                      top: pw.BorderSide(color: PdfColors.grey500, width: 0.8),
+                    ),
+                  ),
+                  padding: const pw.EdgeInsets.only(top: 3),
+                  child: pw.Text(
+                    data.branch.signatoryName!,
+                    textAlign: pw.TextAlign.center,
+                    style: pw.TextStyle(
+                      fontSize: 10,
+                      fontStyle: pw.FontStyle.italic,
+                    ),
+                  ),
+                ),
+                if (_hasText(data.branch.signatoryTitle))
+                  pw.Text(
+                    data.branch.signatoryTitle!,
+                    style: const pw.TextStyle(
+                      fontSize: 9,
+                      color: PdfColors.grey600,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          pw.SizedBox(height: 14),
+        ],
+        pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.end,
+          children: [
+            pw.Expanded(
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    'OBSERVACION:',
+                    style: pw.TextStyle(
+                      fontSize: 9,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                  if (_hasText(data.observation))
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(top: 2),
+                      child: pw.Text(
+                        data.observation!,
+                        style: const pw.TextStyle(
+                          fontSize: 9,
+                          color: PdfColors.grey700,
+                        ),
+                      ),
+                    ),
+                  formLine('Nombre del representante:'),
+                  formLine('Cédula o ID:'),
+                  formLine('Firma:'),
+                  formLine('Fecha:'),
+                ],
+              ),
+            ),
+            if (qrBytes != null) ...[
+              pw.SizedBox(width: 16),
+              pw.Image(pw.MemoryImage(qrBytes), width: 92, height: 92),
+            ],
+          ],
+        ),
+      ],
     );
   }
 }
 
-String _docTypeLabel(PrintDocumentType type) {
-  return switch (type) {
-    PrintDocumentType.quote => 'COTIZACIÓN',
-    PrintDocumentType.fiscalInvoice => 'FACTURA FISCAL',
-    PrintDocumentType.saleReceipt => 'RECIBO DE VENTA',
-    PrintDocumentType.cashClose => 'CIERRE DE CAJA',
-    PrintDocumentType.purchaseOrder => 'ORDEN DE COMPRA',
-    PrintDocumentType.creditNote => 'NOTA DE CRÉDITO',
-  };
+/// Título del documento según el comprobante seleccionado. Para venta usa el
+/// `receiptTypeLabel`; para cotización siempre "COTIZACIÓN".
+String _invoiceTitle(PrintDocumentData data) {
+  if (data.documentType == PrintDocumentType.quote) return 'COTIZACIÓN';
+  final label = (data.receiptTypeLabel ?? '').toLowerCase();
+  if (label.contains('sin comprobante')) return 'NOTA DE VENTA';
+  if (label.contains('consumidor')) return 'FACTURA PARA CONSUMIDOR FINAL';
+  if (label.contains('crédito') ||
+      label.contains('credito') ||
+      label.contains('fiscal')) {
+    return 'FACTURA CON CRÉDITO FISCAL';
+  }
+  if (label.contains('gubernamental')) return 'FACTURA GUBERNAMENTAL';
+  if (label.contains('especial')) return 'FACTURA RÉGIMEN ESPECIAL';
+  if (label.contains('exporta')) return 'FACTURA DE EXPORTACIÓN';
+  return 'FACTURA';
+}
+
+/// Divide un texto multilínea en líneas no vacías (para dirección / banco).
+List<String> _lines(String? text) {
+  if (text == null) return const [];
+  return text
+      .split('\n')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      .toList(growable: false);
+}
+
+/// Quita el prefijo "RNC:"/"CÉDULA:" del documento del cliente y deja el número.
+String? _docNumberOnly(String? doc) {
+  if (!_hasText(doc)) return null;
+  final idx = doc!.indexOf(':');
+  return idx >= 0 ? doc.substring(idx + 1).trim() : doc.trim();
+}
+
+/// Fecha corta dd/MM/yyyy (formato de la factura).
+String _dateLabel(DateTime dt) {
+  final l = dt.isUtc ? dt.toLocal() : dt;
+  final dd = l.day.toString().padLeft(2, '0');
+  final mm = l.month.toString().padLeft(2, '0');
+  return '$dd/$mm/${l.year}';
 }
 
 bool _hasText(String? value) => value != null && value.trim().isNotEmpty;

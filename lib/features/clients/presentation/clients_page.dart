@@ -10,6 +10,8 @@ import 'package:printing/printing.dart';
 import '../../../core/theme/tokens.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
+import '../../../shared/services/dgii_lookup_service.dart';
+import '../../../shared/widgets/app_snackbar.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/role_gate.dart';
@@ -62,8 +64,9 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
   /// Conserva la selección en el provider tras cada cambio (no en `dispose`,
   /// que no es confiable) para no perderla al navegar a otra sección.
   void _persistSelection() {
-    ref.read(clientsSelectionProvider.notifier).state =
-        Set<String>.from(_selectedIds);
+    ref.read(clientsSelectionProvider.notifier).state = Set<String>.from(
+      _selectedIds,
+    );
   }
 
   void _clearSelection() {
@@ -95,8 +98,9 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
   }
 
   Future<void> _onDeleteSelected(List<ClientEntity> filtered) async {
-    final selected =
-        filtered.where((c) => _selectedIds.contains(c.id)).toList();
+    final selected = filtered
+        .where((c) => _selectedIds.contains(c.id))
+        .toList();
     if (selected.isEmpty) return;
 
     final confirmed = await showDialog<bool>(
@@ -202,13 +206,16 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
               final totalBalance = ref.watch(clientsFilteredBalanceProvider);
 
               final canSelect = ref.watch(roleAccessProvider).canDeleteRecord;
-              final allSelected = filtered.isNotEmpty &&
+              final allSelected =
+                  filtered.isNotEmpty &&
                   filtered.every((c) => _selectedIds.contains(c.id));
-              final someSelected =
-                  filtered.any((c) => _selectedIds.contains(c.id));
+              final someSelected = filtered.any(
+                (c) => _selectedIds.contains(c.id),
+              );
               // Tristate: true=todos, null=algunos, false=ninguno.
-              final bool? selectAllValue =
-                  allSelected ? true : (someSelected ? null : false);
+              final bool? selectAllValue = allSelected
+                  ? true
+                  : (someSelected ? null : false);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -234,7 +241,9 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
                               Text(
                                 'Clientes (${filtered.length})',
                                 style: const TextStyle(
-                                    fontSize: 18, fontWeight: FontWeight.bold),
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                               if (canSelect && _selectedIds.isNotEmpty) ...[
                                 const SizedBox(width: AppTokens.s16),
@@ -256,10 +265,13 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
                                     backgroundColor: AppTokens.error,
                                   ),
                                   onPressed: () => _onDeleteSelected(filtered),
-                                  icon: const Icon(Icons.delete_outline,
-                                      size: 18),
-                                  label:
-                                      Text('Eliminar (${_selectedIds.length})'),
+                                  icon: const Icon(
+                                    Icons.delete_outline,
+                                    size: 18,
+                                  ),
+                                  label: Text(
+                                    'Eliminar (${_selectedIds.length})',
+                                  ),
                                 ),
                               ],
                             ],
@@ -296,8 +308,9 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
                                   key: ValueKey(client.id),
                                   client: client,
                                   documentDisplay: _documentDisplay(client),
-                                  entityLabel:
-                                      _entityTypeLabel(client.entityType),
+                                  entityLabel: _entityTypeLabel(
+                                    client.entityType,
+                                  ),
                                   showCheckbox: canSelect,
                                   selected: _selectedIds.contains(client.id),
                                   onSelectedChanged: (v) =>
@@ -424,9 +437,9 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
       await repository.saveClient(input);
       if (!mounted) return;
       ref.invalidate(clientsListProvider);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(successMessage)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(successMessage)));
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -562,9 +575,7 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
         onPressed: null,
         icon: const Icon(Icons.ios_share_rounded, size: 18),
         label: const Text('Exportar'),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: AppTokens.foreground,
-        ),
+        style: OutlinedButton.styleFrom(foregroundColor: AppTokens.foreground),
       ),
     );
   }
@@ -622,10 +633,13 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
     );
 
     final accent = PdfColor.fromInt(0xFF0D6EFD); // AppTokens.primary
-    final muted = PdfColor.fromInt(0xFF66798E);  // AppTokens.mutedForeground
+    final muted = PdfColor.fromInt(0xFF66798E); // AppTokens.mutedForeground
     final borderCol = PdfColor.fromInt(0xFFE9ECEF);
 
-    final totalBalance = clients.fold<double>(0, (sum, c) => sum + c.balanceDue);
+    final totalBalance = clients.fold<double>(
+      0,
+      (sum, c) => sum + c.balanceDue,
+    );
 
     pdf.addPage(
       pw.MultiPage(
@@ -693,7 +707,11 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
             child: pw.Row(
               mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
               children: [
-                _buildPdfKpi('Total Clientes', clients.length.toString(), accent),
+                _buildPdfKpi(
+                  'Total Clientes',
+                  clients.length.toString(),
+                  accent,
+                ),
                 _buildPdfKpi('Balance Pendiente', money(totalBalance), accent),
               ],
             ),
@@ -728,15 +746,23 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
                   _buildPdfTableHeaderCell('Documento'),
                   _buildPdfTableHeaderCell('Teléfono'),
                   _buildPdfTableHeaderCell('Email'),
-                  _buildPdfTableHeaderCell('Límite crédito', align: pw.TextAlign.right),
-                  _buildPdfTableHeaderCell('Balance', align: pw.TextAlign.right),
+                  _buildPdfTableHeaderCell(
+                    'Límite crédito',
+                    align: pw.TextAlign.right,
+                  ),
+                  _buildPdfTableHeaderCell(
+                    'Balance',
+                    align: pw.TextAlign.right,
+                  ),
                 ],
               ),
               // Rows
               ...List.generate(clients.length, (idx) {
                 final c = clients[idx];
                 final isEven = idx % 2 == 0;
-                final bg = isEven ? PdfColors.white : PdfColor.fromInt(0xFFF8F9FA);
+                final bg = isEven
+                    ? PdfColors.white
+                    : PdfColor.fromInt(0xFFF8F9FA);
 
                 return pw.TableRow(
                   decoration: pw.BoxDecoration(color: bg),
@@ -745,9 +771,15 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
                     _buildPdfTableCellCell(c.documentNumber ?? '-'),
                     _buildPdfTableCellCell(c.phone ?? '-'),
                     _buildPdfTableCellCell(c.email ?? '-'),
-                    _buildPdfTableCellCell(money(c.creditLimit), align: pw.TextAlign.right),
-                    _buildPdfTableCellCell(money(c.balanceDue),
-                        align: pw.TextAlign.right, isAlert: c.balanceDue > 0),
+                    _buildPdfTableCellCell(
+                      money(c.creditLimit),
+                      align: pw.TextAlign.right,
+                    ),
+                    _buildPdfTableCellCell(
+                      money(c.balanceDue),
+                      align: pw.TextAlign.right,
+                      isAlert: c.balanceDue > 0,
+                    ),
                   ],
                 );
               }),
@@ -785,7 +817,10 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
     );
   }
 
-  pw.Widget _buildPdfTableHeaderCell(String text, {pw.TextAlign align = pw.TextAlign.left}) {
+  pw.Widget _buildPdfTableHeaderCell(
+    String text, {
+    pw.TextAlign align = pw.TextAlign.left,
+  }) {
     return pw.Padding(
       padding: const pw.EdgeInsets.symmetric(vertical: 8, horizontal: 6),
       child: pw.Text(
@@ -863,19 +898,16 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
       if (!mounted) return;
       if (saved) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Exportados ${clients.length} clientes.'),
-          ),
+          SnackBar(content: Text('Exportados ${clients.length} clientes.')),
         );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('No se pudo exportar: $e')));
     }
   }
-
 }
 
 /// Diálogo de 2 pasos para importar / actualizar clientes por Excel.
@@ -909,7 +941,9 @@ class _ImportClientsDialogState extends ConsumerState<_ImportClientsDialog> {
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _downloadNew() async {
@@ -1022,8 +1056,7 @@ class _ImportClientsDialogState extends ConsumerState<_ImportClientsDialog> {
                       children: parsed.errors
                           .map(
                             (e) => Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 2),
+                              padding: const EdgeInsets.symmetric(vertical: 2),
                               child: Text(
                                 'Fila ${e.rowNumber}: ${e.message}',
                                 style: const TextStyle(
@@ -1211,10 +1244,7 @@ class _ImportClientsDialogState extends ConsumerState<_ImportClientsDialog> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             : Icon(icon, size: 18),
-        label: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(label),
-        ),
+        label: Align(alignment: Alignment.centerLeft, child: Text(label)),
         style: FilledButton.styleFrom(
           alignment: Alignment.centerLeft,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -1236,8 +1266,7 @@ class _PaymentHistoryDialog extends ConsumerStatefulWidget {
       _PaymentHistoryDialogState();
 }
 
-class _PaymentHistoryDialogState
-    extends ConsumerState<_PaymentHistoryDialog> {
+class _PaymentHistoryDialogState extends ConsumerState<_PaymentHistoryDialog> {
   late Future<List<ClientPaymentRow>> _future;
 
   @override
@@ -1268,8 +1297,7 @@ class _PaymentHistoryDialogState
             children: [
               Row(
                 children: [
-                  const Icon(Icons.payments_outlined,
-                      color: AppTokens.primary),
+                  const Icon(Icons.payments_outlined, color: AppTokens.primary),
                   const SizedBox(width: AppTokens.s8),
                   Expanded(
                     child: Column(
@@ -1277,16 +1305,12 @@ class _PaymentHistoryDialogState
                       children: [
                         Text(
                           'Historial de pagos',
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
+                          style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(fontWeight: FontWeight.w700),
                         ),
                         Text(
                           widget.client.fullName,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
+                          style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: AppTokens.mutedForeground),
                         ),
                       ],
@@ -1312,17 +1336,14 @@ class _PaymentHistoryDialogState
                       return const Center(child: CircularProgressIndicator());
                     }
                     if (snap.hasError) {
-                      return Center(
-                        child: Text('Error: ${snap.error}'),
-                      );
+                      return Center(child: Text('Error: ${snap.error}'));
                     }
                     final rows = snap.data ?? const <ClientPaymentRow>[];
                     if (rows.isEmpty) {
                       return Center(
                         child: Text(
                           'Este cliente aún no tiene pagos registrados.',
-                          style: TextStyle(
-                              color: AppTokens.mutedForeground),
+                          style: TextStyle(color: AppTokens.mutedForeground),
                         ),
                       );
                     }
@@ -1334,14 +1355,14 @@ class _PaymentHistoryDialogState
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Padding(
-                          padding: const EdgeInsets.only(
-                              bottom: AppTokens.s12),
+                          padding: const EdgeInsets.only(bottom: AppTokens.s12),
                           child: Row(
                             children: [
                               Text(
                                 '${rows.length} pagos',
                                 style: const TextStyle(
-                                    color: AppTokens.mutedForeground),
+                                  color: AppTokens.mutedForeground,
+                                ),
                               ),
                               const Spacer(),
                               Text(
@@ -1361,8 +1382,7 @@ class _PaymentHistoryDialogState
                               height: 1,
                               color: AppTokens.border,
                             ),
-                            itemBuilder: (context, i) =>
-                                _PaymentRowTile(
+                            itemBuilder: (context, i) => _PaymentRowTile(
                               row: rows[i],
                               onEdit: () => _onEdit(rows[i]),
                               onDelete: () => _onDelete(rows[i]),
@@ -1388,7 +1408,9 @@ class _PaymentHistoryDialogState
     );
     if (result == null || !mounted) return;
     try {
-      await ref.read(clientsRepositoryProvider).updatePayment(
+      await ref
+          .read(clientsRepositoryProvider)
+          .updatePayment(
             paymentId: row.id,
             amount: result.amount,
             paymentMethod: result.paymentMethod,
@@ -1397,14 +1419,14 @@ class _PaymentHistoryDialogState
           );
       if (!mounted) return;
       _refresh();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pago actualizado')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Pago actualizado')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al actualizar: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error al actualizar: $e')));
     }
   }
 
@@ -1424,7 +1446,8 @@ class _PaymentHistoryDialogState
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-                backgroundColor: AppTokens.destructive),
+              backgroundColor: AppTokens.destructive,
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Eliminar'),
           ),
@@ -1436,14 +1459,14 @@ class _PaymentHistoryDialogState
       await ref.read(clientsRepositoryProvider).deletePayment(row.id);
       if (!mounted) return;
       _refresh();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pago eliminado')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Pago eliminado')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al eliminar: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error al eliminar: $e')));
     }
   }
 }
@@ -1482,7 +1505,9 @@ class _PaymentRowTile extends ConsumerWidget {
                     const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: AppTokens.primary.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(4),
@@ -1543,8 +1568,11 @@ class _PaymentRowTile extends ConsumerWidget {
             IconButton(
               tooltip: 'Eliminar pago',
               onPressed: onDelete,
-              icon: const Icon(Icons.delete_outline,
-                  size: 18, color: AppTokens.destructive),
+              icon: const Icon(
+                Icons.delete_outline,
+                size: 18,
+                color: AppTokens.destructive,
+              ),
               visualDensity: VisualDensity.compact,
             ),
         ],
@@ -1604,10 +1632,12 @@ class _EditPaymentDialogState extends State<_EditPaymentDialog> {
   @override
   void initState() {
     super.initState();
-    _amountController =
-        TextEditingController(text: widget.row.amount.toString());
-    _referenceController =
-        TextEditingController(text: widget.row.reference ?? '');
+    _amountController = TextEditingController(
+      text: widget.row.amount.toString(),
+    );
+    _referenceController = TextEditingController(
+      text: widget.row.reference ?? '',
+    );
     _notesController = TextEditingController(text: widget.row.notes ?? '');
     _method = widget.row.paymentMethod;
   }
@@ -1631,8 +1661,9 @@ class _EditPaymentDialogState extends State<_EditPaymentDialog> {
           children: [
             TextField(
               controller: _amountController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: const InputDecoration(
                 labelText: 'Monto',
                 prefixText: r'RD$ ',
@@ -1650,7 +1681,9 @@ class _EditPaymentDialogState extends State<_EditPaymentDialog> {
                 DropdownMenuItem(value: 'cash', child: Text('Efectivo')),
                 DropdownMenuItem(value: 'card', child: Text('Tarjeta')),
                 DropdownMenuItem(
-                    value: 'transfer', child: Text('Transferencia')),
+                  value: 'transfer',
+                  child: Text('Transferencia'),
+                ),
                 DropdownMenuItem(value: 'mobile', child: Text('Pago móvil')),
                 DropdownMenuItem(value: 'credit', child: Text('Crédito')),
               ],
@@ -1687,9 +1720,9 @@ class _EditPaymentDialogState extends State<_EditPaymentDialog> {
           onPressed: () {
             final n = double.tryParse(_amountController.text.trim());
             if (n == null || n <= 0) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Monto inválido')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('Monto inválido')));
               return;
             }
             Navigator.pop(
@@ -1729,7 +1762,9 @@ class _ClientRowHeader extends StatelessWidget {
     return Container(
       color: AppTokens.background,
       padding: const EdgeInsets.symmetric(
-          horizontal: AppTokens.s16, vertical: AppTokens.s10),
+        horizontal: AppTokens.s16,
+        vertical: AppTokens.s10,
+      ),
       child: Row(
         children: [
           if (showCheckbox)
@@ -1747,11 +1782,13 @@ class _ClientRowHeader extends StatelessWidget {
           Expanded(flex: 2, child: _ColumnLabel('Teléfono')),
           Expanded(flex: 3, child: _ColumnLabel('Email')),
           Expanded(
-              flex: 2,
-              child: _ColumnLabel('Crédito', align: TextAlign.right)),
+            flex: 2,
+            child: _ColumnLabel('Crédito', align: TextAlign.right),
+          ),
           Expanded(
-              flex: 2,
-              child: _ColumnLabel('Balance', align: TextAlign.right)),
+            flex: 2,
+            child: _ColumnLabel('Balance', align: TextAlign.right),
+          ),
           Expanded(flex: 2, child: _ColumnLabel('Estado')),
           SizedBox(width: 140, child: _ColumnLabel('Acciones')),
         ],
@@ -1820,10 +1857,7 @@ class _ClientRow extends StatelessWidget {
           if (showCheckbox)
             SizedBox(
               width: 40,
-              child: Checkbox(
-                value: selected,
-                onChanged: onSelectedChanged,
-              ),
+              child: Checkbox(value: selected, onChanged: onSelectedChanged),
             ),
           Expanded(
             flex: 3,
@@ -1831,10 +1865,7 @@ class _ClientRow extends StatelessWidget {
               client.fullName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
             ),
           ),
           Expanded(
@@ -1852,10 +1883,7 @@ class _ClientRow extends StatelessWidget {
               documentDisplay,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 12,
-              ),
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           ),
           Expanded(
@@ -1927,8 +1955,7 @@ class _ClientRow extends StatelessWidget {
                   visualDensity: VisualDensity.compact,
                 ),
                 IconButton(
-                  tooltip:
-                      client.isActive ? 'Desactivar' : 'Activar',
+                  tooltip: client.isActive ? 'Desactivar' : 'Activar',
                   onPressed: onToggle,
                   icon: Icon(
                     client.isActive
@@ -2046,6 +2073,9 @@ class _ClientDialogState extends ConsumerState<_ClientDialog> {
   late bool _taxExempt;
   late bool _chargeItbis;
 
+  /// Consulta de RNC a DGII en curso.
+  bool _rncLookupLoading = false;
+
   @override
   void initState() {
     super.initState();
@@ -2056,27 +2086,34 @@ class _ClientDialogState extends ConsumerState<_ClientDialog> {
     _lastNameController = TextEditingController(text: c?.lastName ?? '');
     _companyNameController = TextEditingController(text: c?.companyName ?? '');
     _legalNameController = TextEditingController(text: c?.legalName ?? '');
-    _documentTypeController =
-        TextEditingController(text: c?.documentType ?? '');
-    _documentNumberController =
-        TextEditingController(text: c?.documentNumber ?? '');
+    _documentTypeController = TextEditingController(
+      text: c?.documentType ?? '',
+    );
+    _documentNumberController = TextEditingController(
+      text: c?.documentNumber ?? '',
+    );
 
     _emailController = TextEditingController(text: c?.email ?? '');
     _phoneController = TextEditingController(text: c?.phone ?? '');
-    _secondaryPhoneController =
-        TextEditingController(text: c?.secondaryPhone ?? '');
+    _secondaryPhoneController = TextEditingController(
+      text: c?.secondaryPhone ?? '',
+    );
 
-    _addressLine1Controller =
-        TextEditingController(text: c?.addressLine1 ?? c?.address ?? '');
-    _addressLine2Controller =
-        TextEditingController(text: c?.addressLine2 ?? '');
+    _addressLine1Controller = TextEditingController(
+      text: c?.addressLine1 ?? c?.address ?? '',
+    );
+    _addressLine2Controller = TextEditingController(
+      text: c?.addressLine2 ?? '',
+    );
     _cityController = TextEditingController(text: c?.city ?? '');
     _provinceController = TextEditingController(text: c?.province ?? '');
     _postalCodeController = TextEditingController(text: c?.postalCode ?? '');
-    _countryCodeController =
-        TextEditingController(text: c?.countryCode ?? 'DO');
-    _googleMapsUrlController =
-        TextEditingController(text: c?.googleMapsUrl ?? '');
+    _countryCodeController = TextEditingController(
+      text: c?.countryCode ?? 'DO',
+    );
+    _googleMapsUrlController = TextEditingController(
+      text: c?.googleMapsUrl ?? '',
+    );
 
     _creditLimitController = TextEditingController(
       text: c == null ? '0' : c.creditLimit.toStringAsFixed(2),
@@ -2123,14 +2160,68 @@ class _ClientDialogState extends ConsumerState<_ClientDialog> {
     super.dispose();
   }
 
+  /// Consulta el RNC/cédula del campo "Número documento" contra DGII y
+  /// auto-completa razón social, nombre comercial y tipo de documento.
+  Future<void> _lookupRnc() async {
+    final raw = _documentNumberController.text.trim();
+    if (raw.isEmpty) {
+      AppSnackBar.info(context, 'Escribe el RNC o cédula primero.');
+      return;
+    }
+    setState(() => _rncLookupLoading = true);
+    try {
+      final info = await ref.read(dgiiLookupServiceProvider).lookupByRnc(raw);
+      if (!mounted) return;
+      if (info == null) {
+        AppSnackBar.error(context, 'RNC/cédula no encontrado en DGII.');
+        return;
+      }
+      setState(() {
+        final name = info.nombreRazonSocial ?? info.displayName;
+        if (name != null && name.isNotEmpty) {
+          if (_legalNameController.text.trim().isEmpty) {
+            _legalNameController.text = name;
+          }
+          if (_fullNameController.text.trim().isEmpty) {
+            _fullNameController.text = name;
+          }
+        }
+        final comercial = info.nombreComercial;
+        if (comercial != null &&
+            comercial.isNotEmpty &&
+            _companyNameController.text.trim().isEmpty) {
+          _companyNameController.text = comercial;
+        }
+        // Tipo de documento por longitud: 11 = cédula, 9 = RNC (empresa).
+        final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+        if (_documentTypeController.text.trim().isEmpty) {
+          _documentTypeController.text = digits.length == 11 ? 'cedula' : 'rnc';
+        }
+      });
+      if (info.isActivo) {
+        AppSnackBar.success(context, 'Encontrado: ${info.displayName ?? raw}');
+      } else {
+        AppSnackBar.info(
+          context,
+          'Encontrado (${info.estado ?? "estado desconocido"}): '
+          '${info.displayName ?? raw}',
+        );
+      }
+    } on InvalidRncException catch (e) {
+      if (mounted) AppSnackBar.error(context, e.reason);
+    } catch (e) {
+      if (mounted) AppSnackBar.error(context, 'No se pudo consultar el RNC', e);
+    } finally {
+      if (mounted) setState(() => _rncLookupLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMobile = ResponsiveLayout.isMobile(context);
 
     return AlertDialog(
-      title: Text(
-        widget.initial == null ? 'Nuevo cliente' : 'Editar cliente',
-      ),
+      title: Text(widget.initial == null ? 'Nuevo cliente' : 'Editar cliente'),
       content: SizedBox(
         width: isMobile ? double.maxFinite : 580,
         child: Form(
@@ -2172,14 +2263,8 @@ class _ClientDialogState extends ConsumerState<_ClientDialog> {
                     labelText: 'Tipo de entidad',
                   ),
                   items: const [
-                    DropdownMenuItem(
-                      value: 'person',
-                      child: Text('Persona'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'company',
-                      child: Text('Empresa'),
-                    ),
+                    DropdownMenuItem(value: 'person', child: Text('Persona')),
+                    DropdownMenuItem(value: 'company', child: Text('Empresa')),
                     DropdownMenuItem(
                       value: 'government',
                       child: Text('Gubernamental'),
@@ -2215,8 +2300,27 @@ class _ClientDialogState extends ConsumerState<_ClientDialog> {
                   ),
                   TextFormField(
                     controller: _documentNumberController,
-                    decoration: const InputDecoration(
+                    keyboardType: TextInputType.number,
+                    onFieldSubmitted: (_) => _lookupRnc(),
+                    decoration: InputDecoration(
                       labelText: 'Número documento',
+                      helperText: 'RNC (9) o cédula (11). Busca en DGII.',
+                      suffixIcon: _rncLookupLoading
+                          ? const Padding(
+                              padding: EdgeInsets.all(10),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            )
+                          : IconButton(
+                              tooltip: 'Buscar razón social en DGII',
+                              icon: const Icon(Icons.search),
+                              onPressed: _lookupRnc,
+                            ),
                     ),
                   ),
                 ]),
@@ -2430,17 +2534,17 @@ class _ClientDialogState extends ConsumerState<_ClientDialog> {
   Widget _formRow(bool isMobile, List<Widget> children) {
     if (isMobile) {
       return Column(
-        children: children
-            .expand((w) => [w, const SizedBox(height: 10)])
-            .toList()
-          ..removeLast(),
+        children:
+            children.expand((w) => [w, const SizedBox(height: 10)]).toList()
+              ..removeLast(),
       );
     }
     return Row(
-      children: children
-          .expand((w) => [Expanded(child: w), const SizedBox(width: 10)])
-          .toList()
-        ..removeLast(),
+      children:
+          children
+              .expand((w) => [Expanded(child: w), const SizedBox(width: 10)])
+              .toList()
+            ..removeLast(),
     );
   }
 
@@ -2485,8 +2589,9 @@ class _ClientDialogState extends ConsumerState<_ClientDialog> {
         documentType: _documentTypeController.text.trim(),
         documentNumber: _documentNumberController.text.trim(),
         creditLimit: double.parse(_creditLimitController.text.trim()),
-        creditInvoiceLimit:
-            int.parse(_creditInvoiceLimitController.text.trim()),
+        creditInvoiceLimit: int.parse(
+          _creditInvoiceLimitController.text.trim(),
+        ),
         birthday: _parseDate(_birthdayController.text),
         comments: _commentsController.text.trim(),
         defaultReceiptType: _defaultReceiptType,
