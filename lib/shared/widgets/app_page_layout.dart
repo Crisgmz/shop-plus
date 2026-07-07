@@ -12,7 +12,8 @@ enum AppPageLayoutMode { standard, wide }
 const _wideModulePaths = <String>{
   '/panel',
   '/ventas',
-  '/cobros',
+  '/cuentas-por-cobrar',
+  '/cuentas-por-pagar',
   '/inventario',
   '/compras',
   '/reportes',

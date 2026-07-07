@@ -112,6 +112,7 @@ String _encodeSaleDraft(SaleDraft d) => jsonEncode({
             'unitPrice': it.unitPrice,
             'discountPct': it.discountPct,
             'imeis': it.imeis,
+            'priceTier': it.priceTier,
           },
       ],
     });
@@ -133,6 +134,7 @@ SaleDraft? _decodeSaleDraft(String? raw) {
                     ?.map((x) => x.toString())
                     .toList(growable: false) ??
                 const <String>[],
+            priceTier: e['priceTier']?.toString() ?? 'retail',
           ),
     ];
     return SaleDraft(

@@ -17,6 +17,7 @@ import '../features/dashboard/presentation/dashboard_page.dart';
 import '../features/petty_cash/presentation/petty_cash_page.dart';
 import '../features/fiscal_documents/presentation/fiscal_documents_page.dart';
 import '../features/inventory/presentation/inventory_page.dart';
+import '../features/payables/presentation/payables_page.dart';
 import '../features/purchases/presentation/purchases_page.dart';
 import '../features/quotations/presentation/quotation_create_page.dart';
 import '../features/quotations/presentation/quotations_page.dart';
@@ -106,7 +107,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               ),
             ),
           ),
-          _page('/cobros', const CobrosPage()),
+          _page('/cuentas-por-cobrar', const CobrosPage()),
+          _page('/cuentas-por-pagar', const PayablesPage()),
+          // Redirect de la ruta vieja para no romper enlaces/atajos guardados.
+          GoRoute(
+            path: '/cobros',
+            redirect: (_, _) => '/cuentas-por-cobrar',
+          ),
           _page('/gastos', const ExpensesPage()),
           _page('/inventario', const InventoryPage()),
           _page('/compras', const PurchasesPage()),

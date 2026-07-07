@@ -204,6 +204,7 @@ class SaleCartItem {
     double? unitPrice,
     this.discountPct = 0,
     this.imeis = const <String>[],
+    this.priceTier = 'retail',
   }) : unitPrice = unitPrice ?? product.price;
 
   final SalesProduct product;
@@ -219,6 +220,19 @@ class SaleCartItem {
   /// IMEIs seleccionados para esta línea (celulares). Si no está vacío, la
   /// cantidad de la línea corresponde a la cantidad de IMEIs.
   final List<String> imeis;
+
+  /// Nivel de precio elegido para esta línea: 'retail' (Detalle) o
+  /// 'tier_1'..'tier_10'. El cajero puede cambiarlo por línea desde el
+  /// carrito; también se hereda del tier del cliente al agregar el producto.
+  /// Solo describe qué precio se aplicó — si el cajero edita el precio a mano,
+  /// [unitPrice] deja de coincidir con `product.priceFor(priceTier)` y el POS
+  /// lo muestra como "Personalizado".
+  final String priceTier;
+
+  /// True si el precio de la línea fue editado a mano y ya no corresponde al
+  /// precio del tier seleccionado.
+  bool get isCustomPrice =>
+      (unitPrice - product.priceFor(priceTier)).abs() > 0.005;
 
   /// Subtotal antes de descuento: cantidad × precio unitario.
   double get lineGross => _round2(quantity * unitPrice);

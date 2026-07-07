@@ -53,10 +53,16 @@ const quotationsNavItem = NavItem(
   allowedRoles: {'admin', 'supervisor', 'cashier', 'accountant'},
 );
 const cobrosNavItem = NavItem(
-  path: '/cobros',
-  label: 'Cobros',
-  icon: Icons.handshake_outlined,
+  path: '/cuentas-por-cobrar',
+  label: 'Cuentas por cobrar',
+  icon: Icons.request_page_outlined,
   allowedRoles: {'admin', 'supervisor', 'cashier', 'accountant'},
+);
+const payablesNavItem = NavItem(
+  path: '/cuentas-por-pagar',
+  label: 'Cuentas por pagar',
+  icon: Icons.payments_outlined,
+  allowedRoles: {'admin', 'supervisor', 'accountant'},
 );
 const inventoryNavItem = NavItem(
   path: '/inventario',
@@ -143,6 +149,7 @@ const navItems = [
   salesHistoryNavItem,
   quotationsNavItem,
   cobrosNavItem,
+  payablesNavItem,
   inventoryNavItem,
   purchasesNavItem,
   clientsNavItem,
@@ -166,10 +173,16 @@ const navSections = [
       salesNavItem,
       salesHistoryNavItem,
       quotationsNavItem,
-      cobrosNavItem,
       cashRegisterNavItem,
       pettyCashNavItem,
       expensesNavItem,
+    ],
+  ),
+  NavSection(
+    label: 'Contabilidad',
+    items: [
+      cobrosNavItem,
+      payablesNavItem,
     ],
   ),
   NavSection(
