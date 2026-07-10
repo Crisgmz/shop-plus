@@ -213,9 +213,13 @@ class PettyCashRepository {
       );
     }
 
-    final categories = await _fetchCategories(branchId);
-    final openSession = await _fetchOpenSession(branchId);
-    final recentSessions = await _fetchRecentSessions(branchId);
+    // Categorías, sesión abierta y sesiones recientes son independientes → en
+    // paralelo (3 round-trips → 1). Los movimientos dependen de la sesión.
+    final (categories, openSession, recentSessions) = await (
+      _fetchCategories(branchId),
+      _fetchOpenSession(branchId),
+      _fetchRecentSessions(branchId),
+    ).wait;
     final movements = openSession == null
         ? const <PettyCashMovement>[]
         : await fetchMovementsForSession(openSession.id);

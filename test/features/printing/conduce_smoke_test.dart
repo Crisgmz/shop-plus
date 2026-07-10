@@ -79,5 +79,16 @@ void main() {
       expect(a4.totalRows, isNotEmpty);
       expect(a4.itemRows.first.totalLabel, isNotEmpty);
     });
+
+    test('factura + conduce se combinan en un solo PDF (A4 y térmico)',
+        () async {
+      final factura = _sampleSale();
+      final conduce = factura.copyWith(hidePrices: true);
+      final a4 = await builder.buildDocumentsBytes([factura, conduce]);
+      final thermal =
+          await builder.buildThermalDocumentsBytes([factura, conduce]);
+      expect(a4, isNotEmpty);
+      expect(thermal, isNotEmpty);
+    });
   });
 }

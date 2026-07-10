@@ -8,17 +8,12 @@ import '../../features/printing/data/printing.dart';
 import '../../features/printing/presentation/network_printer_providers.dart';
 import 'app_snackbar.dart';
 
-<<<<<<< HEAD
 class PrintReceiptDialog extends ConsumerStatefulWidget {
-  const PrintReceiptDialog({super.key, required this.printData});
-=======
-class PrintReceiptDialog extends StatefulWidget {
   const PrintReceiptDialog({
     super.key,
     required this.printData,
     this.enableDeliveryNote = false,
   });
->>>>>>> b6a606c12aeabf4178a5ab0fab12ba9f1248adeb
 
   final PreparedPrintJobData printData;
 
@@ -48,9 +43,10 @@ class PrintReceiptDialog extends StatefulWidget {
 class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
   late PrintPaperSize _selectedSize;
 
-  /// Cuando está activo, el documento se imprime/previsualiza como CONDUCE
-  /// (sin precios). Solo disponible si [PrintReceiptDialog.enableDeliveryNote].
-  bool _asDeliveryNote = false;
+  /// Cuando está activo, además de la factura (obligatoria) se imprime un
+  /// conduce (nota de entrega sin precios) en la misma impresión. Solo
+  /// disponible si [PrintReceiptDialog.enableDeliveryNote].
+  bool _alsoPrintConduce = false;
 
   final _templateService = const PrintingTemplateService();
   bool _sendingTcp = false;
@@ -61,28 +57,22 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
     _selectedSize = widget.printData.paperSize;
   }
 
-  /// Documento efectivo a renderizar: el original, o su variante conduce
-  /// (mismos datos, `hidePrices: true`) cuando el toggle está activo.
-  PrintDocumentData get _effectiveDocument => _asDeliveryNote
-      ? widget.printData.document.copyWith(hidePrices: true)
-      : widget.printData.document;
+  /// La vista previa siempre muestra la factura (documento principal). El
+  /// conduce, si se pide, es un añadido a la impresión, no reemplaza la factura.
+  PrintDocumentData get _document => widget.printData.document;
 
-  A4DocumentTemplate get _a4Template => _asDeliveryNote
-      ? _templateService.buildA4Template(_effectiveDocument)
-      : (widget.printData.a4Template ??
-          _templateService.buildA4Template(widget.printData.document));
+  A4DocumentTemplate get _a4Template =>
+      widget.printData.a4Template ??
+      _templateService.buildA4Template(_document);
 
-  String get _docTitle {
-    if (_asDeliveryNote) return 'Conduce';
-    return switch (widget.printData.document.documentType) {
-      PrintDocumentType.quote => 'Cotización',
-      PrintDocumentType.fiscalInvoice => 'Factura Fiscal',
-      PrintDocumentType.purchaseOrder => 'Orden de compra',
-      PrintDocumentType.paymentReceipt => 'Recibo de abono',
-      PrintDocumentType.expenseVoucher => 'Comprobante de gasto',
-      _ => 'Recibo de venta',
-    };
-  }
+  String get _docTitle => switch (_document.documentType) {
+        PrintDocumentType.quote => 'Cotización',
+        PrintDocumentType.fiscalInvoice => 'Factura Fiscal',
+        PrintDocumentType.purchaseOrder => 'Orden de compra',
+        PrintDocumentType.paymentReceipt => 'Recibo de abono',
+        PrintDocumentType.expenseVoucher => 'Comprobante de gasto',
+        _ => 'Recibo de venta',
+      };
 
   /// Disparador del botón Imprimir.
   ///
@@ -100,27 +90,33 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
   ///      ventana), mostramos un hint sobre el bloqueador de pop-ups.
   ///   4. Solo cerramos el diálogo si la operación se completó OK.
   Future<void> _onPrintPressed(BuildContext context) async {
-    final doc = _effectiveDocument;
-    final name = doc.documentNumber;
+    final name = _document.documentNumber;
     final useThermal = _selectedSize == PrintPaperSize.thermal80mm;
     final navigator = Navigator.of(context);
     final messengerContext = context;
 
+    // La factura es obligatoria; si el toggle está activo, se agrega el conduce
+    // (sin precios) como página adicional del MISMO PDF, así ambos salen en una
+    // sola ventana de impresión (evita el bloqueo de pop-ups en Flutter Web).
+    final docs = <PrintDocumentData>[
+      _document,
+      if (_alsoPrintConduce) _document.copyWith(hidePrices: true),
+    ];
+
     try {
       final ok = await Printing.layoutPdf(
-        name: name,
+        name: docs.length > 1 ? '$name-con-conduce' : name,
         onLayout: (format) => useThermal
-            ? const PdfReceiptBuilder().buildThermalBytes(doc)
-            : const PdfReceiptBuilder().buildBytes(doc, pageFormat: format),
+            ? const PdfReceiptBuilder().buildThermalDocumentsBytes(docs)
+            : const PdfReceiptBuilder()
+                .buildDocumentsBytes(docs, pageFormat: format),
       );
-      if (!ok) {
-        if (messengerContext.mounted) {
-          AppSnackBar.info(
-            messengerContext,
-            'No se abrió la ventana de impresión. Si tu navegador la bloqueó, '
-            'permite las ventanas emergentes para este sitio.',
-          );
-        }
+      if (!ok && messengerContext.mounted) {
+        AppSnackBar.info(
+          messengerContext,
+          'Si tu navegador bloqueó la ventana de impresión, permite las '
+          'ventanas emergentes para este sitio.',
+        );
         return;
       }
       if (navigator.mounted) navigator.pop();
@@ -218,10 +214,10 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
             Expanded(
               child: ClipRect(
                 child: isThermal
-                    ? _ThermalPreview(document: _effectiveDocument)
+                    ? _ThermalPreview(document: _document)
                     : _A4Preview(
                         template: _a4Template,
-                        document: _effectiveDocument,
+                        document: _document,
                       ),
               ),
             ),
@@ -249,23 +245,28 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
         FilledButton.icon(
           onPressed: _sendingTcp ? null : () => _onPrintPressed(context),
           icon: const Icon(Icons.print_rounded, size: 18),
-          label: Text(_asDeliveryNote ? 'Imprimir conduce' : 'Imprimir'),
+          label: Text(
+            _alsoPrintConduce ? 'Imprimir factura + conduce' : 'Imprimir',
+          ),
         ),
       ],
     );
   }
 
-  /// Toggle "Conduce (sin precios)". Al activarlo, la vista previa y la
-  /// impresión pasan a la variante sin montos (misma venta, `hidePrices`).
+  /// Toggle "Imprimir también un conduce". Al activarlo, además de la factura
+  /// (obligatoria) se imprime un conduce sin precios como página extra del
+  /// mismo PDF. La vista previa siempre muestra la factura.
   Widget _buildDeliveryToggle() {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       decoration: BoxDecoration(
-        color: _asDeliveryNote ? const Color(0xFFEFF6FF) : const Color(0xFFF8FAFC),
+        color: _alsoPrintConduce
+            ? const Color(0xFFEFF6FF)
+            : const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: _asDeliveryNote
+          color: _alsoPrintConduce
               ? const Color(0xFFBFDBFE)
               : const Color(0xFFE2E8F0),
         ),
@@ -275,7 +276,7 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
           Icon(
             Icons.local_shipping_outlined,
             size: 18,
-            color: _asDeliveryNote
+            color: _alsoPrintConduce
                 ? const Color(0xFF1D4ED8)
                 : const Color(0xFF64748B),
           ),
@@ -285,19 +286,20 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Conduce (sin precios)',
+                  'Imprimir también un conduce',
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
                 ),
                 Text(
-                  'Nota de entrega: mismos productos y cantidades, sin montos.',
+                  'Junto con la factura sale un conduce (nota de entrega) con '
+                  'los mismos productos, sin precios.',
                   style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
                 ),
               ],
             ),
           ),
           Switch(
-            value: _asDeliveryNote,
-            onChanged: (v) => setState(() => _asDeliveryNote = v),
+            value: _alsoPrintConduce,
+            onChanged: (v) => setState(() => _alsoPrintConduce = v),
           ),
         ],
       ),

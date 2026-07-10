@@ -361,10 +361,13 @@ class CashRegisterRepository {
       );
     }
 
-    final openSession =
-        await _fetchActiveOrLatestOpenSession(branchId, activeSessionId);
-    final recentSessions = await _fetchRecentSessions(branchId);
-    final pettyCashExpensesToday = await _fetchPettyCashExpensesToday(branchId);
+    // Las tres cargas son independientes (solo `metrics` depende de la sesión
+    // abierta) → en paralelo (3 round-trips → 1).
+    final (openSession, recentSessions, pettyCashExpensesToday) = await (
+      _fetchActiveOrLatestOpenSession(branchId, activeSessionId),
+      _fetchRecentSessions(branchId),
+      _fetchPettyCashExpensesToday(branchId),
+    ).wait;
 
     CashSessionMetrics? metrics;
     if (openSession != null) {
@@ -565,17 +568,28 @@ class CashRegisterRepository {
     String cashSessionId,
     String branchId,
   ) async {
-    final payments = await _client
-        .from('payments')
-        .select('amount, payment_method')
+    // payments / expenses / sales de la sesión son independientes → en
+    // paralelo (3 round-trips → 1). Esta función corre en la pantalla de Caja
+    // y una vez por sesión en el resumen de cajas abiertas.
+    final salesFuture = _client
+        .from('sales')
+        .select('total_amount, change_amount')
         .eq('branch_id', branchId)
-        .eq('cash_session_id', cashSessionId);
-
-    final expenses = await _client
-        .from('expenses')
-        .select('amount, payment_method')
-        .eq('branch_id', branchId)
-        .eq('cash_session_id', cashSessionId);
+        .eq('cash_session_id', cashSessionId)
+        .neq('status', 'voided');
+    final (payments, expenses, salesRows) = await (
+      _client
+          .from('payments')
+          .select('amount, payment_method')
+          .eq('branch_id', branchId)
+          .eq('cash_session_id', cashSessionId),
+      _client
+          .from('expenses')
+          .select('amount, payment_method')
+          .eq('branch_id', branchId)
+          .eq('cash_session_id', cashSessionId),
+      salesFuture,
+    ).wait;
 
     final totalPayments = _round2(
       payments.fold<double>(
@@ -601,12 +615,6 @@ class CashRegisterRepository {
         (m) => m != 'cash' && m != 'card' && m != 'transfer');
 
     // Total vendido y cambio entregado (sobrepagos) de las ventas de la sesión.
-    final salesRows = await _client
-        .from('sales')
-        .select('total_amount, change_amount')
-        .eq('branch_id', branchId)
-        .eq('cash_session_id', cashSessionId)
-        .neq('status', 'voided');
     final salesTotal = _round2(salesRows.fold<double>(
         0, (sum, item) => sum + _toDouble((item as Map)['total_amount'])));
     final changeGiven = _round2(salesRows.fold<double>(

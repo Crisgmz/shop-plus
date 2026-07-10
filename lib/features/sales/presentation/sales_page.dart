@@ -1359,8 +1359,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       final printAfterSale = settings?.receiptPrintAfterSale ?? true;
       final disableConfirmation =
           settings?.saleDisableCompleteConfirmation ?? true;
-      // Habilita el toggle "Conduce (sin precios)" en el diálogo de impresión.
-      final enableConduce = settings?.appEnableDeliveryNotes ?? false;
+      // El conduce (nota de entrega sin precios) está disponible en toda venta:
+      // el toggle en la vista previa y el modal "¿Imprimir conduce?" tras
+      // imprimir. Siempre activo para no esconderlo detrás de un ajuste.
+      const enableConduce = true;
 
       // Auto-imprimir si app_settings.receipt_print_after_sale = true.
       if (printJob != null && printAfterSale) {
@@ -3156,26 +3158,10 @@ class _ClientPickerSheetState extends State<_ClientPickerSheet> {
               ),
               const SizedBox(height: 8),
               Flexible(
-                child: ListView(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  children: [
-                    if (showGeneral)
-                      _tile(
-                        context,
-                        id: null,
-                        label: widget.generalLabel,
-                        icon: Icons.person_outline,
-                      ),
-                    for (final c in filtered)
-                      _tile(
-                        context,
-                        id: c.id,
-                        label: c.fullName,
-                        subtitle: c.documentNumber,
-                        icon: Icons.person_rounded,
-                      ),
-                    if (filtered.isEmpty && !showGeneral)
-                      const Padding(
+                // ListView.builder: solo construye las filas visibles, no una
+                // ListTile por cada cliente del catálogo en cada tecleo.
+                child: (filtered.isEmpty && !showGeneral)
+                    ? const Padding(
                         padding: EdgeInsets.all(24),
                         child: Center(
                           child: Text(
@@ -3183,9 +3169,30 @@ class _ClientPickerSheetState extends State<_ClientPickerSheet> {
                             style: TextStyle(color: Color(0xFF94A3B8)),
                           ),
                         ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        itemCount: filtered.length + (showGeneral ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (showGeneral && index == 0) {
+                            return _tile(
+                              context,
+                              id: null,
+                              label: widget.generalLabel,
+                              icon: Icons.person_outline,
+                            );
+                          }
+                          final c =
+                              filtered[index - (showGeneral ? 1 : 0)];
+                          return _tile(
+                            context,
+                            id: c.id,
+                            label: c.fullName,
+                            subtitle: c.documentNumber,
+                            icon: Icons.person_rounded,
+                          );
+                        },
                       ),
-                  ],
-                ),
               ),
             ],
           ),

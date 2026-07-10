@@ -131,8 +131,9 @@ class SalesHistoryRepository {
       return SalesHistoryPage(rows: const [], hasMore: false);
     }
 
-    final clientsById = await _loadClientsById(branchId);
-    final cashiersById = await _loadCashiersById();
+    // Clientes y cajeros no dependen entre sí → en paralelo (2 round-trips → 1).
+    final (clientsById, cashiersById) =
+        await (_loadClientsById(branchId), _loadCashiersById()).wait;
 
     final from = pageIndex * pageSize;
     final to = from + pageSize; // pedimos 1 extra para saber si hay más
@@ -185,20 +186,22 @@ class SalesHistoryRepository {
     final hasMore = list.length > pageSize;
     final page = hasMore ? list.sublist(0, pageSize) : list;
 
-    // Conteo de items por venta — una sola query con IN.
+    // Enriquecimiento de la página: conteo de items, caja que hizo cada venta,
+    // ganancia y método de cobro. Las cuatro son independientes y se resuelven
+    // por ids de la página → en paralelo (4 round-trips → 1).
     final saleIds = page.map((m) => (m['id'] ?? '').toString()).toList();
-    final itemsCount = await _loadItemsCount(branchId, saleIds);
-
-    // Caja (registro) que hizo cada venta, ganancia y método de cobro.
     final sessionIds = page
         .map((m) => m['cash_session_id']?.toString())
         .whereType<String>()
         .where((s) => s.isNotEmpty)
         .toSet()
         .toList(growable: false);
-    final registerBySession = await _loadRegisterNames(sessionIds);
-    final cogsBySale = await _loadCogsBySale(branchId, saleIds);
-    final methodBySale = await _loadPaymentMethods(branchId, saleIds);
+    final (itemsCount, registerBySession, cogsBySale, methodBySale) = await (
+      _loadItemsCount(branchId, saleIds),
+      _loadRegisterNames(sessionIds),
+      _loadCogsBySale(branchId, saleIds),
+      _loadPaymentMethods(branchId, saleIds),
+    ).wait;
 
     final result = page.map((m) {
       final id = (m['id'] ?? '').toString();

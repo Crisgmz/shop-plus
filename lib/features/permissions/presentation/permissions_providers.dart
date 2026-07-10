@@ -14,7 +14,9 @@ final allPermissionsProvider =
   return repo.fetchAllPermissions();
 });
 
-final effectivePermissionsProvider = FutureProvider.family<
+// autoDispose: al recorrer usuarios en el admin de permisos, sin esto se
+// acumulaba una lista cacheada por cada combinación usuario/sucursal.
+final effectivePermissionsProvider = FutureProvider.autoDispose.family<
     List<EffectivePermission>,
     ({String userId, String branchId})>((ref, args) async {
   final repo = ref.watch(permissionsRepositoryProvider);

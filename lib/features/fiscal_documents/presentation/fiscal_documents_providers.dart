@@ -29,8 +29,10 @@ final fiscalDocumentsProvider =
   );
 });
 
+// autoDispose: se libera al cerrar el detalle (evita cachear un documento por
+// cada id visitado durante la sesión).
 final fiscalDocumentDetailProvider =
-    FutureProvider.family<FiscalDocument?, String>((ref, id) async {
+    FutureProvider.autoDispose.family<FiscalDocument?, String>((ref, id) async {
   final repo = ref.watch(fiscalDocumentsRepositoryProvider);
   return repo.fetchDocument(id);
 });

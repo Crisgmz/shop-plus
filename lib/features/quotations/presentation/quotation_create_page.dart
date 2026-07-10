@@ -613,6 +613,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
               ),
               itemCount: filtered.length,
               itemBuilder: (context, index) => _ProductCard(
+                key: ValueKey(filtered[index].id),
                 product: filtered[index],
                 disabled: !_canEditDocument,
                 onTap: () => _addItem(filtered[index]),
@@ -719,6 +720,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                     padding: const EdgeInsets.all(AppTokens.s12),
                     itemCount: _items.length,
                     itemBuilder: (context, index) => _QuoteLineTile(
+                      key: ValueKey(_items[index].product.id),
                       item: _items[index],
                       readOnly: !_canEditDocument,
                       onDecrease: () => _updateQuantity(index, -1),
@@ -857,6 +859,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
 
 class _ProductCard extends StatelessWidget {
   const _ProductCard({
+    super.key,
     required this.product,
     required this.onTap,
     required this.disabled,
@@ -944,6 +947,7 @@ class _ProductCard extends StatelessWidget {
 /// Descuento % (editable) · Total (calculado).
 class _QuoteLineTile extends StatefulWidget {
   const _QuoteLineTile({
+    super.key,
     required this.item,
     required this.onDecrease,
     required this.onIncrease,

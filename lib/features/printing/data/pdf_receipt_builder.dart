@@ -52,38 +52,54 @@ class PdfReceiptBuilder {
   Future<Uint8List> buildBytes(
     PrintDocumentData data, {
     PdfPageFormat pageFormat = PdfPageFormat.a4,
+  }) =>
+      buildDocumentsBytes([data], pageFormat: pageFormat);
+
+  /// Igual que [buildBytes] pero concatena varios documentos como páginas de un
+  /// mismo PDF (ej. factura + conduce), para imprimirlos en una sola ventana de
+  /// impresión — en Flutter Web abrir dos ventanas seguidas suele bloquearse.
+  Future<Uint8List> buildDocumentsBytes(
+    List<PrintDocumentData> docs, {
+    PdfPageFormat pageFormat = PdfPageFormat.a4,
   }) async {
-    final doc = pw.Document(
-      title: data.documentNumber,
-      author: data.branch.name,
+    final pdf = pw.Document(
+      title: docs.first.documentNumber,
+      author: docs.first.branch.name,
     );
 
-    // QR: SOLO si el negocio configuró `company_qr_url` (data.qrBytes). Antes
-    // había un QR por defecto bundleado (assets/QR.png) que salía siempre; se
-    // quitó a pedido — el QR aparece únicamente si el usuario decide agregarlo.
-    // Reducir imágenes antes de embeberlas: evita el freeze de la UI al generar.
-    final qrBytes = await _shrinkImageForPdf(data.qrBytes, maxDim: 420);
-    final logoBytes = await _shrinkImageForPdf(data.branch.logoBytes, maxDim: 320);
+    for (final data in docs) {
+      // QR: SOLO si el negocio configuró `company_qr_url` (data.qrBytes).
+      // Reducir imágenes antes de embeberlas evita el freeze de la UI.
+      final qrBytes = await _shrinkImageForPdf(data.qrBytes, maxDim: 420);
+      final logoBytes =
+          await _shrinkImageForPdf(data.branch.logoBytes, maxDim: 320);
 
-    doc.addPage(
-      pw.Page(
-        pageFormat: pageFormat,
-        margin: const pw.EdgeInsets.all(36),
-        build: (context) =>
-            _buildContent(data, qrBytes: qrBytes, logoBytes: logoBytes),
-      ),
-    );
+      pdf.addPage(
+        pw.Page(
+          pageFormat: pageFormat,
+          margin: const pw.EdgeInsets.all(36),
+          build: (context) =>
+              _buildContent(data, qrBytes: qrBytes, logoBytes: logoBytes),
+        ),
+      );
+    }
 
-    return doc.save();
+    return pdf.save();
   }
 
   /// Construye el PDF en formato ticket térmico ~80mm de ancho.
   /// Layout vertical: logo → empresa centrada → bloque metadata derecha →
   /// "Factura a:" → cliente → items → totales → barcode.
-  Future<Uint8List> buildThermalBytes(PrintDocumentData data) async {
-    final doc = pw.Document(
-      title: data.documentNumber,
-      author: data.branch.name,
+  Future<Uint8List> buildThermalBytes(PrintDocumentData data) =>
+      buildThermalDocumentsBytes([data]);
+
+  /// Varios documentos térmicos concatenados en un solo PDF (factura + conduce).
+  Future<Uint8List> buildThermalDocumentsBytes(
+    List<PrintDocumentData> docs,
+  ) async {
+    final pdf = pw.Document(
+      title: docs.first.documentNumber,
+      author: docs.first.branch.name,
     );
 
     // 80mm = 226.77pt; usamos altura infinita (roll continuo).
@@ -93,16 +109,18 @@ class PdfReceiptBuilder {
       marginAll: 8 * PdfPageFormat.mm,
     );
 
-    final logoBytes = await _shrinkImageForPdf(data.branch.logoBytes, maxDim: 320);
+    for (final data in docs) {
+      final logoBytes =
+          await _shrinkImageForPdf(data.branch.logoBytes, maxDim: 320);
+      pdf.addPage(
+        pw.Page(
+          pageFormat: format,
+          build: (context) => _buildThermalContent(data, logoBytes),
+        ),
+      );
+    }
 
-    doc.addPage(
-      pw.Page(
-        pageFormat: format,
-        build: (context) => _buildThermalContent(data, logoBytes),
-      ),
-    );
-
-    return doc.save();
+    return pdf.save();
   }
 
   pw.Widget _buildContent(

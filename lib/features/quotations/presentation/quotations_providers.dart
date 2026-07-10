@@ -131,7 +131,10 @@ final quotationClientsProvider = FutureProvider<List<QuoteClientOption>>((
   return repository.fetchClients();
 });
 
-final quotationDetailProvider = FutureProvider.family<QuoteDetail, String>((
+// autoDispose: se libera al cerrar el detalle. Sin esto, cada cotización
+// abierta en la sesión quedaba cacheada para siempre (crecimiento de memoria).
+final quotationDetailProvider =
+    FutureProvider.autoDispose.family<QuoteDetail, String>((
   ref,
   quoteId,
 ) async {

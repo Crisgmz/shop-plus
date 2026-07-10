@@ -568,6 +568,10 @@ class _DesktopSidebarState extends State<_DesktopSidebar> {
           Image.asset(
             'assets/shopplus_logo_white.png',
             height: 30,
+            // Downscale on decode: el PNG es ~1.5MP y sin esto se decodifica a
+            // resolución completa (~6MB en RAM) para un logo de 30px, y queda
+            // cacheado toda la sesión (el header se ve en cada pantalla).
+            cacheHeight: 60,
             fit: BoxFit.contain,
           ),
           const Spacer(),
@@ -612,6 +616,7 @@ class _MobileMenuDrawer extends StatelessWidget {
                     Image.asset(
                       'assets/shopplus_logo_white.png',
                       height: 28,
+                      cacheHeight: 56,
                       fit: BoxFit.contain,
                     ),
                     const Spacer(),

@@ -156,18 +156,21 @@ class CobrosRepository {
     final branchId = await _currentBranchId();
     if (branchId == null) return const [];
 
-    final clientsById = await _loadClientsById(branchId);
-
-    final rows = await _client
-        .from('sales')
-        .select(
-          'id, sale_number, sale_date, client_id, receipt_type, ncf, total_amount, paid_amount, balance_due, status, due_date',
-        )
-        .eq('branch_id', branchId)
-        .gt('balance_due', 0)
-        .inFilter('status', ['credit', 'pending', 'completed'])
-        .order('due_date', ascending: true, nullsFirst: false)
-        .order('sale_date', ascending: false);
+    // El mapa de clientes y las ventas por cobrar son independientes → en
+    // paralelo (2 round-trips → 1).
+    final (clientsById, rows) = await (
+      _loadClientsById(branchId),
+      _client
+          .from('sales')
+          .select(
+            'id, sale_number, sale_date, client_id, receipt_type, ncf, total_amount, paid_amount, balance_due, status, due_date',
+          )
+          .eq('branch_id', branchId)
+          .gt('balance_due', 0)
+          .inFilter('status', ['credit', 'pending', 'completed'])
+          .order('due_date', ascending: true, nullsFirst: false)
+          .order('sale_date', ascending: false),
+    ).wait;
 
     return rows
         .map(
@@ -183,17 +186,19 @@ class CobrosRepository {
     final branchId = await _currentBranchId();
     if (branchId == null) return const [];
 
-    final clientsById = await _loadClientsById(branchId);
-    final salesById = await _loadSalesById(branchId);
-
-    final rows = await _client
-        .from('payments')
-        .select(
-          'id, sale_id, client_id, amount, payment_method, paid_at, reference',
-        )
-        .eq('branch_id', branchId)
-        .order('paid_at', ascending: false)
-        .limit(30);
+    // Clientes, ventas y pagos son independientes → en paralelo (3 → 1).
+    final (clientsById, salesById, rows) = await (
+      _loadClientsById(branchId),
+      _loadSalesById(branchId),
+      _client
+          .from('payments')
+          .select(
+            'id, sale_id, client_id, amount, payment_method, paid_at, reference',
+          )
+          .eq('branch_id', branchId)
+          .order('paid_at', ascending: false)
+          .limit(30),
+    ).wait;
 
     return rows
         .map(

@@ -838,9 +838,11 @@ class _NewPurchaseDialogState extends State<_NewPurchaseDialog> {
                             icon: const Icon(Icons.calendar_month_outlined),
                           ),
                         ),
-                        controller: TextEditingController(
-                          text: formatDate(_purchaseDate),
-                        ),
+                        // Campo de solo lectura: `key + initialValue` evita
+                        // asignar (y filtrar) un TextEditingController nuevo en
+                        // cada rebuild del formulario.
+                        key: ValueKey(_purchaseDate),
+                        initialValue: formatDate(_purchaseDate),
                       ),
                     ),
                   ],
@@ -886,9 +888,9 @@ class _NewPurchaseDialogState extends State<_NewPurchaseDialog> {
                             icon: const Icon(Icons.calendar_month_outlined),
                           ),
                         ),
-                        controller: TextEditingController(
-                          text: _expectedAt == null ? '' : formatDate(_expectedAt!),
-                        ),
+                        key: ValueKey(_expectedAt),
+                        initialValue:
+                            _expectedAt == null ? '' : formatDate(_expectedAt!),
                       ),
                     ),
                   ],
@@ -1931,6 +1933,9 @@ class _ProductAutocompleteState extends State<_ProductAutocomplete> {
         );
       },
       optionsViewBuilder: (context, onSelected, options) {
+        // Materializar una vez: `options` es un iterable perezoso (.where), y
+        // `elementAt(index)` por fila lo re-recorre desde el inicio → O(n²).
+        final opts = options.toList(growable: false);
         return Align(
           alignment: Alignment.topLeft,
           child: Material(
@@ -1941,9 +1946,9 @@ class _ProductAutocompleteState extends State<_ProductAutocomplete> {
               child: ListView.builder(
                 padding: EdgeInsets.zero,
                 shrinkWrap: true,
-                itemCount: options.length,
+                itemCount: opts.length,
                 itemBuilder: (context, index) {
-                  final product = options.elementAt(index);
+                  final product = opts[index];
                   return InkWell(
                     onTap: () => onSelected(product),
                     child: Padding(

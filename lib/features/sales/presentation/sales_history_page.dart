@@ -8,7 +8,6 @@ import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/print_receipt_dialog.dart';
 import '../../../shared/widgets/ui_custom.dart';
-import '../../settings/presentation/app_settings_providers.dart';
 import '../data/sales_history_repository.dart';
 import 'sales_history_providers.dart';
 import 'sales_providers.dart';
@@ -684,13 +683,11 @@ class _RowActions extends ConsumerWidget {
         );
         return;
       }
-      final enableConduce =
-          ref.read(appSettingsProvider).valueOrNull?.appEnableDeliveryNotes ??
-              false;
+      // Conduce siempre disponible al reimprimir una venta.
       await PrintReceiptDialog.show(
         context,
         job,
-        enableDeliveryNote: enableConduce,
+        enableDeliveryNote: true,
       );
     } catch (e) {
       if (!context.mounted) return;

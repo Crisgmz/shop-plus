@@ -559,21 +559,23 @@ class ReportsRepository {
     final fromIso = _isoDate(from);
     final toIso = _isoDate(to);
 
-    final expenses = await _client
-        .from('expenses')
-        .select('expense_date, category, description, amount, payment_method')
-        .eq('branch_id', branchId)
-        .gte('expense_date', fromIso)
-        .lte('expense_date', toIso)
-        .order('expense_date', ascending: false);
-
-    final purchases = await _client
-        .from('purchases')
-        .select('purchase_date, purchase_number, total_amount, status')
-        .eq('branch_id', branchId)
-        .gte('purchase_date', fromIso)
-        .lte('purchase_date', toIso)
-        .order('purchase_date', ascending: false);
+    // Gastos y compras son independientes → en paralelo (2 round-trips → 1).
+    final (expenses, purchases) = await (
+      _client
+          .from('expenses')
+          .select('expense_date, category, description, amount, payment_method')
+          .eq('branch_id', branchId)
+          .gte('expense_date', fromIso)
+          .lte('expense_date', toIso)
+          .order('expense_date', ascending: false),
+      _client
+          .from('purchases')
+          .select('purchase_date, purchase_number, total_amount, status')
+          .eq('branch_id', branchId)
+          .gte('purchase_date', fromIso)
+          .lte('purchase_date', toIso)
+          .order('purchase_date', ascending: false),
+    ).wait;
 
     final out = <OutgoingPaymentRow>[];
     for (final raw in expenses) {

@@ -76,6 +76,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       Image.asset(
                         'assets/shopplus_logo.png',
                         height: 64,
+                        // El PNG es ~1.5MP (2MB); sin cacheHeight se decodifica
+                        // a full-res (~6MB) en el primer paint del login.
+                        cacheHeight: 128,
                         fit: BoxFit.contain,
                       ),
                       const SizedBox(height: 16),

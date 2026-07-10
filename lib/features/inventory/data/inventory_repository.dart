@@ -758,18 +758,52 @@ class InventoryRepository {
 
     final entries = <ProductMovementEntry>[];
 
-    // Ventas
-    final saleItems = await _client
-        .from('sale_items')
-        .select(
-          'quantity, line_total, created_at, sale_id, '
-          'sales(sale_number, sale_date, status)',
-        )
-        .eq('branch_id', branchId)
-        .eq('product_id', productId)
-        .order('created_at', ascending: false)
-        .limit(limit);
+    // Las 4 fuentes del historial (ventas, compras, movimientos, devoluciones)
+    // son independientes → en paralelo (4 round-trips → 1). El orden de
+    // agregado no importa: `entries` se ordena por fecha al final.
+    final (saleItems, purchaseItems, movements, returnItems) = await (
+      _client
+          .from('sale_items')
+          .select(
+            'quantity, line_total, created_at, sale_id, '
+            'sales(sale_number, sale_date, status)',
+          )
+          .eq('branch_id', branchId)
+          .eq('product_id', productId)
+          .order('created_at', ascending: false)
+          .limit(limit),
+      _client
+          .from('purchase_items')
+          .select(
+            'quantity, line_total, created_at, purchase_id, '
+            'purchases(purchase_number, purchase_date, status)',
+          )
+          .eq('branch_id', branchId)
+          .eq('product_id', productId)
+          .order('created_at', ascending: false)
+          .limit(limit),
+      _client
+          .from('inventory_movements')
+          .select(
+            'quantity, unit_cost, occurred_at, movement_type, reason, notes',
+          )
+          .eq('branch_id', branchId)
+          .eq('product_id', productId)
+          .order('occurred_at', ascending: false)
+          .limit(limit),
+      _client
+          .from('return_items')
+          .select(
+            'quantity, line_total, created_at, return_id, '
+            'returns(return_number, return_date)',
+          )
+          .eq('branch_id', branchId)
+          .eq('product_id', productId)
+          .order('created_at', ascending: false)
+          .limit(limit),
+    ).wait;
 
+    // Ventas
     for (final raw in saleItems) {
       final row = Map<String, dynamic>.from(raw as Map);
       final sale = row['sales'];
@@ -793,17 +827,6 @@ class InventoryRepository {
     }
 
     // Compras
-    final purchaseItems = await _client
-        .from('purchase_items')
-        .select(
-          'quantity, line_total, created_at, purchase_id, '
-          'purchases(purchase_number, purchase_date, status)',
-        )
-        .eq('branch_id', branchId)
-        .eq('product_id', productId)
-        .order('created_at', ascending: false)
-        .limit(limit);
-
     for (final raw in purchaseItems) {
       final row = Map<String, dynamic>.from(raw as Map);
       final purchase = row['purchases'];
@@ -829,16 +852,6 @@ class InventoryRepository {
     }
 
     // Movimientos manuales (mermas/ajustes/traslados)
-    final movements = await _client
-        .from('inventory_movements')
-        .select(
-          'quantity, unit_cost, occurred_at, movement_type, reason, notes',
-        )
-        .eq('branch_id', branchId)
-        .eq('product_id', productId)
-        .order('occurred_at', ascending: false)
-        .limit(limit);
-
     for (final raw in movements) {
       final row = Map<String, dynamic>.from(raw as Map);
       final type = (row['movement_type'] ?? '').toString();
@@ -862,17 +875,6 @@ class InventoryRepository {
     }
 
     // Devoluciones
-    final returnItems = await _client
-        .from('return_items')
-        .select(
-          'quantity, line_total, created_at, return_id, '
-          'returns(return_number, return_date)',
-        )
-        .eq('branch_id', branchId)
-        .eq('product_id', productId)
-        .order('created_at', ascending: false)
-        .limit(limit);
-
     for (final raw in returnItems) {
       final row = Map<String, dynamic>.from(raw as Map);
       final ret = row['returns'];

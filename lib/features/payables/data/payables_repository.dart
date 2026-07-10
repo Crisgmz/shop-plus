@@ -151,19 +151,21 @@ class PayablesRepository {
     final branchId = await _currentBranchId();
     if (branchId == null) return const [];
 
-    final suppliersById = await _loadSuppliersById(branchId);
-
-    final rows = await _client
-        .from('purchases')
-        .select(
-          'id, purchase_number, invoice_number, purchase_date, supplier_id, '
-          'total_amount, paid_amount, balance_due, status, due_date',
-        )
-        .eq('branch_id', branchId)
-        .gt('balance_due', 0)
-        .neq('status', 'cancelled')
-        .order('due_date', ascending: true, nullsFirst: false)
-        .order('purchase_date', ascending: false);
+    // Proveedores y compras por pagar son independientes → en paralelo (2 → 1).
+    final (suppliersById, rows) = await (
+      _loadSuppliersById(branchId),
+      _client
+          .from('purchases')
+          .select(
+            'id, purchase_number, invoice_number, purchase_date, supplier_id, '
+            'total_amount, paid_amount, balance_due, status, due_date',
+          )
+          .eq('branch_id', branchId)
+          .gt('balance_due', 0)
+          .neq('status', 'cancelled')
+          .order('due_date', ascending: true, nullsFirst: false)
+          .order('purchase_date', ascending: false),
+    ).wait;
 
     return rows
         .map(
@@ -179,17 +181,19 @@ class PayablesRepository {
     final branchId = await _currentBranchId();
     if (branchId == null) return const [];
 
-    final suppliersById = await _loadSuppliersById(branchId);
-    final purchasesById = await _loadPurchasesById(branchId);
-
-    final rows = await _client
-        .from('supplier_payments')
-        .select(
-          'id, purchase_id, supplier_id, amount, payment_method, paid_at, reference',
-        )
-        .eq('branch_id', branchId)
-        .order('paid_at', ascending: false)
-        .limit(30);
+    // Proveedores, compras y pagos son independientes → en paralelo (3 → 1).
+    final (suppliersById, purchasesById, rows) = await (
+      _loadSuppliersById(branchId),
+      _loadPurchasesById(branchId),
+      _client
+          .from('supplier_payments')
+          .select(
+            'id, purchase_id, supplier_id, amount, payment_method, paid_at, reference',
+          )
+          .eq('branch_id', branchId)
+          .order('paid_at', ascending: false)
+          .limit(30),
+    ).wait;
 
     return rows
         .map(
