@@ -8,6 +8,7 @@ import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/print_receipt_dialog.dart';
 import '../../../shared/widgets/ui_custom.dart';
+import '../../settings/presentation/app_settings_providers.dart';
 import '../data/sales_history_repository.dart';
 import 'sales_history_providers.dart';
 import 'sales_providers.dart';
@@ -683,7 +684,14 @@ class _RowActions extends ConsumerWidget {
         );
         return;
       }
-      await PrintReceiptDialog.show(context, job);
+      final enableConduce =
+          ref.read(appSettingsProvider).valueOrNull?.appEnableDeliveryNotes ??
+              false;
+      await PrintReceiptDialog.show(
+        context,
+        job,
+        enableDeliveryNote: enableConduce,
+      );
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

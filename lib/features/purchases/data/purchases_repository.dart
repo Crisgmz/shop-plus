@@ -149,6 +149,7 @@ class PurchaseCreateInput {
     this.paymentStatus = 'pending',
     this.purchaseCategory,
     this.expectedAt,
+    this.paidAmount,
   });
 
   final String supplierId;
@@ -159,6 +160,11 @@ class PurchaseCreateInput {
   final String paymentStatus;
   final String? purchaseCategory;
   final DateTime? expectedAt;
+
+  /// Monto pagado al proveedor al momento de crear la compra. Solo se usa
+  /// cuando `paymentStatus == 'partial'`. Para 'paid' se paga el total y para
+  /// 'pending' se paga 0 (queda como cuenta por pagar).
+  final double? paidAmount;
 }
 
 class PurchaseItemDetail {
@@ -307,6 +313,38 @@ class PurchasesRepository {
     );
     final totalAmount = _round2(subtotal + taxAmount);
 
+    // Monto pagado ahora → saldo (cuenta por pagar) según el estado de pago:
+    //   paid    → paga el total (no queda saldo).
+    //   pending → paga 0 (queda todo como cuenta por pagar).
+    //   partial → paga input.paidAmount (acotado a [0, total]).
+    final double paidNow;
+    switch (input.paymentStatus) {
+      case 'paid':
+        paidNow = totalAmount;
+        break;
+      case 'partial':
+        paidNow = _round2(
+          (input.paidAmount ?? 0).clamp(0, totalAmount).toDouble(),
+        );
+        break;
+      default: // 'pending'
+        paidNow = 0;
+    }
+    final balanceDue = _round2(totalAmount - paidNow);
+
+    // Fecha de vencimiento: si queda saldo, la deriva de los días de crédito
+    // del proveedor (payment_terms_days). Si no tiene términos, vence el mismo
+    // día de la compra.
+    String? dueDate;
+    if (balanceDue > 0) {
+      final termsDays = await _supplierPaymentTermsDays(branchId, input.supplierId);
+      dueDate = input.purchaseDate
+          .add(Duration(days: termsDays))
+          .toIso8601String()
+          .split('T')
+          .first;
+    }
+
     final purchaseNumber = _buildPurchaseNumber();
 
     final createdPurchase = await _client
@@ -326,6 +364,9 @@ class PurchasesRepository {
           'discount_amount': 0,
           'tax_amount': taxAmount,
           'total_amount': totalAmount,
+          'paid_amount': paidNow,
+          'balance_due': balanceDue,
+          'due_date': dueDate,
         })
         .select('id')
         .single();
@@ -361,6 +402,18 @@ class PurchasesRepository {
     );
     final totalAmount = _round2(subtotal + taxAmount);
 
+    // Conservar lo ya pagado (abonos reales al proveedor) y recalcular el saldo
+    // contra el nuevo total, para que Cuentas por Pagar quede consistente.
+    final existing = await _client
+        .from('purchases')
+        .select('paid_amount')
+        .eq('id', purchaseId)
+        .eq('branch_id', branchId)
+        .single();
+    final paid = _round2(_toDouble(existing['paid_amount']));
+    final balanceDue =
+        _round2((totalAmount - paid).clamp(0, totalAmount).toDouble());
+
     final updated = await _client
         .from('purchases')
         .update({
@@ -376,6 +429,7 @@ class PurchasesRepository {
           'discount_amount': 0,
           'tax_amount': taxAmount,
           'total_amount': totalAmount,
+          'balance_due': balanceDue,
         })
         .eq('id', purchaseId)
         .eq('branch_id', branchId)
@@ -620,6 +674,27 @@ class PurchasesRepository {
           .update(update)
           .eq('id', line.product.id)
           .eq('branch_id', branchId);
+    }
+  }
+
+  /// Días de crédito configurados para el proveedor (0 si no tiene o falla).
+  Future<int> _supplierPaymentTermsDays(
+    String branchId,
+    String supplierId,
+  ) async {
+    try {
+      final rows = await _client
+          .from('suppliers')
+          .select('payment_terms_days')
+          .eq('id', supplierId)
+          .eq('branch_id', branchId)
+          .limit(1);
+      if (rows.isEmpty) return 0;
+      final value = (rows.first as Map)['payment_terms_days'];
+      if (value is int) return value;
+      return int.tryParse(value?.toString() ?? '') ?? 0;
+    } catch (_) {
+      return 0;
     }
   }
 

@@ -258,10 +258,19 @@ class QuotationsRepository implements QuotationsRepositoryContract {
   }
 
   @override
-  Future<QuoteConversionResult> convertToSale(String quoteId) async {
+  Future<QuoteConversionResult> convertToSale(
+    String quoteId, {
+    required String paymentMethod,
+    String? cashSessionId,
+  }) async {
     final result = await _client.rpc(
       'convert_quotation_to_sale',
-      params: {'target_quotation_id': quoteId},
+      params: {
+        'target_quotation_id': quoteId,
+        'requested_payment_method': paymentMethod,
+        if (cashSessionId != null && cashSessionId.isNotEmpty)
+          'requested_cash_session_id': cashSessionId,
+      },
     );
 
     final map = _parseMaybeMap(result);
@@ -500,7 +509,7 @@ class QuotationsRepository implements QuotationsRepositoryContract {
         .from('quotations')
         .select(
           'id, branch_id, code, status, created_at, valid_until, notes, '
-          'subtotal, tax_amount, total_amount, client_display_name',
+          'subtotal, tax_amount, total_amount, client_display_name, client_id',
         )
         .eq('id', quoteId)
         .single();
@@ -508,6 +517,24 @@ class QuotationsRepository implements QuotationsRepositoryContract {
     final quote = Map<String, dynamic>.from(quoteRow as Map);
     final branchId = (quote['branch_id'] ?? '').toString();
     if (branchId.isEmpty) return null;
+
+    // Datos completos del cliente (para el A4): dirección, teléfono, email, RNC.
+    final clientId = quote['client_id']?.toString();
+    Map<String, dynamic> client = const <String, dynamic>{};
+    if (clientId != null && clientId.isNotEmpty) {
+      final clientRows = await _client
+          .from('clients')
+          .select(
+            'full_name, legal_name, address, phone, email, '
+            'document_type, document_number',
+          )
+          .eq('id', clientId)
+          .eq('branch_id', branchId)
+          .limit(1);
+      if (clientRows.isNotEmpty) {
+        client = Map<String, dynamic>.from(clientRows.first as Map);
+      }
+    }
 
     final branchRows = await _client
         .from('branches')
@@ -573,6 +600,14 @@ class QuotationsRepository implements QuotationsRepositoryContract {
       signatoryTitle: _firstNonEmpty([settings['company_signatory_title']]),
       observation: _firstNonEmpty([settings['invoice_observation']]),
       showItbis: settings['invoice_show_itbis'] != false,
+      clientLegalName: _firstNonEmpty([client['legal_name']]),
+      clientDocument: _clientDocLabel(
+        client['document_type']?.toString(),
+        client['document_number']?.toString(),
+      ),
+      clientAddress: _firstNonEmpty([client['address']]),
+      clientPhone: _firstNonEmpty([client['phone']]),
+      clientEmail: _firstNonEmpty([client['email']]),
       notes: _nullIfEmpty(quote['notes']?.toString()),
       subtotal: _toDouble(quote['subtotal']),
       taxAmount: _toDouble(quote['tax_amount']),
@@ -649,6 +684,22 @@ String? _firstNonEmpty(List<dynamic> values) {
     if (s != null && s.isNotEmpty) return s;
   }
   return null;
+}
+
+/// Etiqueta del documento del cliente para el A4 (ej. "RNC: 130..." o
+/// "Cédula: 001..."). `null` si no hay número.
+String? _clientDocLabel(String? type, String? number) {
+  final n = (number ?? '').trim();
+  if (n.isEmpty) return null;
+  final t = (type ?? '').trim().toLowerCase();
+  final prefix = t == 'rnc'
+      ? 'RNC'
+      : (t.contains('céd') || t.contains('ced'))
+          ? 'Cédula'
+          : (t.contains('pas'))
+              ? 'Pasaporte'
+              : (t.isEmpty ? 'Doc' : type!.toUpperCase());
+  return '$prefix: $n';
 }
 
 double _toDouble(dynamic value) {

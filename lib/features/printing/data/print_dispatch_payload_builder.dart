@@ -208,6 +208,10 @@ String _documentTypeValue(PrintDocumentType value) {
       return 'purchase_order';
     case PrintDocumentType.creditNote:
       return 'credit_note';
+    case PrintDocumentType.paymentReceipt:
+      return 'payment_receipt';
+    case PrintDocumentType.expenseVoucher:
+      return 'expense_voucher';
   }
 }
 

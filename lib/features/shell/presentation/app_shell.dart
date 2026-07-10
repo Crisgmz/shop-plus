@@ -752,7 +752,7 @@ class _LoginCreditAlertState extends ConsumerState<_LoginCreditAlert> {
           action: SnackBarAction(
             label: 'Ver',
             textColor: Colors.white,
-            onPressed: () => context.go('/cobros'),
+            onPressed: () => context.go('/cuentas-por-cobrar'),
           ),
           content: Text(
             count == 1

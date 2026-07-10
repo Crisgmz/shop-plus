@@ -5,7 +5,9 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/tokens.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
+import '../../cash_register/presentation/cash_register_providers.dart';
 import '../data/quotations_models.dart';
+import 'convert_payment_dialog.dart';
 import 'quotations_providers.dart';
 
 class QuotationCreatePage extends ConsumerStatefulWidget {
@@ -143,7 +145,16 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                     stock: 0,
                     isActive: true,
                   );
-              return QuoteDraftLine(product: product, quantity: item.quantity);
+              final gross = item.quantity * item.unitPrice;
+              final discountPct = gross > 0
+                  ? QuotationsMath.round2(item.discountAmount / gross * 100)
+                  : 0.0;
+              return QuoteDraftLine(
+                product: product,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                discountPct: discountPct,
+              );
             }),
           );
       });
@@ -182,6 +193,23 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
       } else {
         _items[index] = current.copyWith(quantity: nextQuantity);
       }
+    });
+    _persistDraft();
+  }
+
+  void _updatePrice(int index, double value) {
+    if (!_canEditDocument) return;
+    setState(() {
+      _items[index] = _items[index].copyWith(unitPrice: value < 0 ? 0 : value);
+    });
+    _persistDraft();
+  }
+
+  void _updateDiscount(int index, double value) {
+    if (!_canEditDocument) return;
+    final clamped = value.clamp(0.0, 100.0);
+    setState(() {
+      _items[index] = _items[index].copyWith(discountPct: clamped);
     });
     _persistDraft();
   }
@@ -239,8 +267,9 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                 productSku: item.product.sku,
                 productDescription: item.product.description,
                 quantity: item.quantity,
-                unitPrice: item.product.price,
+                unitPrice: item.unitPrice,
                 taxRate: item.product.taxRate,
+                discountAmount: item.discountAmount,
               ),
             )
             .toList(growable: false),
@@ -330,32 +359,21 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
     final quoteId = widget.quoteId;
     if (quoteId == null) return;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Convertir a venta'),
-        content: Text(
-          'Se convertirá ${_quoteCode ?? 'la cotización'} en una venta pendiente con sus líneas y montos actuales. ¿Continuar?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Convertir'),
-          ),
-        ],
-      ),
+    final method = await showConvertPaymentDialog(
+      context,
+      quoteCode: _quoteCode ?? 'la cotización',
     );
 
-    if (confirmed != true) return;
+    if (method == null || !mounted) return;
 
     try {
       final result = await ref
           .read(quotationsRepositoryProvider)
-          .convertToSale(quoteId);
+          .convertToSale(
+            quoteId,
+            paymentMethod: method,
+            cashSessionId: ref.read(activeCashSessionIdProvider),
+          );
       ref.invalidate(quotationDetailProvider(quoteId));
       ref.invalidate(quotationsFoundationProvider);
       if (!mounted) return;
@@ -584,7 +602,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
 
         return LayoutBuilder(
           builder: (context, constraints) {
-            final columns = (constraints.maxWidth / 180).floor().clamp(2, 6);
+            final columns = (constraints.maxWidth / 150).floor().clamp(2, 8);
             return GridView.builder(
               padding: const EdgeInsets.only(bottom: AppTokens.s12),
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -629,33 +647,14 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                 ),
                 const SizedBox(height: AppTokens.s12),
                 clientsAsync.when(
-                  data: (clients) => DropdownButtonFormField<String?>(
-                    initialValue: _clientId,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Cliente',
-                      filled: true,
-                      fillColor: AppTokens.secondary,
-                      border: OutlineInputBorder(),
-                    ),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('Cliente general'),
-                      ),
-                      ...clients.map(
-                        (client) => DropdownMenuItem<String?>(
-                          value: client.id,
-                          child: Text(client.fullName),
-                        ),
-                      ),
-                    ],
-                    onChanged: _canEditDocument
-                        ? (value) {
-                            setState(() => _clientId = value);
-                            _persistDraft();
-                          }
-                        : null,
+                  data: (clients) => _ClientSearchField(
+                    currentId: _clientId,
+                    clients: clients,
+                    enabled: _canEditDocument,
+                    onChanged: (value) {
+                      setState(() => _clientId = value);
+                      _persistDraft();
+                    },
                   ),
                   loading: () => const LinearProgressIndicator(),
                   error: (error, _) => Text('Error cargando clientes: $error'),
@@ -726,6 +725,9 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                       onIncrease: () => _updateQuantity(index, 1),
                       onRemove: () =>
                           _updateQuantity(index, -_items[index].quantity),
+                      onPriceChanged: (value) => _updatePrice(index, value),
+                      onDiscountChanged: (value) =>
+                          _updateDiscount(index, value),
                     ),
                   ),
           ),
@@ -937,12 +939,17 @@ class _ProductCard extends StatelessWidget {
   }
 }
 
-class _QuoteLineTile extends StatelessWidget {
+/// Línea de cotización con el mismo estilo del carrito de facturación:
+/// tarjeta con nombre + campos Precio (editable) · Cantidad (+/-) ·
+/// Descuento % (editable) · Total (calculado).
+class _QuoteLineTile extends StatefulWidget {
   const _QuoteLineTile({
     required this.item,
     required this.onDecrease,
     required this.onIncrease,
     required this.onRemove,
+    required this.onPriceChanged,
+    required this.onDiscountChanged,
     required this.readOnly,
   });
 
@@ -950,10 +957,49 @@ class _QuoteLineTile extends StatelessWidget {
   final VoidCallback onDecrease;
   final VoidCallback onIncrease;
   final VoidCallback onRemove;
+  final ValueChanged<double> onPriceChanged;
+  final ValueChanged<double> onDiscountChanged;
   final bool readOnly;
 
   @override
+  State<_QuoteLineTile> createState() => _QuoteLineTileState();
+}
+
+class _QuoteLineTileState extends State<_QuoteLineTile> {
+  late final TextEditingController _priceCtrl;
+  late final TextEditingController _discountCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _priceCtrl = TextEditingController(text: _fmt(widget.item.unitPrice));
+    _discountCtrl = TextEditingController(text: _fmt(widget.item.discountPct));
+  }
+
+  @override
+  void didUpdateWidget(covariant _QuoteLineTile old) {
+    super.didUpdateWidget(old);
+    if (old.item.unitPrice != widget.item.unitPrice) {
+      _priceCtrl.text = _fmt(widget.item.unitPrice);
+    }
+    if (old.item.discountPct != widget.item.discountPct) {
+      _discountCtrl.text = _fmt(widget.item.discountPct);
+    }
+  }
+
+  @override
+  void dispose() {
+    _priceCtrl.dispose();
+    _discountCtrl.dispose();
+    super.dispose();
+  }
+
+  static String _fmt(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+
+  @override
   Widget build(BuildContext context) {
+    final item = widget.item;
     return Container(
       margin: const EdgeInsets.only(bottom: AppTokens.s8),
       padding: const EdgeInsets.all(AppTokens.s10),
@@ -961,70 +1007,232 @@ class _QuoteLineTile extends StatelessWidget {
         color: AppTokens.secondary,
         borderRadius: BorderRadius.circular(AppTokens.radius),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.product.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
-                    color: AppTokens.textPrimary,
-                  ),
-                ),
-                Text(
-                  '${money(item.product.price)} · ITBIS ${item.product.taxRate.toStringAsFixed(0)}%',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppTokens.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
           Row(
             children: [
-              if (!readOnly) ...[
-                _QtySmallBtn(icon: Icons.remove, onTap: onDecrease),
-                SizedBox(
-                  width: 32,
-                  child: Center(
-                    child: Text(
-                      qty(item.quantity),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.product.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: AppTokens.textPrimary,
                       ),
                     ),
-                  ),
+                    Text(
+                      'ITBIS ${item.product.taxRate.toStringAsFixed(0)}%'
+                      '${item.discountPct > 0 ? '  ·  Desc. ${_fmt(item.discountPct)}%' : ''}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppTokens.textSecondary,
+                      ),
+                    ),
+                  ],
                 ),
-                _QtySmallBtn(icon: Icons.add, onTap: onIncrease),
+              ),
+              if (!widget.readOnly)
                 IconButton(
-                  onPressed: onRemove,
+                  onPressed: widget.onRemove,
                   icon: const Icon(
-                    Icons.delete_outline_rounded,
+                    Icons.close_rounded,
                     size: 18,
                     color: AppTokens.error,
                   ),
                   visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
                 ),
-              ] else
-                Text(
-                  'Cant. ${qty(item.quantity)}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: AppTokens.textSecondary,
+            ],
+          ),
+          const SizedBox(height: AppTokens.s8),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                flex: 3,
+                child: _MiniField(
+                  label: 'Precio',
+                  controller: _priceCtrl,
+                  enabled: !widget.readOnly,
+                  onCommit: (raw) => widget.onPriceChanged(
+                    double.tryParse(raw) ?? item.unitPrice,
                   ),
                 ),
+              ),
+              const SizedBox(width: 6),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _MiniLabel('Cantidad'),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _QtySmallBtn(
+                        icon: Icons.remove,
+                        onTap: widget.readOnly ? () {} : widget.onDecrease,
+                      ),
+                      SizedBox(
+                        width: 30,
+                        child: Center(
+                          child: Text(
+                            qty(item.quantity),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ),
+                      _QtySmallBtn(
+                        icon: Icons.add,
+                        onTap: widget.readOnly ? () {} : widget.onIncrease,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                flex: 3,
+                child: _MiniField(
+                  label: 'Desc. %',
+                  controller: _discountCtrl,
+                  enabled: !widget.readOnly,
+                  onCommit: (raw) => widget.onDiscountChanged(
+                    double.tryParse(raw) ?? item.discountPct,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _MiniLabel('Total'),
+                    const SizedBox(height: 4),
+                    SizedBox(
+                      height: 36,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          money(item.lineTotal),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13,
+                            color: AppTokens.brandBlueDark,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ],
       ),
+    );
+  }
+}
+
+class _MiniLabel extends StatelessWidget {
+  const _MiniLabel(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 10,
+        color: AppTokens.textSecondary,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+}
+
+/// Mini-campo numérico con etiqueta que confirma su valor al perder el foco o
+/// al presionar enter (mismo comportamiento que el carrito de ventas).
+class _MiniField extends StatefulWidget {
+  const _MiniField({
+    required this.label,
+    required this.controller,
+    required this.onCommit,
+    this.enabled = true,
+  });
+
+  final String label;
+  final TextEditingController controller;
+  final ValueChanged<String> onCommit;
+  final bool enabled;
+
+  @override
+  State<_MiniField> createState() => _MiniFieldState();
+}
+
+class _MiniFieldState extends State<_MiniField> {
+  late final FocusNode _node;
+
+  @override
+  void initState() {
+    super.initState();
+    _node = FocusNode()..addListener(_onFocusChange);
+  }
+
+  void _onFocusChange() {
+    if (!_node.hasFocus) widget.onCommit(widget.controller.text);
+  }
+
+  @override
+  void dispose() {
+    _node.removeListener(_onFocusChange);
+    _node.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _MiniLabel(widget.label),
+        const SizedBox(height: 4),
+        SizedBox(
+          height: 36,
+          child: TextField(
+            controller: widget.controller,
+            focusNode: _node,
+            enabled: widget.enabled,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontSize: 13),
+            decoration: const InputDecoration(
+              isDense: true,
+              filled: true,
+              fillColor: Colors.white,
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              border: OutlineInputBorder(),
+              enabledBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: AppTokens.cardBorder),
+              ),
+            ),
+            onSubmitted: widget.onCommit,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1050,6 +1258,162 @@ class _QtySmallBtn extends StatelessWidget {
         ),
         child: Icon(icon, size: 14, color: AppTokens.textSecondary),
       ),
+    );
+  }
+}
+
+class _QuoteClientPick {
+  const _QuoteClientPick({required this.id, required this.label});
+  final String? id;
+  final String label;
+}
+
+/// Buscador de cliente escribible (mismo patrón que en ventas): al enfocar
+/// muestra la lista completa y al escribir filtra por nombre. Permite elegir
+/// "Cliente general" (id null).
+class _ClientSearchField extends StatefulWidget {
+  const _ClientSearchField({
+    required this.currentId,
+    required this.clients,
+    required this.onChanged,
+    required this.enabled,
+  });
+
+  final String? currentId;
+  final List<QuoteClientOption> clients;
+  final ValueChanged<String?> onChanged;
+  final bool enabled;
+
+  @override
+  State<_ClientSearchField> createState() => _ClientSearchFieldState();
+}
+
+class _ClientSearchFieldState extends State<_ClientSearchField> {
+  static const _generalLabel = 'Cliente general';
+
+  final _textController = TextEditingController();
+  final _focusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _textController.text = _labelForId(widget.currentId);
+  }
+
+  @override
+  void didUpdateWidget(_ClientSearchField old) {
+    super.didUpdateWidget(old);
+    if (old.currentId != widget.currentId && !_focusNode.hasFocus) {
+      _textController.text = _labelForId(widget.currentId);
+    }
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  String _labelForId(String? id) {
+    if (id == null) return _generalLabel;
+    for (final c in widget.clients) {
+      if (c.id == id) return c.fullName;
+    }
+    return _generalLabel;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RawAutocomplete<_QuoteClientPick>(
+      textEditingController: _textController,
+      focusNode: _focusNode,
+      displayStringForOption: (o) => o.label,
+      optionsBuilder: (value) {
+        if (!widget.enabled) return const Iterable<_QuoteClientPick>.empty();
+        final all = <_QuoteClientPick>[
+          const _QuoteClientPick(id: null, label: _generalLabel),
+          for (final c in widget.clients)
+            _QuoteClientPick(id: c.id, label: c.fullName),
+        ];
+        final q = value.text.trim().toLowerCase();
+        if (q.isEmpty || q == _labelForId(widget.currentId).toLowerCase()) {
+          return all;
+        }
+        return all.where((o) => o.label.toLowerCase().contains(q));
+      },
+      onSelected: (o) {
+        widget.onChanged(o.id);
+        _textController.text = o.label;
+        _focusNode.unfocus();
+      },
+      fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          enabled: widget.enabled,
+          style: const TextStyle(fontSize: 14),
+          onTap: () => controller.selection = TextSelection(
+            baseOffset: 0,
+            extentOffset: controller.text.length,
+          ),
+          decoration: InputDecoration(
+            labelText: 'Cliente',
+            filled: true,
+            fillColor: AppTokens.secondary,
+            border: const OutlineInputBorder(),
+            prefixIcon: const Icon(Icons.person_search_rounded, size: 20),
+            suffixIcon: widget.currentId != null
+                ? IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: 'Volver a Cliente general',
+                    onPressed: widget.enabled
+                        ? () {
+                            widget.onChanged(null);
+                            _textController.text = _generalLabel;
+                            _focusNode.unfocus();
+                          }
+                        : null,
+                  )
+                : const Icon(Icons.arrow_drop_down),
+          ),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(8),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 280, maxWidth: 420),
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: options.length,
+                itemBuilder: (ctx, i) {
+                  final o = options.elementAt(i);
+                  final selected = o.id == widget.currentId;
+                  return ListTile(
+                    dense: true,
+                    visualDensity: VisualDensity.compact,
+                    selected: selected,
+                    selectedTileColor: const Color(0xFFEFF6FF),
+                    leading: Icon(
+                      o.id == null
+                          ? Icons.person_outline
+                          : Icons.person_rounded,
+                      size: 18,
+                    ),
+                    title: Text(o.label, style: const TextStyle(fontSize: 13)),
+                    onTap: () => onSelected(o),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

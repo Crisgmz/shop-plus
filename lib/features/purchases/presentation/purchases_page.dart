@@ -709,6 +709,7 @@ class _NewPurchaseDialogState extends State<_NewPurchaseDialog> {
   final _invoiceController = TextEditingController();
   final _notesController = TextEditingController();
   final _categoryController = TextEditingController();
+  final _paidAmountController = TextEditingController(text: '0');
   final _qtyController = TextEditingController(text: '1');
   final _costController = TextEditingController(text: '0');
   final _taxController = TextEditingController(text: '0');
@@ -766,6 +767,7 @@ class _NewPurchaseDialogState extends State<_NewPurchaseDialog> {
   void dispose() {
     _invoiceController.dispose();
     _notesController.dispose();
+    _paidAmountController.dispose();
     _categoryController.dispose();
     _qtyController.dispose();
     _costController.dispose();
@@ -859,11 +861,25 @@ class _NewPurchaseDialogState extends State<_NewPurchaseDialog> {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    Expanded(
-                      child: TextFormField(
-                        readOnly: true,
-                        decoration: InputDecoration(
-                          labelText: 'Fecha esperada (opcional)',
+                    if (_paymentStatus == 'partial')
+                      Expanded(
+                        child: TextFormField(
+                          controller: _paidAmountController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'Monto pagado ahora',
+                            helperText: 'El resto queda como cuenta por pagar',
+                          ),
+                        ),
+                      )
+                    else
+                      Expanded(
+                        child: TextFormField(
+                          readOnly: true,
+                          decoration: InputDecoration(
+                            labelText: 'Fecha esperada (opcional)',
                           hintText: _expectedAt == null ? 'Sin fecha' : formatDate(_expectedAt!),
                           suffixIcon: IconButton(
                             onPressed: _pickExpectedDate,
@@ -1217,6 +1233,7 @@ class _NewPurchaseDialogState extends State<_NewPurchaseDialog> {
         invoiceNumber: _invoiceController.text,
         notes: _notesController.text,
         paymentStatus: _paymentStatus,
+        paidAmount: double.tryParse(_paidAmountController.text.trim()),
         purchaseCategory: _categoryController.text,
         expectedAt: _expectedAt,
       ),

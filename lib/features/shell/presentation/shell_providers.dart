@@ -9,6 +9,7 @@ import '../../cobros/presentation/cobros_providers.dart';
 import '../../dashboard/presentation/dashboard_providers.dart';
 import '../../expenses/presentation/expenses_providers.dart';
 import '../../inventory/presentation/inventory_providers.dart';
+import '../../payables/presentation/payables_providers.dart';
 import '../../purchases/presentation/purchases_providers.dart';
 import '../../reports/presentation/reports_providers.dart';
 import '../../sales/presentation/sales_providers.dart';
@@ -259,6 +260,8 @@ void invalidateBranchScopedData(dynamic ref) {
   invalidate(salesClientsProvider);
   invalidate(cobrosReceivablesProvider);
   invalidate(cobrosPaymentsProvider);
+  invalidate(payablesListProvider);
+  invalidate(supplierPaymentsProvider);
   invalidate(clientsListProvider);
   invalidate(suppliersListProvider);
   invalidate(purchasesListProvider);

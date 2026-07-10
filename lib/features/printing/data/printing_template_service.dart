@@ -8,6 +8,8 @@ class PrintingTemplateService {
     PrintDocumentData document, {
     int copies = 1,
   }) {
+    final hidePrices = document.hidePrices;
+    final title = hidePrices ? 'CONDUCE' : _thermalTitle(document.documentType);
     final rows = <ThermalTicketRow>[
       ThermalTicketRow(center: document.branch.name, emphasized: true),
       if (_notEmpty(document.branch.address))
@@ -17,7 +19,7 @@ class PrintingTemplateService {
       if (_notEmpty(document.branch.taxId))
         ThermalTicketRow(center: 'RNC: ${document.branch.taxId}'),
       const ThermalTicketRow(isDivider: true),
-      ThermalTicketRow(center: _thermalTitle(document.documentType), emphasized: true),
+      ThermalTicketRow(center: title, emphasized: true),
       ThermalTicketRow(left: 'Doc:', right: document.documentNumber),
       ThermalTicketRow(left: 'Fecha:', right: formatDateTime(document.issuedAt)),
       if (_notEmpty(document.receiptTypeLabel))
@@ -40,7 +42,8 @@ class PrintingTemplateService {
       rows.add(
         ThermalTicketRow(
           left: '${_qty(item.quantity)} x ${item.description}',
-          right: money(item.lineTotal),
+          // Conduce: sin monto por línea.
+          right: hidePrices ? null : money(item.lineTotal),
         ),
       );
       if (_notEmpty(item.notes)) {
@@ -48,31 +51,34 @@ class PrintingTemplateService {
       }
     }
 
-    rows.addAll([
-      const ThermalTicketRow(isDivider: true),
-      ThermalTicketRow(left: 'SUBTOTAL', right: money(document.totals.subtotal)),
-      if (document.totals.discount > 0)
-        ThermalTicketRow(left: 'DESCUENTO', right: money(-document.totals.discount)),
-      if (document.totals.serviceCharge > 0)
-        ThermalTicketRow(left: 'LEY/SERVICIO', right: money(document.totals.serviceCharge)),
-      ThermalTicketRow(left: 'ITBIS', right: money(document.totals.tax)),
-      ThermalTicketRow(
-        left: 'TOTAL',
-        right: money(document.totals.total),
-        emphasized: true,
-      ),
-      if (document.totals.paid > 0)
-        ThermalTicketRow(left: 'PAGADO', right: money(document.totals.paid)),
-      if (document.totals.balance > 0)
-        ThermalTicketRow(left: 'BALANCE', right: money(document.totals.balance)),
-    ]);
+    // El conduce omite totales y pagos por completo.
+    if (!hidePrices) {
+      rows.addAll([
+        const ThermalTicketRow(isDivider: true),
+        ThermalTicketRow(left: 'SUBTOTAL', right: money(document.totals.subtotal)),
+        if (document.totals.discount > 0)
+          ThermalTicketRow(left: 'DESCUENTO', right: money(-document.totals.discount)),
+        if (document.totals.serviceCharge > 0)
+          ThermalTicketRow(left: 'LEY/SERVICIO', right: money(document.totals.serviceCharge)),
+        ThermalTicketRow(left: 'ITBIS', right: money(document.totals.tax)),
+        ThermalTicketRow(
+          left: 'TOTAL',
+          right: money(document.totals.total),
+          emphasized: true,
+        ),
+        if (document.totals.paid > 0)
+          ThermalTicketRow(left: 'PAGADO', right: money(document.totals.paid)),
+        if (document.totals.balance > 0)
+          ThermalTicketRow(left: 'BALANCE', right: money(document.totals.balance)),
+      ]);
 
-    if (document.payments.isNotEmpty) {
-      rows.add(const ThermalTicketRow(isDivider: true));
-      for (final payment in document.payments) {
-        rows.add(
-          ThermalTicketRow(left: payment.method, right: money(payment.amount)),
-        );
+      if (document.payments.isNotEmpty) {
+        rows.add(const ThermalTicketRow(isDivider: true));
+        for (final payment in document.payments) {
+          rows.add(
+            ThermalTicketRow(left: payment.method, right: money(payment.amount)),
+          );
+        }
       }
     }
 
@@ -91,16 +97,17 @@ class PrintingTemplateService {
 
     return ThermalTicketTemplate(
       documentType: document.documentType,
-      title: _thermalTitle(document.documentType),
+      title: title,
       rows: rows,
       copies: copies,
     );
   }
 
   A4DocumentTemplate buildA4Template(PrintDocumentData document) {
+    final hidePrices = document.hidePrices;
     return A4DocumentTemplate(
       documentType: document.documentType,
-      title: _a4Title(document.documentType),
+      title: hidePrices ? 'Conduce' : _a4Title(document.documentType),
       headerRows: [
         A4KeyValueRow(label: 'Documento', value: document.documentNumber),
         A4KeyValueRow(label: 'Fecha', value: formatDateTime(document.issuedAt)),
@@ -129,12 +136,15 @@ class PrintingTemplateService {
             (item) => A4LineItemRow(
               description: item.description,
               quantityLabel: _qty(item.quantity),
-              unitPriceLabel: money(item.unitPrice),
-              totalLabel: money(item.lineTotal),
+              unitPriceLabel: hidePrices ? '' : money(item.unitPrice),
+              totalLabel: hidePrices ? '' : money(item.lineTotal),
             ),
           )
           .toList(growable: false),
-      totalRows: [
+      // En un conduce no se listan totales.
+      totalRows: hidePrices
+          ? const <A4KeyValueRow>[]
+          : [
         A4KeyValueRow(label: 'Subtotal', value: money(document.totals.subtotal)),
         if (document.totals.discount > 0)
           A4KeyValueRow(label: 'Descuento', value: money(-document.totals.discount)),
@@ -171,6 +181,10 @@ String _thermalTitle(PrintDocumentType type) {
       return 'ORDEN DE COMPRA';
     case PrintDocumentType.creditNote:
       return 'NOTA DE CREDITO';
+    case PrintDocumentType.paymentReceipt:
+      return 'RECIBO DE ABONO';
+    case PrintDocumentType.expenseVoucher:
+      return 'COMPROBANTE DE GASTO';
   }
 }
 
@@ -188,6 +202,10 @@ String _a4Title(PrintDocumentType type) {
       return 'Orden de compra';
     case PrintDocumentType.creditNote:
       return 'Nota de credito';
+    case PrintDocumentType.paymentReceipt:
+      return 'Recibo de abono';
+    case PrintDocumentType.expenseVoucher:
+      return 'Comprobante de gasto';
   }
 }
 

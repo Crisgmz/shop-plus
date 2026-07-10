@@ -17,6 +17,7 @@ import '../features/dashboard/presentation/dashboard_page.dart';
 import '../features/petty_cash/presentation/petty_cash_page.dart';
 import '../features/fiscal_documents/presentation/fiscal_documents_page.dart';
 import '../features/inventory/presentation/inventory_page.dart';
+import '../features/payables/presentation/payables_page.dart';
 import '../features/purchases/presentation/purchases_page.dart';
 import '../features/quotations/presentation/quotation_create_page.dart';
 import '../features/quotations/presentation/quotations_page.dart';
@@ -74,64 +75,142 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         ),
       ),
 
-      // All authenticated module routes share the AppShell via ShellRoute.
-      ShellRoute(
-        builder: (_, _, child) => AppShell(child: child),
-        routes: [
-          _page('/panel', const DashboardPage()),
-          _page('/panel/cierre', const CloseoutPage()),
-          _page('/ventas', const SalesEntryPage()),
-          _page('/ventas/historial', const SalesHistoryPage()),
-          GoRoute(
-            path: '/ventas/historial/:saleId/editar',
-            pageBuilder: (_, state) => NoTransitionPage(
-              child: SalesEditPage(
-                saleId: state.pathParameters['saleId'] ?? '',
+      // Todas las rutas autenticadas comparten el AppShell vía
+      // StatefulShellRoute.indexedStack: cada sección es una "branch" que se
+      // mantiene VIVA en un IndexedStack una vez visitada. Así, volver a entrar
+      // a una sección es instantáneo (no se reconstruye el árbol ni se pierde
+      // el scroll), que es justo lo que causaba el lag al navegar.
+      StatefulShellRoute.indexedStack(
+        builder: (_, _, navigationShell) => AppShell(child: navigationShell),
+        branches: [
+          // Panel + cierre
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/panel',
+                pageBuilder: (_, _) =>
+                    const NoTransitionPage(child: DashboardPage()),
+                routes: [
+                  GoRoute(
+                    path: 'cierre',
+                    pageBuilder: (_, _) =>
+                        const NoTransitionPage(child: CloseoutPage()),
+                  ),
+                ],
               ),
-            ),
+            ],
           ),
-          _page('/devoluciones', const ReturnsPage()),
-          _page('/cotizaciones', const QuotationsPage()),
-          GoRoute(
-            path: '/cotizaciones/nueva',
-            pageBuilder: (_, _) => const NoTransitionPage(
-              child: QuotationCreatePage(),
-            ),
-          ),
-          GoRoute(
-            path: '/cotizaciones/:quoteId',
-            pageBuilder: (_, state) => NoTransitionPage(
-              child: QuotationCreatePage(
-                quoteId: state.pathParameters['quoteId'],
+          // Ventas + historial + edición
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/ventas',
+                pageBuilder: (_, _) =>
+                    const NoTransitionPage(child: SalesEntryPage()),
+                routes: [
+                  GoRoute(
+                    path: 'historial',
+                    pageBuilder: (_, _) =>
+                        const NoTransitionPage(child: SalesHistoryPage()),
+                    routes: [
+                      GoRoute(
+                        path: ':saleId/editar',
+                        pageBuilder: (_, state) => NoTransitionPage(
+                          child: SalesEditPage(
+                            saleId: state.pathParameters['saleId'] ?? '',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
-            ),
+            ],
           ),
-          _page('/cobros', const CobrosPage()),
-          _page('/gastos', const ExpensesPage()),
-          _page('/inventario', const InventoryPage()),
-          _page('/compras', const PurchasesPage()),
-          _page('/clientes', const ClientsPage()),
-          _page('/proveedores', const SuppliersPage()),
-          _page('/caja', const CashRegisterPage()),
-          _page('/caja-chica', const PettyCashPage()),
-          _page('/reportes', const ReportsPage()),
-          _page('/comprobantes', const FiscalDocumentsPage()),
-          _page('/impuestos', const TaxesPage()),
-          _page('/sucursales', const BranchesPage()),
-          _page('/usuarios', const UsersPage()),
-          _page('/configuracion', const AppSettingsPage()),
-          _page('/configuracion/cuenta', const SettingsPage()),
+          _simpleBranch('/devoluciones', const ReturnsPage()),
+          // Cotizaciones + nueva + edición
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/cotizaciones',
+                pageBuilder: (_, _) =>
+                    const NoTransitionPage(child: QuotationsPage()),
+                routes: [
+                  GoRoute(
+                    path: 'nueva',
+                    pageBuilder: (_, _) =>
+                        const NoTransitionPage(child: QuotationCreatePage()),
+                  ),
+                  GoRoute(
+                    path: ':quoteId',
+                    pageBuilder: (_, state) => NoTransitionPage(
+                      child: QuotationCreatePage(
+                        quoteId: state.pathParameters['quoteId'],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          // Cuentas por cobrar (+ redirect de la ruta vieja /cobros)
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/cuentas-por-cobrar',
+                pageBuilder: (_, _) =>
+                    const NoTransitionPage(child: CobrosPage()),
+              ),
+              GoRoute(
+                path: '/cobros',
+                redirect: (_, _) => '/cuentas-por-cobrar',
+              ),
+            ],
+          ),
+          _simpleBranch('/cuentas-por-pagar', const PayablesPage()),
+          _simpleBranch('/gastos', const ExpensesPage()),
+          _simpleBranch('/inventario', const InventoryPage()),
+          _simpleBranch('/compras', const PurchasesPage()),
+          _simpleBranch('/clientes', const ClientsPage()),
+          _simpleBranch('/proveedores', const SuppliersPage()),
+          _simpleBranch('/caja', const CashRegisterPage()),
+          _simpleBranch('/caja-chica', const PettyCashPage()),
+          _simpleBranch('/reportes', const ReportsPage()),
+          _simpleBranch('/comprobantes', const FiscalDocumentsPage()),
+          _simpleBranch('/impuestos', const TaxesPage()),
+          _simpleBranch('/sucursales', const BranchesPage()),
+          _simpleBranch('/usuarios', const UsersPage()),
+          // Configuración + cuenta
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/configuracion',
+                pageBuilder: (_, _) =>
+                    const NoTransitionPage(child: AppSettingsPage()),
+                routes: [
+                  GoRoute(
+                    path: 'cuenta',
+                    pageBuilder: (_, _) =>
+                        const NoTransitionPage(child: SettingsPage()),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ],
       ),
     ],
   );
 });
 
-/// Helper that creates a [GoRoute] with [NoTransitionPage] (avoids flicker
-/// when switching between shell children).
-GoRoute _page(String path, Widget child) {
-  return GoRoute(
-    path: path,
-    pageBuilder: (_, _) => NoTransitionPage(child: child),
+/// Branch de una sección simple (una sola ruta) con [NoTransitionPage].
+StatefulShellBranch _simpleBranch(String path, Widget child) {
+  return StatefulShellBranch(
+    routes: [
+      GoRoute(
+        path: path,
+        pageBuilder: (_, _) => NoTransitionPage(child: child),
+      ),
+    ],
   );
 }

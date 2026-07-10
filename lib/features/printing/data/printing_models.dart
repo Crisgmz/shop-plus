@@ -5,6 +5,8 @@ enum PrintDocumentType {
   quote,
   purchaseOrder,
   creditNote,
+  paymentReceipt,
+  expenseVoucher,
 }
 
 enum PrintPaperSize {
@@ -225,6 +227,7 @@ class PrintDocumentData {
     this.observation,
     this.showTax = true,
     this.qrBytes,
+    this.hidePrices = false,
   });
 
   final PrintDocumentType documentType;
@@ -269,6 +272,43 @@ class PrintDocumentData {
   /// Bytes del código QR para el pie del A4 (descargado de `company_qr_url`).
   /// Si es null, el builder usa el asset `assets/QR.png` como fallback.
   final List<int>? qrBytes;
+
+  /// Si true, el documento se imprime como CONDUCE (nota de entrega): se
+  /// omiten precios unitarios, subtotales, ITBIS, totales y pagos. Solo se
+  /// listan descripción y cantidad de cada ítem. Reusa los mismos datos de la
+  /// venta para que el cliente firme la entrega de mercancía sin ver montos.
+  final bool hidePrices;
+
+  /// Copia con overrides. Se usa sobre todo para derivar el conduce
+  /// (`hidePrices: true`) a partir del documento de venta ya armado.
+  PrintDocumentData copyWith({bool? hidePrices}) {
+    return PrintDocumentData(
+      documentType: documentType,
+      documentNumber: documentNumber,
+      issuedAt: issuedAt,
+      branch: branch,
+      items: items,
+      totals: totals,
+      customer: customer,
+      cashierName: cashierName,
+      referenceNumber: referenceNumber,
+      receiptTypeLabel: receiptTypeLabel,
+      ncf: ncf,
+      notes: notes,
+      footerMessage: footerMessage,
+      payments: payments,
+      extra: extra,
+      priceTierLabel: priceTierLabel,
+      cashRegisterName: cashRegisterName,
+      changeAmount: changeAmount,
+      showBarcode: showBarcode,
+      paymentTermsLabel: paymentTermsLabel,
+      observation: observation,
+      showTax: showTax,
+      qrBytes: qrBytes,
+      hidePrices: hidePrices ?? this.hidePrices,
+    );
+  }
 }
 
 class ThermalTicketRow {

@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
@@ -59,11 +58,11 @@ class PdfReceiptBuilder {
       author: data.branch.name,
     );
 
-    // QR: primero el configurado (descargado de company_qr_url, robusto en
-    // web); si no hay, fallback al asset bundleado assets/QR.png.
-    final qrRaw = data.qrBytes ?? await _loadQrBytes();
+    // QR: SOLO si el negocio configuró `company_qr_url` (data.qrBytes). Antes
+    // había un QR por defecto bundleado (assets/QR.png) que salía siempre; se
+    // quitó a pedido — el QR aparece únicamente si el usuario decide agregarlo.
     // Reducir imágenes antes de embeberlas: evita el freeze de la UI al generar.
-    final qrBytes = await _shrinkImageForPdf(qrRaw, maxDim: 420);
+    final qrBytes = await _shrinkImageForPdf(data.qrBytes, maxDim: 420);
     final logoBytes = await _shrinkImageForPdf(data.branch.logoBytes, maxDim: 320);
 
     doc.addPage(
@@ -76,20 +75,6 @@ class PdfReceiptBuilder {
     );
 
     return doc.save();
-  }
-
-  /// Carga el QR estático de `assets/QR.png` para el pie de factura/cotización.
-  /// Devuelve `null` si el asset no está presente (aún no subido) — el PDF se
-  /// genera igual, solo sin el QR.
-  static Future<Uint8List?> _loadQrBytes() async {
-    try {
-      final data = await rootBundle.load('assets/QR.png');
-      // Forma explícita offset/length: evita arrastrar bytes de más si el
-      // ByteData es una vista sobre un buffer mayor (puede pasar en web).
-      return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-    } catch (_) {
-      return null;
-    }
   }
 
   /// Construye el PDF en formato ticket térmico ~80mm de ancho.
@@ -136,7 +121,8 @@ class PdfReceiptBuilder {
         pw.SizedBox(height: 12),
         _itemsTable(data),
         pw.SizedBox(height: 14),
-        _bankAndTotal(data),
+        // En un conduce no se imprimen totales ni "TOTAL A PAGAR".
+        if (!data.hidePrices) _bankAndTotal(data),
         if (_hasText(data.notes)) ...[
           pw.SizedBox(height: 10),
           pw.Text(
@@ -226,6 +212,12 @@ class PdfReceiptBuilder {
           ),
         _thermalDashedDivider(),
 
+        // Título CONDUCE (nota de entrega) — solo cuando se ocultan precios.
+        if (data.hidePrices) ...[
+          pw.Center(child: pw.Text('CONDUCE', style: big)),
+          _thermalDashedDivider(),
+        ],
+
         // ── 2) Fecha centrada ─────────────────────────────────────────────
         pw.Center(
           child: pw.Text(
@@ -266,9 +258,11 @@ class PdfReceiptBuilder {
         _thermalDashedDivider(),
         _thermalItemsTable(data, base: base, bold: bold, muted: muted),
 
-        // ── 6) Totales alineados a la derecha ─────────────────────────────
-        _thermalDashedDivider(),
-        _thermalTotals(data, base: base, bold: bold),
+        // ── 6) Totales alineados a la derecha (no en conduce) ─────────────
+        if (!data.hidePrices) ...[
+          _thermalDashedDivider(),
+          _thermalTotals(data, base: base, bold: bold),
+        ],
 
         // ── 7) Notas / footer / barcode ───────────────────────────────────
         if (_hasText(data.notes)) ...[
@@ -352,6 +346,39 @@ class PdfReceiptBuilder {
     required pw.TextStyle bold,
     required pw.TextStyle muted,
   }) {
+    // Conduce: solo Nombre + Cant., sin precio ni total.
+    if (data.hidePrices) {
+      return pw.Table(
+        columnWidths: const {
+          0: pw.FlexColumnWidth(1),
+          1: pw.FixedColumnWidth(40),
+        },
+        children: [
+          pw.TableRow(
+            decoration: const pw.BoxDecoration(
+              border: pw.Border(
+                bottom: pw.BorderSide(color: PdfColors.grey700, width: 0.5),
+              ),
+            ),
+            children: [
+              _thermalCell('Nombre', style: bold),
+              _thermalCell('Cant.', style: bold, align: pw.Alignment.center),
+            ],
+          ),
+          for (final item in data.items)
+            pw.TableRow(
+              children: [
+                _thermalCell(item.description, style: base),
+                _thermalCell(
+                  _qty(item.quantity),
+                  style: base,
+                  align: pw.Alignment.center,
+                ),
+              ],
+            ),
+        ],
+      );
+    }
     return pw.Table(
       columnWidths: const {
         0: pw.FlexColumnWidth(1),   // Nombre (toma el espacio restante)
@@ -601,11 +628,22 @@ class PdfReceiptBuilder {
       );
     }
 
+    // Etiqueta del documento según su prefijo (RNC / Cédula / etc.).
+    final docRaw = (c?.document ?? '').toLowerCase();
+    final docLabel = docRaw.contains('céd') || docRaw.contains('ced')
+        ? 'Cédula:'
+        : docRaw.contains('pasa')
+            ? 'Pasaporte:'
+            : 'RNC:';
+
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
         row('Cliente:', c?.name ?? 'Consumidor Final'),
-        row('RNC:', _docNumberOnly(c?.document) ?? 'N/A'),
+        row(docLabel, _docNumberOnly(c?.document) ?? 'N/A'),
+        if (_hasText(c?.address)) row('Dirección:', c!.address!),
+        if (_hasText(c?.phone)) row('Teléfono:', c!.phone!),
+        if (_hasText(c?.email)) row('Email:', c!.email!),
         row('Fecha:', _dateLabel(data.issuedAt)),
         if (_hasText(data.paymentTermsLabel))
           row('Forma de pago:', data.paymentTermsLabel!),
@@ -654,6 +692,43 @@ class PdfReceiptBuilder {
     }
 
     const right = pw.Alignment.centerRight;
+
+    // Conduce (nota de entrega): solo Cantidad + Descripción, sin montos.
+    if (data.hidePrices) {
+      return pw.Table(
+        columnWidths: const <int, pw.TableColumnWidth>{
+          0: pw.FixedColumnWidth(70),
+          1: pw.FlexColumnWidth(1),
+        },
+        children: [
+          pw.TableRow(
+            decoration: const pw.BoxDecoration(
+              border: pw.Border(
+                top: pw.BorderSide(color: PdfColors.grey700, width: 0.8),
+                bottom: pw.BorderSide(color: PdfColors.grey700, width: 0.8),
+              ),
+            ),
+            children: [
+              hCell('CANTIDAD', align: pw.Alignment.center),
+              hCell('DESCRIPCION'),
+            ],
+          ),
+          for (final it in data.items)
+            pw.TableRow(
+              decoration: const pw.BoxDecoration(
+                border: pw.Border(
+                  bottom: pw.BorderSide(color: PdfColors.grey200, width: 0.5),
+                ),
+              ),
+              children: [
+                cell(_qty(it.quantity), align: pw.Alignment.center),
+                cell(it.description),
+              ],
+            ),
+        ],
+      );
+    }
+
     final showTax = data.showTax;
     // La columna ITBIS solo aparece si el documento lleva impuesto. Sin ITBIS
     // se reparte su ancho entre las columnas numéricas (5 columnas).
@@ -910,7 +985,14 @@ class PdfReceiptBuilder {
 /// Título del documento según el comprobante seleccionado. Para venta usa el
 /// `receiptTypeLabel`; para cotización siempre "COTIZACIÓN".
 String _invoiceTitle(PrintDocumentData data) {
+  if (data.hidePrices) return 'CONDUCE';
   if (data.documentType == PrintDocumentType.quote) return 'COTIZACIÓN';
+  if (data.documentType == PrintDocumentType.paymentReceipt) {
+    return 'RECIBO DE ABONO';
+  }
+  if (data.documentType == PrintDocumentType.expenseVoucher) {
+    return 'COMPROBANTE DE GASTO';
+  }
   final label = (data.receiptTypeLabel ?? '').toLowerCase();
   if (label.contains('sin comprobante')) return 'NOTA DE VENTA';
   if (label.contains('consumidor')) return 'FACTURA PARA CONSUMIDOR FINAL';

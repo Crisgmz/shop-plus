@@ -17,6 +17,57 @@ import '../../settings/presentation/app_settings_providers.dart';
 import '../data/sales_repository.dart';
 import 'sales_providers.dart';
 
+/// Un tipo de precio disponible para una línea del carrito: su clave de tier,
+/// el nombre que ve el cajero y el precio que resulta para ese producto.
+class PriceTypeOption {
+  const PriceTypeOption({
+    required this.key,
+    required this.label,
+    required this.price,
+  });
+
+  /// 'retail' (Detalle) | 'tier_1'..'tier_10'.
+  final String key;
+  final String label;
+  final double price;
+}
+
+/// Tipos de precio disponibles para [product], según los nombres configurados
+/// en `app_settings.sale_price_types`. Siempre incluye "Detalle" (precio base);
+/// cada tier solo aparece si tiene un nombre configurado.
+List<PriceTypeOption> priceTypeOptionsFor(
+  SalesProduct product,
+  List<dynamic> priceTypes,
+) {
+  final options = <PriceTypeOption>[
+    PriceTypeOption(key: 'retail', label: 'Detalle', price: product.price),
+  ];
+  for (var i = 0; i < priceTypes.length && i < 10; i++) {
+    final name = priceTypes[i].toString().trim();
+    if (name.isEmpty) continue;
+    final key = 'tier_${i + 1}';
+    options.add(
+      PriceTypeOption(key: key, label: name, price: product.priceFor(key)),
+    );
+  }
+  return options;
+}
+
+/// Nombre visible de un tier: 'retail' → 'Detalle', 'tier_n' → nombre
+/// configurado (o 'Detalle' si el tier ya no tiene nombre).
+String priceTierLabel(String tierKey, List<dynamic> priceTypes) {
+  if (tierKey == 'retail') return 'Detalle';
+  final match = RegExp(r'^tier_(\d+)$').firstMatch(tierKey);
+  if (match != null) {
+    final idx = int.parse(match.group(1)!) - 1;
+    if (idx >= 0 && idx < priceTypes.length) {
+      final name = priceTypes[idx].toString().trim();
+      if (name.isNotEmpty) return name;
+    }
+  }
+  return 'Detalle';
+}
+
 class SalesPage extends ConsumerStatefulWidget {
   const SalesPage({super.key});
 
@@ -438,7 +489,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                   data: (clients) => Row(
                     children: [
                       Expanded(
-                        child: _ClientSearchField(
+                        child: _ClientPickerField(
                           currentId: _clientId,
                           clients: clients,
                           onChanged: _onClientChanged,
@@ -489,6 +540,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                       onPriceChanged: (value) => _setUnitPrice(i, value),
                       onQuantityChanged: (value) => _setQty(i, value),
                       onDiscountChanged: (value) => _setDiscountPct(i, value),
+                      onPriceTierChanged: (tier) => _setLinePriceTier(i, tier),
                     ),
                   ),
           ),
@@ -752,12 +804,17 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       ).showSnackBar(const SnackBar(content: Text('Sin stock suficiente')));
       return;
     }
-    final tier = _currentClientTier();
+    final tier = _currentClientTier() ?? 'retail';
     final price = product.priceFor(tier);
     setState(() {
       if (index == -1) {
         _cart.add(
-          SaleCartItem(product: product, quantity: 1, unitPrice: price),
+          SaleCartItem(
+            product: product,
+            quantity: 1,
+            unitPrice: price,
+            priceTier: tier,
+          ),
         );
       } else {
         final current = _cart[index];
@@ -767,6 +824,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           unitPrice: current.unitPrice,
           discountPct: current.discountPct,
           imeis: current.imeis,
+          priceTier: current.priceTier,
         );
       }
     });
@@ -849,7 +907,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
 
   /// Agrega (o mezcla) una línea de producto con IMEIs seleccionados.
   void _addImeiToCart(SalesProduct product, List<String> imeis) {
-    final tier = _currentClientTier();
+    final tier = _currentClientTier() ?? 'retail';
     final price = product.priceFor(tier);
     setState(() {
       final index = _cart.indexWhere((it) => it.product.id == product.id);
@@ -860,6 +918,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
             quantity: imeis.length.toDouble(),
             unitPrice: price,
             imeis: List<String>.from(imeis),
+            priceTier: tier,
           ),
         );
       } else {
@@ -871,6 +930,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           unitPrice: cur.unitPrice,
           discountPct: cur.discountPct,
           imeis: merged,
+          priceTier: cur.priceTier,
         );
       }
     });
@@ -898,12 +958,15 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         unitPrice: item.unitPrice,
         discountPct: item.discountPct,
         imeis: item.imeis,
+        priceTier: item.priceTier,
       ),
     );
     _persistDraft();
   }
 
-  /// Setea el precio unitario de una línea (override manual).
+  /// Setea el precio unitario de una línea (override manual). Conserva el tier
+  /// elegido: si el nuevo precio no coincide con el del tier, la línea se
+  /// mostrará como "Personalizado".
   void _setUnitPrice(int index, double value) {
     if (value < 0) return;
     final item = _cart[index];
@@ -923,6 +986,34 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         unitPrice: value,
         discountPct: item.discountPct,
         imeis: item.imeis,
+        priceTier: item.priceTier,
+      ),
+    );
+    _persistDraft();
+  }
+
+  /// Cambia el tipo de precio de una línea (Detalle / Por Mayor / etc.). Fija
+  /// el precio unitario al precio del producto para ese tier.
+  void _setLinePriceTier(int index, String tierKey) {
+    final item = _cart[index];
+    final newPrice = item.product.priceFor(tierKey);
+    if (_belowCostEnforced && newPrice < item.product.cost) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Precio por debajo del costo (${money(item.product.cost)}).',
+          ),
+        ),
+      );
+    }
+    setState(
+      () => _cart[index] = SaleCartItem(
+        product: item.product,
+        quantity: item.quantity,
+        unitPrice: newPrice,
+        discountPct: item.discountPct,
+        imeis: item.imeis,
+        priceTier: tierKey,
       ),
     );
     _persistDraft();
@@ -939,6 +1030,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         unitPrice: item.unitPrice,
         discountPct: clamped,
         imeis: item.imeis,
+        priceTier: item.priceTier,
       ),
     );
     _persistDraft();
@@ -951,9 +1043,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     setState(() {
       _clientId = newId;
       if (_cart.isEmpty) return;
-      final tier = newId == null
-          ? null
-          : ref.read(salesClientsByIdProvider)[newId]?.priceTier;
+      final tier = (newId == null
+              ? null
+              : ref.read(salesClientsByIdProvider)[newId]?.priceTier) ??
+          'retail';
       for (var i = 0; i < _cart.length; i++) {
         final item = _cart[i];
         _cart[i] = SaleCartItem(
@@ -962,6 +1055,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           unitPrice: item.product.priceFor(tier),
           discountPct: item.discountPct,
           imeis: item.imeis,
+          priceTier: tier,
         );
       }
     });
@@ -1265,10 +1359,16 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       final printAfterSale = settings?.receiptPrintAfterSale ?? true;
       final disableConfirmation =
           settings?.saleDisableCompleteConfirmation ?? true;
+      // Habilita el toggle "Conduce (sin precios)" en el diálogo de impresión.
+      final enableConduce = settings?.appEnableDeliveryNotes ?? false;
 
       // Auto-imprimir si app_settings.receipt_print_after_sale = true.
       if (printJob != null && printAfterSale) {
-        await PrintReceiptDialog.show(context, printJob);
+        await PrintReceiptDialog.show(
+          context,
+          printJob,
+          enableDeliveryNote: enableConduce,
+        );
         if (!mounted) return;
       }
 
@@ -1306,7 +1406,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                 FilledButton.icon(
                   onPressed: () {
                     Navigator.pop(ctx);
-                    PrintReceiptDialog.show(context, printJob);
+                    PrintReceiptDialog.show(
+                      context,
+                      printJob,
+                      enableDeliveryNote: enableConduce,
+                    );
                   },
                   icon: const Icon(Icons.receipt_long_outlined, size: 18),
                   label: const Text('Ver recibo'),
@@ -2360,6 +2464,7 @@ class _CartLineTile extends ConsumerStatefulWidget {
     required this.onPriceChanged,
     required this.onQuantityChanged,
     required this.onDiscountChanged,
+    required this.onPriceTierChanged,
   });
 
   final SaleCartItem item;
@@ -2367,6 +2472,7 @@ class _CartLineTile extends ConsumerStatefulWidget {
   final ValueChanged<double> onPriceChanged;
   final ValueChanged<double> onQuantityChanged;
   final ValueChanged<double> onDiscountChanged;
+  final ValueChanged<String> onPriceTierChanged;
 
   @override
   ConsumerState<_CartLineTile> createState() => _CartLineTileState();
@@ -2423,6 +2529,15 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
     final bgColor = isReturn
         ? const Color(0xFFFEF2F2)
         : const Color(0xFFF8FAFC);
+
+    // Tipos de precio del producto (Detalle + tiers nombrados). Solo se muestra
+    // el selector si hay más de una opción configurada en Ajustes.
+    final priceTypes =
+        ref.watch(appSettingsProvider).valueOrNull?.salePriceTypes ?? const [];
+    final priceOptions = priceTypeOptionsFor(item.product, priceTypes);
+    final currentPriceLabel = item.isCustomPrice
+        ? 'Personalizado'
+        : priceTierLabel(item.priceTier, priceTypes);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -2504,6 +2619,10 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
               ),
             ],
           ),
+          if (priceOptions.length > 1) ...[
+            const SizedBox(height: 8),
+            _buildPriceTypeChip(priceOptions, currentPriceLabel),
+          ],
           const SizedBox(height: 8),
           // ── Fila inferior: 4 campos (Precio, Cant, Desc, Total) ──
           Row(
@@ -2576,6 +2695,90 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  /// Chip-selector del tipo de precio de la línea. Un tap abre un menú con
+  /// cada precio del producto (Detalle + tiers nombrados) y su monto. Al
+  /// elegir uno, la línea se re-precia. `PopupMenuButton` es confiable en web
+  /// (no depende del foco como un autocompletado).
+  Widget _buildPriceTypeChip(
+    List<PriceTypeOption> options,
+    String currentLabel,
+  ) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: PopupMenuButton<String>(
+        tooltip: 'Tipo de precio',
+        position: PopupMenuPosition.under,
+        constraints: const BoxConstraints(minWidth: 220),
+        itemBuilder: (ctx) => [
+          for (final o in options)
+            PopupMenuItem<String>(
+              value: o.key,
+              height: 40,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text(
+                      o.label,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: o.key == widget.item.priceTier
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    money(o.price),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF2563EB),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+        onSelected: widget.onPriceTierChanged,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.sell_outlined,
+                size: 14,
+                color: Color(0xFF64748B),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                currentLabel,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF334155),
+                ),
+              ),
+              const Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 16,
+                color: Color(0xFF64748B),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2741,12 +2944,15 @@ class _ActiveCashRegisterChip extends ConsumerWidget {
   }
 }
 
-/// Buscador de cliente que combina input por nombre + dropdown completo.
-/// Cuando el campo está vacío o muestra el cliente actual, al hacer focus
-/// se abre la lista completa (incluyendo "Cliente General"). Al escribir,
-/// filtra in-memory por subcadena en el nombre.
-class _ClientSearchField extends StatefulWidget {
-  const _ClientSearchField({
+/// Campo de cliente del POS. Muestra el cliente actual (o "Cliente General")
+/// en una caja tocable; al tocarla abre un modal con buscador + lista.
+///
+/// Se usa un modal en vez del `RawAutocomplete` en línea anterior porque en
+/// Flutter web el overlay de opciones perdía el foco al hacer clic en una
+/// opción y la selección no "pegaba" (volvía a Cliente General). Un modal con
+/// lista tocable no depende del foco, así que la selección es 100% confiable.
+class _ClientPickerField extends StatelessWidget {
+  const _ClientPickerField({
     required this.currentId,
     required this.clients,
     required this.onChanged,
@@ -2756,180 +2962,269 @@ class _ClientSearchField extends StatefulWidget {
   final List<SalesClient> clients;
   final ValueChanged<String?> onChanged;
 
-  @override
-  State<_ClientSearchField> createState() => _ClientSearchFieldState();
-}
-
-class _ClientSearchFieldState extends State<_ClientSearchField> {
   static const _generalLabel = 'Cliente General (Contado)';
 
-  final _textController = TextEditingController();
-  final _focusNode = FocusNode();
-
-  @override
-  void initState() {
-    super.initState();
-    _textController.text = _labelForId(widget.currentId);
-  }
-
-  @override
-  void didUpdateWidget(_ClientSearchField old) {
-    super.didUpdateWidget(old);
-    // Si el clientId cambió por código externo (ej. limpiar carrito,
-    // cargar venta para devolución), sincronizar el texto — pero solo
-    // si el campo no está enfocado para no pisar lo que el usuario
-    // está escribiendo.
-    if (old.currentId != widget.currentId && !_focusNode.hasFocus) {
-      _textController.text = _labelForId(widget.currentId);
-    }
-  }
-
-  @override
-  void dispose() {
-    _textController.dispose();
-    _focusNode.dispose();
-    super.dispose();
-  }
-
-  String _labelForId(String? id) {
-    if (id == null) return _generalLabel;
-    for (final c in widget.clients) {
-      if (c.id == id) return c.fullName;
+  String get _currentLabel {
+    if (currentId == null) return _generalLabel;
+    for (final c in clients) {
+      if (c.id == currentId) return c.fullName;
     }
     return _generalLabel;
   }
 
+  Future<void> _openPicker(BuildContext context) async {
+    final result = await showModalBottomSheet<_ClientPickResult>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _ClientPickerSheet(
+        clients: clients,
+        currentId: currentId,
+        generalLabel: _generalLabel,
+      ),
+    );
+    // null = cerró sin elegir; _ClientPickResult(null) = eligió Cliente General.
+    if (result != null) onChanged(result.id);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return RawAutocomplete<_ClientOption>(
-      textEditingController: _textController,
-      focusNode: _focusNode,
-      displayStringForOption: (o) => o.label,
-      optionsBuilder: (textValue) {
-        final all = <_ClientOption>[
-          const _ClientOption(id: null, label: _generalLabel),
-          for (final c in widget.clients)
-            _ClientOption(id: c.id, label: c.fullName),
-        ];
-        final q = textValue.text.trim().toLowerCase();
-        // Si el campo está vacío o todavía muestra el label actual,
-        // mostramos todos los clientes (modo "dropdown").
-        if (q.isEmpty || q == _labelForId(widget.currentId).toLowerCase()) {
-          return all;
-        }
-        return all
-            .where((o) => o.label.toLowerCase().contains(q))
-            .toList(growable: false);
-      },
-      onSelected: (option) {
-        widget.onChanged(option.id);
-        _textController.text = option.label;
-        _focusNode.unfocus();
-      },
-      fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
-        return Container(
+    final isGeneral = currentId == null;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: () => _openPicker(context),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
           decoration: BoxDecoration(
             color: const Color(0xFFF8FAFC),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: const Color(0xFFE2E8F0)),
           ),
-          child: TextField(
-            controller: controller,
-            focusNode: focusNode,
-            style: const TextStyle(fontSize: 13),
-            onTap: () => controller.selection = TextSelection(
-              baseOffset: 0,
-              extentOffset: controller.text.length,
-            ),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: 'Buscar cliente por nombre',
-              hintStyle: const TextStyle(
-                fontSize: 13,
-                color: Color(0xFF94A3B8),
-              ),
-              prefixIcon: const Icon(
+          child: Row(
+            children: [
+              const Icon(
                 Icons.person_search_rounded,
                 size: 18,
                 color: Color(0xFF64748B),
               ),
-              suffixIcon: widget.currentId != null
-                  ? IconButton(
-                      icon: const Icon(Icons.close, size: 16),
-                      tooltip: 'Volver a Cliente General',
-                      splashRadius: 14,
-                      onPressed: () {
-                        widget.onChanged(null);
-                        _textController.text = _generalLabel;
-                        _focusNode.unfocus();
-                      },
-                    )
-                  : const Icon(Icons.arrow_drop_down, color: Color(0xFF64748B)),
-              border: InputBorder.none,
-              contentPadding: const EdgeInsets.symmetric(vertical: 12),
-            ),
-          ),
-        );
-      },
-      optionsViewBuilder: (context, onSelected, options) {
-        return Align(
-          alignment: Alignment.topLeft,
-          child: Material(
-            elevation: 4,
-            borderRadius: BorderRadius.circular(8),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 280, maxWidth: 420),
-              child: ListView.builder(
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                itemCount: options.length,
-                itemBuilder: (ctx, i) {
-                  final o = options.elementAt(i);
-                  final selected = o.id == widget.currentId;
-                  return ListTile(
-                    dense: true,
-                    visualDensity: VisualDensity.compact,
-                    selected: selected,
-                    selectedTileColor: const Color(0xFFEFF6FF),
-                    leading: Icon(
-                      o.id == null
-                          ? Icons.person_outline
-                          : Icons.person_rounded,
-                      size: 18,
-                      color: selected
-                          ? const Color(0xFF1D4ED8)
-                          : const Color(0xFF64748B),
-                    ),
-                    title: Text(
-                      o.label,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: selected
-                            ? FontWeight.w700
-                            : FontWeight.w500,
-                      ),
-                    ),
-                    trailing: selected
-                        ? const Icon(
-                            Icons.check_rounded,
-                            size: 16,
-                            color: Color(0xFF1D4ED8),
-                          )
-                        : null,
-                    onTap: () => onSelected(o),
-                  );
-                },
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _currentLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: isGeneral ? FontWeight.w500 : FontWeight.w700,
+                    color: isGeneral
+                        ? const Color(0xFF64748B)
+                        : const Color(0xFF1E293B),
+                  ),
+                ),
               ),
-            ),
+              if (!isGeneral)
+                InkWell(
+                  onTap: () => onChanged(null),
+                  borderRadius: BorderRadius.circular(12),
+                  child: const Padding(
+                    padding: EdgeInsets.all(2),
+                    child: Icon(Icons.close, size: 16, color: Color(0xFF94A3B8)),
+                  ),
+                )
+              else
+                const Icon(Icons.arrow_drop_down, color: Color(0xFF64748B)),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
 
-class _ClientOption {
-  const _ClientOption({required this.id, required this.label});
+/// Resultado del modal de clientes. `id == null` significa "Cliente General".
+/// El propio Future del modal devuelve `null` cuando se cierra sin elegir, así
+/// que este wrapper permite distinguir "eligió General" de "no eligió nada".
+class _ClientPickResult {
+  const _ClientPickResult(this.id);
   final String? id;
-  final String label;
+}
+
+/// Hoja modal con buscador + lista de clientes. Filtra en memoria por nombre o
+/// RNC/cédula. "Cliente General" aparece siempre arriba (salvo que la búsqueda
+/// no lo matchee).
+class _ClientPickerSheet extends StatefulWidget {
+  const _ClientPickerSheet({
+    required this.clients,
+    required this.currentId,
+    required this.generalLabel,
+  });
+
+  final List<SalesClient> clients;
+  final String? currentId;
+  final String generalLabel;
+
+  @override
+  State<_ClientPickerSheet> createState() => _ClientPickerSheetState();
+}
+
+class _ClientPickerSheetState extends State<_ClientPickerSheet> {
+  final _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _query.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? widget.clients
+        : widget.clients
+              .where(
+                (c) =>
+                    c.fullName.toLowerCase().contains(q) ||
+                    (c.documentNumber?.toLowerCase().contains(q) ?? false),
+              )
+              .toList(growable: false);
+
+    final showGeneral =
+        q.isEmpty || widget.generalLabel.toLowerCase().contains(q);
+    final viewInsets = MediaQuery.of(context).viewInsets.bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: viewInsets),
+      child: SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.75,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 10, bottom: 4),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE2E8F0),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 8, 8),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Seleccionar cliente',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1E293B),
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TextField(
+                  controller: _searchController,
+                  autofocus: true,
+                  onChanged: (v) => setState(() => _query = v),
+                  decoration: InputDecoration(
+                    hintText: 'Buscar por nombre o RNC/cédula',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: ListView(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  children: [
+                    if (showGeneral)
+                      _tile(
+                        context,
+                        id: null,
+                        label: widget.generalLabel,
+                        icon: Icons.person_outline,
+                      ),
+                    for (final c in filtered)
+                      _tile(
+                        context,
+                        id: c.id,
+                        label: c.fullName,
+                        subtitle: c.documentNumber,
+                        icon: Icons.person_rounded,
+                      ),
+                    if (filtered.isEmpty && !showGeneral)
+                      const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(
+                          child: Text(
+                            'Sin resultados',
+                            style: TextStyle(color: Color(0xFF94A3B8)),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _tile(
+    BuildContext context, {
+    required String? id,
+    required String label,
+    String? subtitle,
+    required IconData icon,
+  }) {
+    final selected = id == widget.currentId;
+    return ListTile(
+      dense: true,
+      selected: selected,
+      selectedTileColor: const Color(0xFFEFF6FF),
+      leading: Icon(
+        icon,
+        size: 20,
+        color: selected ? const Color(0xFF1D4ED8) : const Color(0xFF64748B),
+      ),
+      title: Text(
+        label,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        ),
+      ),
+      subtitle: (subtitle != null && subtitle.isNotEmpty)
+          ? Text(subtitle, style: const TextStyle(fontSize: 12))
+          : null,
+      trailing: selected
+          ? const Icon(Icons.check_rounded, size: 18, color: Color(0xFF1D4ED8))
+          : null,
+      onTap: () => Navigator.of(context).pop(_ClientPickResult(id)),
+    );
+  }
 }
