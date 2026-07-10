@@ -168,6 +168,7 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
                           FlexTableColumn(label: 'Método'),
                           FlexTableColumn(label: 'Monto', numeric: true),
                           FlexTableColumn(label: 'Referencia', flex: 2),
+                          FlexTableColumn(label: 'Acciones', flex: 2),
                         ],
                         rows: payments
                             .map((payment) => [
@@ -180,6 +181,11 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
                                     style: const TextStyle(fontWeight: FontWeight.w700),
                                   ),
                                   Text(payment.reference ?? '-'),
+                                  _PaymentRowActions(
+                                    onPrint: () => _onPrintPayment(payment),
+                                    onEdit: () => _onEditPayment(payment),
+                                    onVoid: () => _onVoidPayment(payment),
+                                  ),
                                 ])
                             .toList(growable: false),
                       ),
@@ -298,6 +304,97 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo extender el plazo: $e')),
+      );
+    }
+  }
+
+  /// Imprime el recibo de abono (comprobante del pago recibido).
+  Future<void> _onPrintPayment(ReceivedPayment payment) async {
+    try {
+      final job = await ref
+          .read(cobrosRepositoryProvider)
+          .prepareAbonoReceipt(payment.id);
+      if (!mounted) return;
+      await PrintReceiptDialog.show(context, job);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo preparar el recibo: $e')),
+      );
+    }
+  }
+
+  /// Edita un abono (monto, método y referencia) recalculando balances.
+  Future<void> _onEditPayment(ReceivedPayment payment) async {
+    final result = await showDialog<_EditPaymentResult>(
+      context: context,
+      builder: (_) => _EditPaymentDialog(payment: payment),
+    );
+    if (result == null || !mounted) return;
+
+    try {
+      await ref.read(cobrosRepositoryProvider).updatePayment(
+            paymentId: payment.id,
+            newAmount: result.amount,
+            paymentMethod: result.paymentMethod,
+            reference: result.reference,
+          );
+      if (!mounted) return;
+      ref.invalidate(cobrosReceivablesProvider);
+      ref.invalidate(cobrosPaymentsProvider);
+      ref.invalidate(customerBalancesProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Pago de ${payment.saleNumber} actualizado.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo actualizar el pago: $e')),
+      );
+    }
+  }
+
+  /// Anula un abono devolviendo el balance a la venta (con confirmación).
+  Future<void> _onVoidPayment(ReceivedPayment payment) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Anular pago'),
+        content: Text(
+          '¿Seguro que deseas anular el abono de ${money(payment.amount)} '
+          'de ${payment.saleNumber}?\n\n'
+          'Se devolverá ese monto al balance pendiente de la venta.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTokens.destructive,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Anular'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    try {
+      await ref.read(cobrosRepositoryProvider).voidPayment(payment.id);
+      if (!mounted) return;
+      ref.invalidate(cobrosReceivablesProvider);
+      ref.invalidate(cobrosPaymentsProvider);
+      ref.invalidate(customerBalancesProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Abono de ${payment.saleNumber} anulado.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo anular el pago: $e')),
       );
     }
   }
@@ -1116,6 +1213,197 @@ class _CustomerBalancesPanel extends ConsumerWidget {
             style: const TextStyle(color: AppTokens.destructive),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Botones de acción por fila en "Pagos recibidos recientes":
+/// imprimir recibo de abono, editar y anular el pago.
+class _PaymentRowActions extends StatelessWidget {
+  const _PaymentRowActions({
+    required this.onPrint,
+    required this.onEdit,
+    required this.onVoid,
+  });
+
+  final VoidCallback onPrint;
+  final VoidCallback onEdit;
+  final VoidCallback onVoid;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: 'Imprimir recibo',
+          onPressed: onPrint,
+          icon: const Icon(Icons.print_outlined, size: 18),
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints(),
+          padding: const EdgeInsets.all(6),
+        ),
+        IconButton(
+          tooltip: 'Editar',
+          onPressed: onEdit,
+          icon: const Icon(Icons.edit_outlined, size: 18),
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints(),
+          padding: const EdgeInsets.all(6),
+        ),
+        IconButton(
+          tooltip: 'Anular',
+          onPressed: onVoid,
+          icon: const Icon(Icons.cancel_outlined, size: 18),
+          color: AppTokens.destructive,
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints(),
+          padding: const EdgeInsets.all(6),
+        ),
+      ],
+    );
+  }
+}
+
+class _EditPaymentResult {
+  _EditPaymentResult({
+    required this.amount,
+    required this.paymentMethod,
+    this.reference,
+  });
+
+  final double amount;
+  final String paymentMethod;
+  final String? reference;
+}
+
+/// Diálogo para editar un abono ya registrado: monto, método y referencia.
+class _EditPaymentDialog extends StatefulWidget {
+  const _EditPaymentDialog({required this.payment});
+
+  final ReceivedPayment payment;
+
+  @override
+  State<_EditPaymentDialog> createState() => _EditPaymentDialogState();
+}
+
+class _EditPaymentDialogState extends State<_EditPaymentDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _amountController;
+  late final TextEditingController _referenceController;
+  late String _paymentMethod;
+
+  static const _methods = <({String value, String label})>[
+    (value: 'cash', label: 'Efectivo'),
+    (value: 'card', label: 'Tarjeta'),
+    (value: 'transfer', label: 'Transferencia'),
+    (value: 'mobile', label: 'Pago móvil'),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _amountController = TextEditingController(
+      text: widget.payment.amount.toStringAsFixed(2),
+    );
+    _referenceController = TextEditingController(
+      text: widget.payment.reference ?? '',
+    );
+    _paymentMethod = widget.payment.paymentMethod;
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _referenceController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = <DropdownMenuItem<String>>[
+      for (final m in _methods)
+        DropdownMenuItem(value: m.value, child: Text(m.label)),
+    ];
+    // Si el pago tiene un método no estándar (ej. 'mixed'), lo añadimos para
+    // que el dropdown pueda mostrarlo sin romperse.
+    if (!_methods.any((m) => m.value == _paymentMethod)) {
+      items.add(
+        DropdownMenuItem(
+          value: _paymentMethod,
+          child: Text(_pretty(_paymentMethod)),
+        ),
+      );
+    }
+
+    return AlertDialog(
+      title: const Text('Editar pago'),
+      content: SizedBox(
+        width: ResponsiveLayout.isMobile(context) ? double.maxFinite : 420,
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Venta: ${widget.payment.saleNumber}\n'
+                  'Cliente: ${widget.payment.clientName}',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _amountController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(labelText: 'Monto'),
+                validator: (value) {
+                  final amount = double.tryParse((value ?? '').trim());
+                  if (amount == null || amount <= 0) {
+                    return 'Monto inválido';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                initialValue: _paymentMethod,
+                decoration: const InputDecoration(labelText: 'Método de pago'),
+                items: items,
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() => _paymentMethod = value);
+                },
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _referenceController,
+                decoration: const InputDecoration(labelText: 'Referencia'),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Guardar')),
+      ],
+    );
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.of(context).pop(
+      _EditPaymentResult(
+        amount: double.parse(_amountController.text.trim()),
+        paymentMethod: _paymentMethod,
+        reference: _referenceController.text.trim(),
       ),
     );
   }

@@ -11,6 +11,7 @@ import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
+import '../../../shared/widgets/print_receipt_dialog.dart';
 import '../../../shared/widgets/ui_custom.dart';
 import '../../cash_register/presentation/cash_register_providers.dart';
 import '../../inventory/data/file_io_helper.dart';
@@ -116,6 +117,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
                               DataColumn(label: Text('Método')),
                               DataColumn(label: Text('Descripción')),
                               DataColumn(label: Text('Monto'), numeric: true),
+                              DataColumn(label: Text('Acciones')),
                             ],
                             rows: filtered
                                 .map(
@@ -132,6 +134,11 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
                                       DataCell(Text(
                                         money(expense.amount),
                                         style: const TextStyle(fontWeight: FontWeight.w700),
+                                      )),
+                                      DataCell(_ExpenseRowActions(
+                                        onPrint: () => _onPrintExpense(expense),
+                                        onEdit: () => _onEditExpense(expense),
+                                        onDelete: () => _onDeleteExpense(expense),
                                       )),
                                     ],
                                   ),
@@ -193,6 +200,103 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo registrar gasto: $error')),
+      );
+    }
+  }
+
+  /// Imprime el comprobante de gasto (egreso).
+  Future<void> _onPrintExpense(ExpenseEntity expense) async {
+    try {
+      final job = await ref
+          .read(expensesRepositoryProvider)
+          .prepareExpenseReceipt(expense.id);
+      if (!mounted) return;
+      await PrintReceiptDialog.show(context, job);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo preparar el comprobante: $e')),
+      );
+    }
+  }
+
+  /// Edita un gasto (reusa el formulario de "Nuevo gasto" prellenado).
+  Future<void> _onEditExpense(ExpenseEntity expense) async {
+    final List<ExpenseSupplier> suppliers;
+    try {
+      suppliers = await ref.read(expenseSuppliersProvider.future);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo abrir formulario: $error')),
+      );
+      return;
+    }
+    if (!mounted) return;
+
+    final input = await showDialog<ExpenseInput>(
+      context: context,
+      builder: (_) => _NewExpenseDialog(suppliers: suppliers, initial: expense),
+    );
+    if (input == null || !mounted) return;
+
+    try {
+      await ref
+          .read(expensesRepositoryProvider)
+          .updateExpense(expense.id, input);
+      if (!mounted) return;
+      ref.invalidate(expensesListProvider);
+      ref.invalidate(cashRegisterDataProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gasto actualizado.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo actualizar el gasto: $error')),
+      );
+    }
+  }
+
+  /// Elimina un gasto (con confirmación).
+  Future<void> _onDeleteExpense(ExpenseEntity expense) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar gasto'),
+        content: Text(
+          '¿Seguro que deseas eliminar el gasto "${expense.category}" '
+          'de ${money(expense.amount)}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTokens.destructive,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    try {
+      await ref.read(expensesRepositoryProvider).deleteExpense(expense.id);
+      if (!mounted) return;
+      ref.invalidate(expensesListProvider);
+      ref.invalidate(cashRegisterDataProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gasto eliminado.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo eliminar el gasto: $error')),
       );
     }
   }
@@ -368,7 +472,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
             ),
             pw.SizedBox(height: 4),
             pw.Text(
-              'Shop+ — Sistema de Gestión Comercial',
+              'Busi Pos Web — Sistema de Gestión Comercial',
               style: pw.TextStyle(fontSize: 9, color: muted),
             ),
             pw.SizedBox(height: 12),
@@ -385,7 +489,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
                 pw.Text(
-                  'Shop+ — Reporte generado automáticamente',
+                  'Busi Pos Web — Reporte generado automáticamente',
                   style: pw.TextStyle(fontSize: 8, color: muted),
                 ),
                 pw.Text(
@@ -582,9 +686,12 @@ class _KpisGrid extends StatelessWidget {
 }
 
 class _NewExpenseDialog extends StatefulWidget {
-  const _NewExpenseDialog({required this.suppliers});
+  const _NewExpenseDialog({required this.suppliers, this.initial});
 
   final List<ExpenseSupplier> suppliers;
+
+  /// Si viene, el diálogo actúa en modo edición (prellenado).
+  final ExpenseEntity? initial;
 
   @override
   State<_NewExpenseDialog> createState() => _NewExpenseDialogState();
@@ -601,6 +708,27 @@ class _NewExpenseDialogState extends State<_NewExpenseDialog> {
   DateTime _expenseDate = DateTime.now();
 
   @override
+  void initState() {
+    super.initState();
+    final initial = widget.initial;
+    if (initial != null) {
+      _categoryController.text = initial.category;
+      _descriptionController.text = initial.description ?? '';
+      _amountController.text = initial.amount == initial.amount.roundToDouble()
+          ? initial.amount.toInt().toString()
+          : initial.amount.toStringAsFixed(2);
+      const methods = ['cash', 'card', 'transfer', 'mobile'];
+      _paymentMethod =
+          methods.contains(initial.paymentMethod) ? initial.paymentMethod : 'cash';
+      _supplierId = (initial.supplierId != null &&
+              widget.suppliers.any((s) => s.id == initial.supplierId))
+          ? initial.supplierId
+          : null;
+      _expenseDate = initial.expenseDate;
+    }
+  }
+
+  @override
   void dispose() {
     _categoryController.dispose();
     _descriptionController.dispose();
@@ -613,7 +741,7 @@ class _NewExpenseDialogState extends State<_NewExpenseDialog> {
     final isMobile = ResponsiveLayout.isMobile(context);
 
     return AlertDialog(
-      title: const Text('Nuevo gasto'),
+      title: Text(widget.initial == null ? 'Nuevo gasto' : 'Editar gasto'),
       content: SizedBox(
         width: isMobile ? double.maxFinite : 520,
         child: Form(
@@ -748,6 +876,53 @@ class _NewExpenseDialogState extends State<_NewExpenseDialog> {
         description: _descriptionController.text,
         supplierId: _supplierId,
       ),
+    );
+  }
+}
+
+/// Botones de acción por fila de gasto: imprimir comprobante, editar, eliminar.
+class _ExpenseRowActions extends StatelessWidget {
+  const _ExpenseRowActions({
+    required this.onPrint,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final VoidCallback onPrint;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          tooltip: 'Imprimir comprobante',
+          onPressed: onPrint,
+          icon: const Icon(Icons.print_outlined, size: 18),
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints(),
+          padding: const EdgeInsets.all(6),
+        ),
+        IconButton(
+          tooltip: 'Editar',
+          onPressed: onEdit,
+          icon: const Icon(Icons.edit_outlined, size: 18),
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints(),
+          padding: const EdgeInsets.all(6),
+        ),
+        IconButton(
+          tooltip: 'Eliminar',
+          onPressed: onDelete,
+          icon: const Icon(Icons.delete_outline_rounded, size: 18),
+          color: AppTokens.destructive,
+          visualDensity: VisualDensity.compact,
+          constraints: const BoxConstraints(),
+          padding: const EdgeInsets.all(6),
+        ),
+      ],
     );
   }
 }

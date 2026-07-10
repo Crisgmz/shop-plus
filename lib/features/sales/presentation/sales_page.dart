@@ -1359,10 +1359,16 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       final printAfterSale = settings?.receiptPrintAfterSale ?? true;
       final disableConfirmation =
           settings?.saleDisableCompleteConfirmation ?? true;
+      // Habilita el toggle "Conduce (sin precios)" en el diálogo de impresión.
+      final enableConduce = settings?.appEnableDeliveryNotes ?? false;
 
       // Auto-imprimir si app_settings.receipt_print_after_sale = true.
       if (printJob != null && printAfterSale) {
-        await PrintReceiptDialog.show(context, printJob);
+        await PrintReceiptDialog.show(
+          context,
+          printJob,
+          enableDeliveryNote: enableConduce,
+        );
         if (!mounted) return;
       }
 
@@ -1400,7 +1406,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                 FilledButton.icon(
                   onPressed: () {
                     Navigator.pop(ctx);
-                    PrintReceiptDialog.show(context, printJob);
+                    PrintReceiptDialog.show(
+                      context,
+                      printJob,
+                      enableDeliveryNote: enableConduce,
+                    );
                   },
                   icon: const Icon(Icons.receipt_long_outlined, size: 18),
                   label: const Text('Ver recibo'),

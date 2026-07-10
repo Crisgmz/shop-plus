@@ -195,20 +195,44 @@ class QuoteClientOption {
 }
 
 class QuoteDraftLine {
-  QuoteDraftLine({required this.product, required this.quantity});
+  QuoteDraftLine({
+    required this.product,
+    required this.quantity,
+    double? unitPrice,
+    this.discountPct = 0,
+  }) : unitPrice = unitPrice ?? product.price;
 
   final QuoteCatalogProduct product;
   final double quantity;
 
-  double get lineSubtotal => QuotationsMath.round2(quantity * product.price);
+  /// Precio unitario editable por línea (arranca en `product.price`).
+  final double unitPrice;
+
+  /// Descuento en porcentaje (0..100) aplicado al precio unitario.
+  final double discountPct;
+
+  double get netUnitPrice =>
+      QuotationsMath.round2(unitPrice * (1 - discountPct / 100));
+  double get lineSubtotal => QuotationsMath.round2(quantity * netUnitPrice);
   double get lineTax =>
       QuotationsMath.round2(lineSubtotal * (product.taxRate / 100));
   double get lineTotal => QuotationsMath.round2(lineSubtotal + lineTax);
 
-  QuoteDraftLine copyWith({QuoteCatalogProduct? product, double? quantity}) {
+  /// Monto absoluto del descuento (para persistir en `discount_amount`).
+  double get discountAmount =>
+      QuotationsMath.round2(quantity * unitPrice - lineSubtotal);
+
+  QuoteDraftLine copyWith({
+    QuoteCatalogProduct? product,
+    double? quantity,
+    double? unitPrice,
+    double? discountPct,
+  }) {
     return QuoteDraftLine(
       product: product ?? this.product,
       quantity: quantity ?? this.quantity,
+      unitPrice: unitPrice ?? this.unitPrice,
+      discountPct: discountPct ?? this.discountPct,
     );
   }
 }
@@ -236,6 +260,7 @@ class QuoteCreateItem {
     required this.quantity,
     required this.unitPrice,
     required this.taxRate,
+    this.discountAmount = 0,
     this.productSku,
     this.productDescription,
   });
@@ -247,6 +272,7 @@ class QuoteCreateItem {
   final double quantity;
   final double unitPrice;
   final double taxRate;
+  final double discountAmount;
 
   factory QuoteCreateItem.fromMap(Map<String, dynamic> map) {
     return QuoteCreateItem(
@@ -257,10 +283,12 @@ class QuoteCreateItem {
       quantity: _toDouble(map['quantity']),
       unitPrice: _toDouble(map['unit_price']),
       taxRate: _toDouble(map['tax_rate']),
+      discountAmount: _toDouble(map['discount_amount']),
     );
   }
 
-  double get lineSubtotal => QuotationsMath.round2(quantity * unitPrice);
+  double get lineSubtotal =>
+      QuotationsMath.round2(quantity * unitPrice - discountAmount);
   double get lineTax => QuotationsMath.round2(lineSubtotal * (taxRate / 100));
   double get lineTotal => QuotationsMath.round2(lineSubtotal + lineTax);
 
@@ -272,7 +300,7 @@ class QuoteCreateItem {
       'description': productDescription ?? productName,
       'quantity': quantity,
       'unit_price': unitPrice,
-      'discount_amount': 0,
+      'discount_amount': discountAmount,
       'tax_rate': taxRate,
       'line_subtotal': lineSubtotal,
       'line_tax': lineTax,
@@ -412,7 +440,11 @@ abstract class QuotationsRepositoryContract {
   Future<List<QuoteClientOption>> fetchClients();
   Future<String> createQuote(QuoteCreateInput input);
   Future<void> updateQuote(String quoteId, QuoteCreateInput input);
-  Future<QuoteConversionResult> convertToSale(String quoteId);
+  Future<QuoteConversionResult> convertToSale(
+    String quoteId, {
+    required String paymentMethod,
+    String? cashSessionId,
+  });
   Future<void> deleteQuote(String quoteId);
 }
 

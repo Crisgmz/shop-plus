@@ -22,7 +22,11 @@ class QuotePrintSource {
     this.signatoryName,
     this.signatoryTitle,
     this.observation,
+    this.clientLegalName,
     this.clientDocument,
+    this.clientAddress,
+    this.clientPhone,
+    this.clientEmail,
     this.notes,
     this.showItbis = true,
     this.qrBytes,
@@ -44,7 +48,11 @@ class QuotePrintSource {
   final String? signatoryName;
   final String? signatoryTitle;
   final String? observation;
+  final String? clientLegalName;
   final String? clientDocument;
+  final String? clientAddress;
+  final String? clientPhone;
+  final String? clientEmail;
   final String? notes;
   final bool showItbis;
   final List<int>? qrBytes;
@@ -94,8 +102,11 @@ class QuotePrintDocumentAdapter {
         signatoryTitle: _nullIfBlank(source.signatoryTitle),
       ),
       customer: PrintParty(
-        name: source.clientName,
+        name: _nullIfBlank(source.clientLegalName) ?? source.clientName,
         document: _nullIfBlank(source.clientDocument),
+        address: _nullIfBlank(source.clientAddress),
+        phone: _nullIfBlank(source.clientPhone),
+        email: _nullIfBlank(source.clientEmail),
       ),
       receiptTypeLabel: 'Cotización',
       paymentTermsLabel: 'CONTADO',

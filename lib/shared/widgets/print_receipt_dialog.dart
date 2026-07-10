@@ -7,14 +7,30 @@ import '../../features/printing/data/printing.dart';
 import 'app_snackbar.dart';
 
 class PrintReceiptDialog extends StatefulWidget {
-  const PrintReceiptDialog({super.key, required this.printData});
+  const PrintReceiptDialog({
+    super.key,
+    required this.printData,
+    this.enableDeliveryNote = false,
+  });
 
   final PreparedPrintJobData printData;
 
-  static Future<void> show(BuildContext context, PreparedPrintJobData data) {
+  /// Si true, el diálogo muestra el toggle "Conduce (sin precios)" para
+  /// reimprimir el mismo documento como nota de entrega. Lo activan las
+  /// ventas cuando `app_enable_delivery_notes` está prendido.
+  final bool enableDeliveryNote;
+
+  static Future<void> show(
+    BuildContext context,
+    PreparedPrintJobData data, {
+    bool enableDeliveryNote = false,
+  }) {
     return showDialog(
       context: context,
-      builder: (_) => PrintReceiptDialog(printData: data),
+      builder: (_) => PrintReceiptDialog(
+        printData: data,
+        enableDeliveryNote: enableDeliveryNote,
+      ),
     );
   }
 
@@ -24,6 +40,11 @@ class PrintReceiptDialog extends StatefulWidget {
 
 class _PrintReceiptDialogState extends State<PrintReceiptDialog> {
   late PrintPaperSize _selectedSize;
+
+  /// Cuando está activo, el documento se imprime/previsualiza como CONDUCE
+  /// (sin precios). Solo disponible si [PrintReceiptDialog.enableDeliveryNote].
+  bool _asDeliveryNote = false;
+
   final _templateService = const PrintingTemplateService();
 
   @override
@@ -32,16 +53,28 @@ class _PrintReceiptDialogState extends State<PrintReceiptDialog> {
     _selectedSize = widget.printData.paperSize;
   }
 
-  A4DocumentTemplate get _a4Template =>
-      widget.printData.a4Template ??
-      _templateService.buildA4Template(widget.printData.document);
+  /// Documento efectivo a renderizar: el original, o su variante conduce
+  /// (mismos datos, `hidePrices: true`) cuando el toggle está activo.
+  PrintDocumentData get _effectiveDocument => _asDeliveryNote
+      ? widget.printData.document.copyWith(hidePrices: true)
+      : widget.printData.document;
 
-  String get _docTitle => switch (widget.printData.document.documentType) {
-        PrintDocumentType.quote => 'Cotización',
-        PrintDocumentType.fiscalInvoice => 'Factura Fiscal',
-        PrintDocumentType.purchaseOrder => 'Orden de compra',
-        _ => 'Recibo de venta',
-      };
+  A4DocumentTemplate get _a4Template => _asDeliveryNote
+      ? _templateService.buildA4Template(_effectiveDocument)
+      : (widget.printData.a4Template ??
+          _templateService.buildA4Template(widget.printData.document));
+
+  String get _docTitle {
+    if (_asDeliveryNote) return 'Conduce';
+    return switch (widget.printData.document.documentType) {
+      PrintDocumentType.quote => 'Cotización',
+      PrintDocumentType.fiscalInvoice => 'Factura Fiscal',
+      PrintDocumentType.purchaseOrder => 'Orden de compra',
+      PrintDocumentType.paymentReceipt => 'Recibo de abono',
+      PrintDocumentType.expenseVoucher => 'Comprobante de gasto',
+      _ => 'Recibo de venta',
+    };
+  }
 
   /// Disparador del botón Imprimir.
   ///
@@ -59,7 +92,7 @@ class _PrintReceiptDialogState extends State<PrintReceiptDialog> {
   ///      ventana), mostramos un hint sobre el bloqueador de pop-ups.
   ///   4. Solo cerramos el diálogo si la operación se completó OK.
   Future<void> _onPrintPressed(BuildContext context) async {
-    final doc = widget.printData.document;
+    final doc = _effectiveDocument;
     final name = doc.documentNumber;
     final useThermal = _selectedSize == PrintPaperSize.thermal80mm;
     final navigator = Navigator.of(context);
@@ -131,13 +164,21 @@ class _PrintReceiptDialogState extends State<PrintReceiptDialog> {
       content: SizedBox(
         width: isThermal ? 340 : 560,
         height: 480,
-        child: ClipRect(
-          child: isThermal
-              ? _ThermalPreview(document: widget.printData.document)
-              : _A4Preview(
-                  template: _a4Template,
-                  document: widget.printData.document,
-                ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (widget.enableDeliveryNote) _buildDeliveryToggle(),
+            Expanded(
+              child: ClipRect(
+                child: isThermal
+                    ? _ThermalPreview(document: _effectiveDocument)
+                    : _A4Preview(
+                        template: _a4Template,
+                        document: _effectiveDocument,
+                      ),
+              ),
+            ),
+          ],
         ),
       ),
       actions: [
@@ -148,9 +189,58 @@ class _PrintReceiptDialogState extends State<PrintReceiptDialog> {
         FilledButton.icon(
           onPressed: () => _onPrintPressed(context),
           icon: const Icon(Icons.print_rounded, size: 18),
-          label: const Text('Imprimir'),
+          label: Text(_asDeliveryNote ? 'Imprimir conduce' : 'Imprimir'),
         ),
       ],
+    );
+  }
+
+  /// Toggle "Conduce (sin precios)". Al activarlo, la vista previa y la
+  /// impresión pasan a la variante sin montos (misma venta, `hidePrices`).
+  Widget _buildDeliveryToggle() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: _asDeliveryNote ? const Color(0xFFEFF6FF) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: _asDeliveryNote
+              ? const Color(0xFFBFDBFE)
+              : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.local_shipping_outlined,
+            size: 18,
+            color: _asDeliveryNote
+                ? const Color(0xFF1D4ED8)
+                : const Color(0xFF64748B),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Conduce (sin precios)',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                ),
+                Text(
+                  'Nota de entrega: mismos productos y cantidades, sin montos.',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                ),
+              ],
+            ),
+          ),
+          Switch(
+            value: _asDeliveryNote,
+            onChanged: (v) => setState(() => _asDeliveryNote = v),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -231,6 +321,16 @@ class _ThermalPreview extends StatelessWidget {
                   ),
                 const SizedBox(height: 10),
 
+                if (d.hidePrices) ...[
+                  Center(
+                    child: Text(
+                      'CONDUCE',
+                      style: _monoBold.copyWith(fontSize: 13),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+
                 // Fecha derecha
                 Align(
                   alignment: Alignment.centerRight,
@@ -270,10 +370,12 @@ class _ThermalPreview extends StatelessWidget {
 
                 // Tabla items
                 _itemsTable(d),
-                const SizedBox(height: 10),
 
-                // Totales
-                _totals(d),
+                // Totales (no en conduce)
+                if (!d.hidePrices) ...[
+                  const SizedBox(height: 10),
+                  _totals(d),
+                ],
 
                 if (_t(d.notes)) ...[
                   const SizedBox(height: 8),
@@ -365,6 +467,37 @@ class _ThermalPreview extends StatelessWidget {
   }
 
   Widget _itemsTable(PrintDocumentData d) {
+    // Conduce: solo Nombre + Cant., sin precio ni total.
+    if (d.hidePrices) {
+      return Table(
+        columnWidths: const {
+          0: FlexColumnWidth(5),
+          1: FixedColumnWidth(44),
+        },
+        defaultVerticalAlignment: TableCellVerticalAlignment.top,
+        children: [
+          TableRow(
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: Colors.grey.shade400, width: 0.6),
+              ),
+            ),
+            children: const [
+              _Cell('Nombre', style: _monoBold),
+              _Cell('Cant.', style: _monoBold, align: Alignment.center),
+            ],
+          ),
+          for (final item in d.items)
+            TableRow(
+              children: [
+                _Cell(item.description, style: _mono),
+                _Cell(_qty(item.quantity),
+                    style: _mono, align: Alignment.center),
+              ],
+            ),
+        ],
+      );
+    }
     return Table(
       columnWidths: const {
         0: FlexColumnWidth(5),
@@ -591,14 +724,16 @@ class _A4Preview extends StatelessWidget {
 
           const SizedBox(height: 16),
 
-          // Items table
+          // Items table — en conduce se ocultan las columnas Precio y Total.
           Table(
-            columnWidths: const {
-              0: FlexColumnWidth(4),
-              1: FlexColumnWidth(1),
-              2: FlexColumnWidth(2),
-              3: FlexColumnWidth(2),
-            },
+            columnWidths: document.hidePrices
+                ? const {0: FlexColumnWidth(5), 1: FlexColumnWidth(1)}
+                : const {
+                    0: FlexColumnWidth(4),
+                    1: FlexColumnWidth(1),
+                    2: FlexColumnWidth(2),
+                    3: FlexColumnWidth(2),
+                  },
             children: [
               TableRow(
                 decoration: const BoxDecoration(
@@ -609,8 +744,8 @@ class _A4Preview extends StatelessWidget {
                 children: [
                   _tableHeader('Descripción'),
                   _tableHeader('Cant.', numeric: true),
-                  _tableHeader('Precio', numeric: true),
-                  _tableHeader('Total', numeric: true),
+                  if (!document.hidePrices) _tableHeader('Precio', numeric: true),
+                  if (!document.hidePrices) _tableHeader('Total', numeric: true),
                 ],
               ),
               for (int i = 0; i < template.itemRows.length; i++)
@@ -626,66 +761,69 @@ class _A4Preview extends StatelessWidget {
                       template.itemRows[i].quantityLabel,
                       numeric: true,
                     ),
-                    _tableCell(
-                      template.itemRows[i].unitPriceLabel,
-                      numeric: true,
-                    ),
-                    _tableCell(
-                      template.itemRows[i].totalLabel,
-                      numeric: true,
-                      bold: true,
-                    ),
+                    if (!document.hidePrices)
+                      _tableCell(
+                        template.itemRows[i].unitPriceLabel,
+                        numeric: true,
+                      ),
+                    if (!document.hidePrices)
+                      _tableCell(
+                        template.itemRows[i].totalLabel,
+                        numeric: true,
+                        bold: true,
+                      ),
                   ],
                 ),
             ],
           ),
 
-          const SizedBox(height: 12),
-          const Divider(height: 1, color: Color(0xFFE2E8F0)),
-          const SizedBox(height: 8),
-
-          // Totals
-          Align(
-            alignment: Alignment.centerRight,
-            child: SizedBox(
-              width: 220,
-              child: Column(
-                children: [
-                  for (final row in template.totalRows)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            row.label,
-                            style: TextStyle(
-                              fontSize: row.emphasized ? 14 : 12,
-                              fontWeight: row.emphasized
-                                  ? FontWeight.w800
-                                  : FontWeight.w500,
-                              color: const Color(0xFF475569),
+          // Totales (no en conduce).
+          if (!document.hidePrices) ...[
+            const SizedBox(height: 12),
+            const Divider(height: 1, color: Color(0xFFE2E8F0)),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: SizedBox(
+                width: 220,
+                child: Column(
+                  children: [
+                    for (final row in template.totalRows)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              row.label,
+                              style: TextStyle(
+                                fontSize: row.emphasized ? 14 : 12,
+                                fontWeight: row.emphasized
+                                    ? FontWeight.w800
+                                    : FontWeight.w500,
+                                color: const Color(0xFF475569),
+                              ),
                             ),
-                          ),
-                          Text(
-                            row.value,
-                            style: TextStyle(
-                              fontSize: row.emphasized ? 15 : 12,
-                              fontWeight: row.emphasized
-                                  ? FontWeight.w900
-                                  : FontWeight.w600,
-                              color: row.emphasized
-                                  ? const Color(0xFF2563EB)
-                                  : const Color(0xFF1E293B),
+                            Text(
+                              row.value,
+                              style: TextStyle(
+                                fontSize: row.emphasized ? 15 : 12,
+                                fontWeight: row.emphasized
+                                    ? FontWeight.w900
+                                    : FontWeight.w600,
+                                color: row.emphasized
+                                    ? const Color(0xFF2563EB)
+                                    : const Color(0xFF1E293B),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
+          ],
 
           if (template.notes != null) ...[
             const SizedBox(height: 16),
