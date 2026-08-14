@@ -45,6 +45,7 @@ class ThermalEscPosRenderer {
     if (_has(d.branch.address)) e.wrapped(d.branch.address!);
     if (_has(d.branch.phone)) e.text(d.branch.phone!);
     if (_has(d.branch.taxId)) e.text('RNC ${d.branch.taxId}');
+    if (d.hidePrices) e.bold(true).text('CONDUCE').bold(false);
     e.feed();
 
     // ── Metadatos ────────────────────────────────────────────────────────
@@ -79,37 +80,48 @@ class ThermalEscPosRenderer {
     // ── Tabla de items ───────────────────────────────────────────────────
     e.feed();
     e.divider();
-    e.bold(true).text(_itemHeader()).bold(false);
+    e.bold(true).text(_itemHeader(d.hidePrices)).bold(false);
     e.divider();
     for (final item in d.items) {
       e.wrapped(item.description);
-      e.text(_itemDetail(item));
+      e.text(_itemDetail(item, d.hidePrices));
     }
     e.divider();
 
-    // ── Totales ──────────────────────────────────────────────────────────
-    final t = d.totals;
-    e.twoColumns('Subtotal', money(t.subtotal));
-    if (t.discount > 0) e.twoColumns('Descuento', '-${money(t.discount)}');
-    if (t.serviceCharge > 0) e.twoColumns('Servicio', money(t.serviceCharge));
-    if (t.tax > 0) e.twoColumns('ITBIS', money(t.tax));
-    e.bold(true).size(doubleHeight: true);
-    e.twoColumns('TOTAL', money(t.total));
-    e.size().bold(false);
-    if (d.changeAmount != null && d.changeAmount! >= 0) {
-      e.twoColumns('Cambio', money(d.changeAmount));
-    }
-    if (t.balance > 0) {
-      e.bold(true).twoColumns('Pendiente', money(t.balance)).bold(false);
-    }
-    for (final payment in d.payments) {
-      e.twoColumns(payment.method, money(payment.amount));
+    // ── Totales (el conduce no lleva montos ni pagos) ────────────────────
+    if (!d.hidePrices) {
+      final t = d.totals;
+      e.twoColumns('Subtotal', money(t.subtotal));
+      if (t.discount > 0) e.twoColumns('Descuento', '-${money(t.discount)}');
+      if (t.serviceCharge > 0) e.twoColumns('Servicio', money(t.serviceCharge));
+      if (t.tax > 0) e.twoColumns('ITBIS', money(t.tax));
+      e.bold(true).size(doubleHeight: true);
+      e.twoColumns('TOTAL', money(t.total));
+      e.size().bold(false);
+      if (d.changeAmount != null && d.changeAmount! >= 0) {
+        e.twoColumns('Cambio', money(d.changeAmount));
+      }
+      if (t.balance > 0) {
+        e.bold(true).twoColumns('Pendiente', money(t.balance)).bold(false);
+      }
+      for (final payment in d.payments) {
+        e.twoColumns(payment.method, money(payment.amount));
+      }
     }
 
     // ── Notas / pie ──────────────────────────────────────────────────────
     if (_has(d.notes)) {
       e.feed();
       e.wrapped('Notas: ${d.notes}');
+    }
+
+    // Conduce: acuse de recibo, igual que en el A4 y el PDF de 80mm.
+    if (d.hidePrices) {
+      e.feed();
+      e.bold(true).text('RECIBIDO POR:').bold(false);
+      for (final label in const ['Nombre', 'Cedula o ID', 'Firma', 'Fecha']) {
+        e.text('$label: ______________________');
+      }
     }
     if (_has(d.footerMessage)) {
       e.feed();
@@ -123,14 +135,16 @@ class ThermalEscPosRenderer {
     }
   }
 
-  String _itemHeader() {
+  String _itemHeader(bool hidePrices) {
     // Columnas: descripción (en su propia línea) y aquí el desglose numérico.
-    final right = 'Cant x Precio'.padLeft(columns - 'Articulo'.length);
+    final label = hidePrices ? 'Cantidad' : 'Cant x Precio';
+    final right = label.padLeft(columns - 'Articulo'.length);
     return 'Articulo$right';
   }
 
-  String _itemDetail(PrintDocumentItem item) {
+  String _itemDetail(PrintDocumentItem item, bool hidePrices) {
     final qty = _qty(item.quantity);
+    if (hidePrices) return qty.padLeft(columns);
     final detail = '$qty x ${money(item.unitPrice)}';
     final total = money(item.lineTotal);
     final gap = columns - detail.length - total.length;

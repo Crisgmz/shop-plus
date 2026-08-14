@@ -22,6 +22,17 @@ const _receiptTypeLabels = <String, String>{
   'export': 'Exportación',
 };
 
+/// Opciones del comprobante POR DEFECTO del POS. Suma "Sin comprobante" (nota
+/// de venta no fiscal, sin NCF ni ITBIS) a los tipos fiscales.
+///
+/// Es un mapa aparte de [_receiptTypeLabels] a propósito: ese alimenta el
+/// editor de secuencias NCF, donde 'none' no tiene sentido porque no consume
+/// numeración.
+const _defaultReceiptTypeLabels = <String, String>{
+  'none': 'Sin comprobante (nota de venta)',
+  ..._receiptTypeLabels,
+};
+
 /// Prefijo NCF según DGII (RD): serie B + tipo de comprobante (2 dígitos). El
 /// NCF se forma como prefijo + 8 dígitos de secuencia (ej. B02 + 00000001 =
 /// B0200000001, 11 caracteres). Estos son los códigos oficiales por tipo.
@@ -1918,8 +1929,11 @@ class _FiscalSettingsDialogState extends State<_FiscalSettingsDialog> {
                   initialValue: _defaultReceiptType,
                   decoration: const InputDecoration(
                     labelText: 'Tipo de comprobante por defecto',
+                    helperText:
+                        'Con el que arranca cada venta nueva en el POS. El '
+                        'cajero puede cambiarlo por venta.',
                   ),
-                  items: _receiptTypeLabels.entries
+                  items: _defaultReceiptTypeLabels.entries
                       .map(
                         (e) => DropdownMenuItem<String>(
                           value: e.key,
@@ -2521,7 +2535,8 @@ String _roleLabel(String? role) {
   }
 }
 
-String _receiptTypeLabel(String type) => _receiptTypeLabels[type] ?? type;
+String _receiptTypeLabel(String type) =>
+    _defaultReceiptTypeLabels[type] ?? type;
 
 String _date(DateTime value) {
   final day = value.day.toString().padLeft(2, '0');

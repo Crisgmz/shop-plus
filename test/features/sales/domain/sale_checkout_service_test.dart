@@ -97,7 +97,10 @@ void main() {
       );
     });
 
-    test('rechaza productos sin stock suficiente', () {
+    // El stock solo se valida en el cliente cuando `inv_disallow_no_stock`
+    // está prendido (commit e34adf7, "ventas sin stock"): si el dueño permite
+    // vender en negativo, el POS deja pasar y decide el RPC.
+    test('rechaza productos sin stock cuando disallowNoStock está activo', () {
       expect(
         () => service.normalize(
           SaleCheckoutServiceInput(
@@ -109,10 +112,27 @@ void main() {
             ],
             receiptType: 'consumer_final',
             asCredit: false,
+            disallowNoStock: true,
           ),
         ),
         throwsA(isA<SaleCheckoutValidationException>()),
       );
+    });
+
+    test('permite vender sin stock cuando disallowNoStock está apagado', () {
+      final result = service.normalize(
+        SaleCheckoutServiceInput(
+          items: [
+            SaleCheckoutSourceItem(
+              product: buildProduct(stock: 1),
+              quantity: 2,
+            ),
+          ],
+          receiptType: 'consumer_final',
+          asCredit: false,
+        ),
+      );
+      expect(result.items.single.quantity, 2);
     });
   });
 }

@@ -6,6 +6,7 @@ import 'package:printing/printing.dart';
 
 import '../../features/printing/data/printing.dart';
 import '../../features/printing/presentation/network_printer_providers.dart';
+import '../formatters/formatters.dart';
 import 'app_snackbar.dart';
 
 class PrintReceiptDialog extends ConsumerStatefulWidget {
@@ -439,6 +440,12 @@ class _ThermalPreview extends StatelessWidget {
                   _totals(d),
                 ],
 
+                // Conduce: acuse de recibo, igual que en el A4.
+                if (d.hidePrices) ...[
+                  const SizedBox(height: 14),
+                  _receivedBy(),
+                ],
+
                 if (_t(d.notes)) ...[
                   const SizedBox(height: 8),
                   Text(
@@ -560,12 +567,14 @@ class _ThermalPreview extends StatelessWidget {
         ],
       );
     }
+    // Importes sin símbolo de moneda, igual que en el PDF térmico: "RD$" en
+    // cada línea no cabe en 80mm y partía el número en dos renglones.
     return Table(
       columnWidths: const {
         0: FlexColumnWidth(5),
-        1: FixedColumnWidth(56),
-        2: FixedColumnWidth(38),
-        3: FixedColumnWidth(60),
+        1: FixedColumnWidth(52),
+        2: FixedColumnWidth(30),
+        3: FixedColumnWidth(56),
       },
       defaultVerticalAlignment: TableCellVerticalAlignment.top,
       children: [
@@ -586,11 +595,11 @@ class _ThermalPreview extends StatelessWidget {
           TableRow(
             children: [
               _Cell(item.description, style: _mono),
-              _Cell(_money(item.unitPrice),
+              _Cell(moneyPlain(item.unitPrice),
                   style: _mono, align: Alignment.centerRight),
               _Cell(_qty(item.quantity),
                   style: _mono, align: Alignment.center),
-              _Cell(_money(item.lineTotal),
+              _Cell(moneyPlain(item.lineTotal),
                   style: _mono, align: Alignment.centerRight),
             ],
           ),
@@ -623,19 +632,38 @@ class _ThermalPreview extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        line('Subtotal', _money(d.totals.subtotal)),
+        line('Subtotal', money(d.totals.subtotal)),
         if (d.totals.discount > 0)
-          line('Descuento', '-${_money(d.totals.discount)}'),
+          line('Descuento', '-${money(d.totals.discount)}'),
         if (d.totals.serviceCharge > 0)
-          line('Servicio', _money(d.totals.serviceCharge)),
-        if (d.totals.tax > 0) line('ITBIS', _money(d.totals.tax)),
-        line('Total', _money(d.totals.total), bold: true),
+          line('Servicio', money(d.totals.serviceCharge)),
+        if (d.totals.tax > 0) line('ITBIS', money(d.totals.tax)),
+        line('Total', money(d.totals.total), bold: true),
         if (d.changeAmount != null && d.changeAmount! >= 0)
-          line('Cambio', _money(d.changeAmount!)),
+          line('Cambio', money(d.changeAmount!)),
         if (d.totals.balance > 0)
-          line('Pendiente', _money(d.totals.balance), bold: true),
+          line('Pendiente', money(d.totals.balance), bold: true),
         for (final payment in d.payments)
-          line(payment.method, _money(payment.amount)),
+          line(payment.method, money(payment.amount)),
+      ],
+    );
+  }
+
+  /// Acuse de entrega del conduce — refleja el bloque "RECIBIDO POR" del PDF.
+  Widget _receivedBy() {
+    Widget formLine(String label) => Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text('$label: ______________________', style: _mono),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('RECIBIDO POR:', style: _monoBold),
+        formLine('Nombre'),
+        formLine('Cédula o ID'),
+        formLine('Firma'),
+        formLine('Fecha'),
       ],
     );
   }
@@ -648,12 +676,6 @@ class _ThermalPreview extends StatelessWidget {
     return '${two(local.day)}-${two(local.month)}-${local.year} '
         '${two(local.hour)}:${two(local.minute)}';
   }
-
-  static String _money(double v) =>
-      'RD\$${v.toStringAsFixed(2).replaceAllMapped(
-            RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
-            (m) => '${m[1]},',
-          )}';
 
   static String _qty(double v) {
     if (v == v.roundToDouble()) return v.toStringAsFixed(0);

@@ -9,6 +9,10 @@ class SaleCheckoutService {
     }
 
     final receiptType = normalizeReceiptType(input.receiptType);
+    // Una venta sin comprobante es una nota de venta no fiscal: no factura
+    // ITBIS. Espeja `v_line_tax_rate` del RPC `checkout_sale_transactional`
+    // (migración 64), que es quien fija los totales que se guardan.
+    final chargesTax = receiptType != 'none';
     final normalizedItems = <String, _MutableSaleLine>{};
 
     for (final item in input.items) {
@@ -72,8 +76,9 @@ class SaleCheckoutService {
             );
           }
 
+          final taxRate = chargesTax ? line.taxRate : 0.0;
           final lineSubtotal = round2(line.quantity * line.unitPrice);
-          final lineTax = round2(lineSubtotal * (line.taxRate / 100));
+          final lineTax = round2(lineSubtotal * (taxRate / 100));
           final lineTotal = round2(lineSubtotal + lineTax);
 
           return NormalizedSaleCheckoutItem(
@@ -82,7 +87,7 @@ class SaleCheckoutService {
             quantity: line.quantity,
             availableStock: line.availableStock,
             unitPrice: line.unitPrice,
-            taxRate: line.taxRate,
+            taxRate: taxRate,
             lineSubtotal: lineSubtotal,
             lineTax: lineTax,
             lineTotal: lineTotal,
@@ -103,7 +108,11 @@ class SaleCheckoutService {
       );
     }
 
-    if (receiptType != 'consumer_final' && input.clientId == null) {
+    // Los comprobantes fiscales (B01/B14/B15/B16) exigen identificar al
+    // comprador. Consumidor final (B02) y "sin comprobante" no.
+    if (receiptType != 'consumer_final' &&
+        receiptType != 'none' &&
+        input.clientId == null) {
       throw const SaleCheckoutValidationException(
         'Debe seleccionar un cliente para este tipo de comprobante.',
       );
@@ -319,6 +328,12 @@ String normalizeReceiptType(String value) {
       .replaceAll(RegExp(r'^_|_$'), '');
 
   switch (normalized) {
+    // Sin comprobante: nota de venta no fiscal. No consume NCF, no exige
+    // cliente y no factura ITBIS. Espeja `normalize_receipt_type` en SQL.
+    case 'none':
+    case 'sin_comprobante':
+    case 'ninguno':
+      return 'none';
     case '':
     case 'consumer_final':
     case 'consumidor_final':

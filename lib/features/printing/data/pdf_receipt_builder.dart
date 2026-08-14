@@ -77,7 +77,10 @@ class PdfReceiptBuilder {
       pdf.addPage(
         pw.Page(
           pageFormat: pageFormat,
-          margin: const pw.EdgeInsets.all(36),
+          // Margen superior más holgado que el resto: el logo va pegado al
+          // tope y con 36pt quedaba dentro del área no imprimible de varias
+          // impresoras (salía cortado por arriba).
+          margin: const pw.EdgeInsets.fromLTRB(36, 48, 36, 36),
           build: (context) =>
               _buildContent(data, qrBytes: qrBytes, logoBytes: logoBytes),
         ),
@@ -282,10 +285,20 @@ class PdfReceiptBuilder {
           _thermalTotals(data, base: base, bold: bold),
         ],
 
-        // ── 7) Notas / footer / barcode ───────────────────────────────────
+        // ── 7) Notas / acuse de entrega / footer / barcode ────────────────
         if (_hasText(data.notes)) ...[
           _thermalDashedDivider(),
           pw.Text('Notas: ${data.notes}', style: muted),
+        ],
+        // Conduce: acuse de recibo, igual que en el A4 — quien recibe la
+        // mercancía firma aquí.
+        if (data.hidePrices) ...[
+          _thermalDashedDivider(),
+          pw.Text('RECIBIDO POR:', style: bold),
+          _thermalFormLine('Nombre', style: base),
+          _thermalFormLine('Cédula o ID', style: base),
+          _thermalFormLine('Firma', style: base),
+          _thermalFormLine('Fecha', style: base),
         ],
         if (_hasText(data.footerMessage)) ...[
           pw.SizedBox(height: 6),
@@ -333,6 +346,15 @@ class PdfReceiptBuilder {
           color: PdfColors.grey600,
         ),
       ),
+    );
+  }
+
+  /// Línea de formulario del ticket (`Firma _________`) para el acuse de
+  /// entrega del conduce.
+  pw.Widget _thermalFormLine(String label, {required pw.TextStyle style}) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(top: 8),
+      child: pw.Text('$label: ______________________', style: style),
     );
   }
 
@@ -397,12 +419,17 @@ class PdfReceiptBuilder {
         ],
       );
     }
+    // El ancho útil del ticket son ~181pt (80mm − 8mm de margen a cada lado).
+    // Con "RD$" en cada línea los importes no entraban y saltaban de línea,
+    // así que las columnas van sin símbolo (`moneyPlain`) y este aparece una
+    // sola vez, en los totales.
+    final amountStyle = pw.TextStyle(fontSize: base.fontSize! - 0.5);
     return pw.Table(
       columnWidths: const {
         0: pw.FlexColumnWidth(1),   // Nombre (toma el espacio restante)
-        1: pw.FixedColumnWidth(50), // Precio (suficiente para "RD$ 1,000.00")
-        2: pw.FixedColumnWidth(32), // Cant. — centrado, con aire a los lados
-        3: pw.FixedColumnWidth(55), // Total
+        1: pw.FixedColumnWidth(45), // Precio — "999,999.99" sin símbolo
+        2: pw.FixedColumnWidth(26), // Cant
+        3: pw.FixedColumnWidth(49), // Total
       },
       children: [
         // Header
@@ -415,7 +442,7 @@ class PdfReceiptBuilder {
           children: [
             _thermalCell('Nombre', style: bold),
             _thermalCell('Precio', style: bold, align: pw.Alignment.centerRight),
-            _thermalCell('Cant.', style: bold, align: pw.Alignment.center),
+            _thermalCell('Cant', style: bold, align: pw.Alignment.center),
             _thermalCell('Total', style: bold, align: pw.Alignment.centerRight),
           ],
         ),
@@ -424,9 +451,10 @@ class PdfReceiptBuilder {
             children: [
               _thermalCell(item.description, style: base),
               _thermalCell(
-                money(item.unitPrice),
-                style: base,
+                moneyPlain(item.unitPrice),
+                style: amountStyle,
                 align: pw.Alignment.centerRight,
+                noWrap: true,
               ),
               _thermalCell(
                 _qty(item.quantity),
@@ -434,9 +462,10 @@ class PdfReceiptBuilder {
                 align: pw.Alignment.center,
               ),
               _thermalCell(
-                money(item.lineTotal),
-                style: base,
+                moneyPlain(item.lineTotal),
+                style: amountStyle,
                 align: pw.Alignment.centerRight,
+                noWrap: true,
               ),
             ],
           ),
@@ -448,14 +477,21 @@ class PdfReceiptBuilder {
     String text, {
     required pw.TextStyle style,
     pw.Alignment align = pw.Alignment.centerLeft,
+    bool noWrap = false,
   }) {
     return pw.Padding(
       // Padding interno mayor: separa visualmente columnas (antes 1pt
-      // hacía que "2" tocara "RD$ 1,100.00").
-      padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 3),
+      // hacía que "2" tocara "1,100.00").
+      padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
       child: pw.Align(
         alignment: align,
-        child: pw.Text(text, style: style),
+        child: pw.Text(
+          text,
+          style: style,
+          softWrap: noWrap ? false : null,
+          maxLines: noWrap ? 1 : null,
+          textAlign: noWrap ? pw.TextAlign.right : null,
+        ),
       ),
     );
   }
@@ -474,9 +510,11 @@ class PdfReceiptBuilder {
             pw.Text(label, style: emphasized ? bold : base),
             pw.SizedBox(width: 12),
             pw.SizedBox(
-              width: 80,
+              width: 84,
               child: pw.Text(
                 value,
+                softWrap: false,
+                maxLines: 1,
                 textAlign: pw.TextAlign.right,
                 style: emphasized ? bold : base,
               ),
@@ -555,8 +593,19 @@ class PdfReceiptBuilder {
         pw.Column(
           crossAxisAlignment: pw.CrossAxisAlignment.end,
           children: [
+            // Caja fija + BoxFit.contain: el logo entra completo sea cual sea
+            // su relación de aspecto. Sin el ancho acotado, un logo apaisado
+            // se comía el ancho de la fila y aplastaba los datos del emisor.
             if (logoBytes != null)
-              pw.Image(pw.MemoryImage(logoBytes), height: 50),
+              pw.SizedBox(
+                width: 130,
+                height: 50,
+                child: pw.Image(
+                  pw.MemoryImage(logoBytes),
+                  fit: pw.BoxFit.contain,
+                  alignment: pw.Alignment.centerRight,
+                ),
+              ),
             pw.SizedBox(height: 3),
             pw.Text(
               data.branch.name,
@@ -709,6 +758,28 @@ class PdfReceiptBuilder {
       );
     }
 
+    // Celda de monto: una sola línea, siempre. Sin `softWrap: false` el
+    // espacio de "RD$ 76.27" era un punto de corte válido y el importe salía
+    // partido — "RD$" arriba y el número abajo.
+    pw.Widget moneyCell(String text, {bool bold = false}) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 5, horizontal: 3),
+        child: pw.Align(
+          alignment: pw.Alignment.centerRight,
+          child: pw.Text(
+            text,
+            softWrap: false,
+            maxLines: 1,
+            textAlign: pw.TextAlign.right,
+            style: pw.TextStyle(
+              fontSize: 9,
+              fontWeight: bold ? pw.FontWeight.bold : null,
+            ),
+          ),
+        ),
+      );
+    }
+
     const right = pw.Alignment.centerRight;
 
     // Conduce (nota de entrega): solo Cantidad + Descripción, sin montos.
@@ -748,23 +819,25 @@ class PdfReceiptBuilder {
     }
 
     final showTax = data.showTax;
-    // La columna ITBIS solo aparece si el documento lleva impuesto. Sin ITBIS
-    // se reparte su ancho entre las columnas numéricas (5 columnas).
+    // Anchos dimensionados para que "RD$ 999,999.99" entre completo en una
+    // línea a 9pt (≈72pt de texto + 6pt de padding). La columna ITBIS tenía
+    // 36pt — de ahí que el importe se partiera en dos líneas.
+    // Sin ITBIS se reparte su ancho entre las demás columnas numéricas.
     final columnWidths = showTax
         ? const <int, pw.TableColumnWidth>{
-            0: pw.FixedColumnWidth(58),
+            0: pw.FixedColumnWidth(56), // "CANTIDAD" en una línea
             1: pw.FlexColumnWidth(3),
-            2: pw.FixedColumnWidth(68),
+            2: pw.FixedColumnWidth(74),
             3: pw.FixedColumnWidth(74),
-            4: pw.FixedColumnWidth(36),
+            4: pw.FixedColumnWidth(68),
             5: pw.FixedColumnWidth(80),
           }
         : const <int, pw.TableColumnWidth>{
-            0: pw.FixedColumnWidth(58),
+            0: pw.FixedColumnWidth(56), // "CANTIDAD" en una línea
             1: pw.FlexColumnWidth(3),
-            2: pw.FixedColumnWidth(76),
-            3: pw.FixedColumnWidth(82),
-            4: pw.FixedColumnWidth(84),
+            2: pw.FixedColumnWidth(80),
+            3: pw.FixedColumnWidth(80),
+            4: pw.FixedColumnWidth(86),
           };
     return pw.Table(
       columnWidths: columnWidths,
@@ -795,14 +868,11 @@ class PdfReceiptBuilder {
             children: [
               cell(_qty(it.quantity), align: pw.Alignment.center),
               cell(it.description),
-              cell(money(it.unitPrice), align: right),
-              cell(money(it.lineSubtotal), align: right),
+              moneyCell(money(it.unitPrice)),
+              moneyCell(money(it.lineSubtotal)),
               if (showTax)
-                cell(
-                  it.lineTax > 0.0049 ? money(it.lineTax) : '-',
-                  align: right,
-                ),
-              cell(money(it.lineTotal), align: right, bold: true),
+                moneyCell(it.lineTax > 0.0049 ? money(it.lineTax) : '-'),
+              moneyCell(money(it.lineTotal), bold: true),
             ],
           ),
       ],
@@ -865,6 +935,8 @@ class PdfReceiptBuilder {
                 pw.SizedBox(width: 12),
                 pw.Text(
                   money(data.totals.total),
+                  softWrap: false,
+                  maxLines: 1,
                   style: pw.TextStyle(
                     fontSize: 17,
                     fontWeight: pw.FontWeight.bold,
@@ -898,17 +970,27 @@ class PdfReceiptBuilder {
             style: const pw.TextStyle(fontSize: 9.5, color: PdfColors.grey600),
           ),
           pw.SizedBox(width: 8),
-          pw.Text(value, style: const pw.TextStyle(fontSize: 9.5)),
+          pw.Text(
+            value,
+            softWrap: false,
+            maxLines: 1,
+            style: const pw.TextStyle(fontSize: 9.5),
+          ),
         ],
       ),
     );
   }
 
-  /// Firma del emisor + bloque OBSERVACION (formulario del receptor) + QR.
+  /// Firma del emisor + bloque del receptor (OBSERVACION en factura,
+  /// RECIBIDO POR en conduce) + QR.
   pw.Widget _signatureAndObservation(
     PrintDocumentData data,
     Uint8List? qrBytes,
   ) {
+    // En un conduce el bloque del receptor es el acuse de entrega: quien
+    // recibe la mercancía firma ahí. En una factura es la observación.
+    final isConduce = data.hidePrices;
+
     pw.Widget formLine(String label) {
       return pw.Padding(
         padding: const pw.EdgeInsets.only(top: 6),
@@ -965,13 +1047,13 @@ class PdfReceiptBuilder {
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
                 children: [
                   pw.Text(
-                    'OBSERVACION:',
+                    isConduce ? 'RECIBIDO POR:' : 'OBSERVACION:',
                     style: pw.TextStyle(
                       fontSize: 9,
                       fontWeight: pw.FontWeight.bold,
                     ),
                   ),
-                  if (_hasText(data.observation))
+                  if (!isConduce && _hasText(data.observation))
                     pw.Padding(
                       padding: const pw.EdgeInsets.only(top: 2),
                       child: pw.Text(
@@ -982,7 +1064,11 @@ class PdfReceiptBuilder {
                         ),
                       ),
                     ),
-                  formLine('Nombre del representante:'),
+                  formLine(
+                    isConduce
+                        ? 'Nombre de quien recibe:'
+                        : 'Nombre del representante:',
+                  ),
                   formLine('Cédula o ID:'),
                   formLine('Firma:'),
                   formLine('Fecha:'),

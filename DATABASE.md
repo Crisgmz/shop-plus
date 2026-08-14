@@ -147,6 +147,38 @@ Triggers actuales soportan:
 - compra suma stock
 - venta descuenta stock
 
+### Venta sin comprobante (nota de venta no fiscal)
+`receipt_type = 'none'` — introducido por la migración 59 y completado por
+`20260810_64_sale_without_ncf_complete.sql`.
+
+- No consume NCF: `tg_sales_assign_ncf` y `tg_sales_assign_ncf_on_complete` lo
+  saltean.
+- No exige comprador identificado: `tg_sales_assert_fiscal_client` lo trata
+  como `consumer_final`.
+- **No factura ITBIS**: `checkout_sale_transactional`, `hold_sale_transactional`
+  y `edit_sale_transactional` fuerzan la tasa de línea a 0 (`v_line_tax_rate` /
+  `v_rate`), así `subtotal = total` y `paid_amount`, `balance_due` y las filas
+  de `payments` cuadran. Por eso la regla vive en los RPC —donde se suman los
+  totales— y no en un trigger.
+- `normalize_receipt_type` acepta `'none'`, `'sin comprobante'` y `'ninguno'`.
+- Queda fuera del 606/607: esos reportes filtran `ncf is not null`.
+- El comprobante con el que arranca cada venta en el POS sale de
+  `branch_fiscal_settings.default_receipt_type` (Ajustes → Fiscal). Si ese tipo
+  necesita NCF y no hay secuencia disponible, el POS cae a `'none'`.
+
+### Numeración de ventas
+`trg_sales_short_number` (BEFORE INSERT en `sales`, migración
+`20260810_63_short_sale_numbers.sql`) reemplaza el número autogenerado por los
+RPC de checkout (`VTA-<timestamp>-<random>`) por un correlativo corto por
+sucursal: `<app_settings.prefix_sale>-NNNNNN`, p. ej. `FA-000123`.
+
+- Contador en `public.sale_number_counters` (una fila por sucursal), servido
+  por `public.next_sale_number(branch_id)` — SECURITY DEFINER, con row lock
+  para que dos cajas concurrentes no repitan número.
+- Solo se reemplaza si `sale_number` es NULL o empieza con `VTA-`. Un número
+  reusado (cuenta guardada que se reabre y se cobra) conserva el suyo.
+- Las ventas anteriores a la migración conservan su número `VTA-…`.
+
 ## 6) Vistas actuales de reportes
 
 Definidas en `03_reports_views.sql`:

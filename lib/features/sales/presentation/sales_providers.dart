@@ -4,23 +4,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/web/kv_store.dart';
 import '../../auth/presentation/auth_providers.dart';
+import '../../settings/presentation/settings_providers.dart';
 import '../data/sales_repository.dart';
 
 final salesSearchProvider = StateProvider<String>((ref) => '');
 final salesSelectedCategoryProvider = StateProvider<String?>((ref) => null);
 
-/// True si la sucursal actual tiene una secuencia NCF de Consumidor Final (B02)
-/// activa, vigente y con stock. Define el comprobante por defecto del POS: con
-/// B02 disponible la venta arranca en 'consumer_final'; si no, en 'none' (sin
-/// comprobante). Si la vista no existe o falla, devuelve false (no asume B02).
-final b02SequenceAvailableProvider =
-    FutureProvider.autoDispose<bool>((ref) async {
+/// True si la sucursal actual tiene una secuencia NCF de [receiptType] activa,
+/// vigente y con stock. Si la vista no existe o falla, devuelve false (nunca
+/// asume que hay comprobantes disponibles).
+final ncfSequenceAvailableProvider =
+    FutureProvider.autoDispose.family<bool, String>((ref, receiptType) async {
   final client = ref.watch(supabaseClientProvider);
   try {
     final rows = await client
         .from('vw_ncf_stock')
         .select('remaining, is_active, is_expired')
-        .eq('receipt_type', 'consumer_final')
+        .eq('receipt_type', receiptType)
         .eq('is_active', true)
         .eq('is_expired', false);
     return (rows as List).any((row) {
@@ -30,6 +30,30 @@ final b02SequenceAvailableProvider =
   } catch (_) {
     return false;
   }
+});
+
+/// Comprobante con el que arranca cada venta nueva del POS.
+///
+/// Sale de Ajustes → Fiscal ("Tipo de comprobante por defecto",
+/// `branch_fiscal_settings.default_receipt_type`). Si ese tipo necesita NCF y
+/// la sucursal no tiene secuencia disponible, cae a 'none' (sin comprobante)
+/// en vez de dejar que la venta falle al cobrar.
+final posDefaultReceiptTypeProvider =
+    FutureProvider.autoDispose<String>((ref) async {
+  String configured;
+  try {
+    final fiscal =
+        await ref.watch(settingsRepositoryProvider).fetchBranchFiscalSettings();
+    configured = fiscal?.defaultReceiptType.trim() ?? '';
+  } catch (_) {
+    configured = '';
+  }
+  if (configured.isEmpty) configured = 'none';
+  if (configured == 'none') return 'none';
+
+  final available =
+      await ref.watch(ncfSequenceAvailableProvider(configured).future);
+  return available ? configured : 'none';
 });
 
 /// Modo del POS: venta normal o registro de devolución (PRD F5).

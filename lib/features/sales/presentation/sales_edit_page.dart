@@ -68,9 +68,16 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     super.dispose();
   }
 
+  /// False en ventas sin comprobante (nota de venta no fiscal): no llevan
+  /// ITBIS. Espeja la regla de `edit_sale_transactional`, que es quien
+  /// recalcula y guarda los totales.
+  bool _chargesTax = true;
+
   double get _subtotal =>
       _items.fold<double>(0, (s, it) => s + it.lineSubtotal);
-  double get _tax => _items.fold<double>(0, (s, it) => s + it.lineTax);
+  double get _tax => _chargesTax
+      ? _items.fold<double>(0, (s, it) => s + it.lineTax)
+      : 0;
   double get _total => _subtotal + _tax;
 
   /// Carga inicial de los items de la venta en el estado local.
@@ -96,6 +103,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
         discountPct: discPct,
       ));
     }
+    _chargesTax = detail.sale.receiptType != 'none';
     _clientId = detail.sale.clientId;
     _notesCtrl.text = detail.sale.notes ?? '';
     _paymentMethod = detail.paymentMethod ?? 'cash';
@@ -393,6 +401,7 @@ class _EditForm extends StatelessWidget {
                 _EditableLineTile(
                   key: ValueKey('${items[i].product.id}-$i'),
                   item: items[i],
+                  chargesTax: detail.sale.receiptType != 'none',
                   onRemove: () => onRemoveItem(i),
                   onChanged: onItemChanged,
                 ),
@@ -542,11 +551,17 @@ class _EditableLineTile extends StatefulWidget {
   const _EditableLineTile({
     super.key,
     required this.item,
+    required this.chargesTax,
     required this.onRemove,
     required this.onChanged,
   });
 
   final _EditCartItem item;
+
+  /// False en ventas sin comprobante: la línea muestra el subtotal, no el
+  /// total con ITBIS, para que cuadre con el total del pie.
+  final bool chargesTax;
+
   final VoidCallback onRemove;
   final VoidCallback onChanged;
 
@@ -674,7 +689,11 @@ class _EditableLineTileState extends State<_EditableLineTile> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  money(widget.item.lineTotal),
+                  money(
+                    widget.chargesTax
+                        ? widget.item.lineTotal
+                        : widget.item.lineSubtotal,
+                  ),
                   style: const TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w800,

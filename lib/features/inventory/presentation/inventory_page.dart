@@ -808,6 +808,9 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
       final bytes = InventoryExcelService().buildExport(
         products: products,
         categories: categories,
+        priceTypes:
+            ref.read(appSettingsProvider).valueOrNull?.salePriceTypes ??
+            const [],
       );
       final fileName = 'inventario_${_timestamp()}.xlsx';
       final saved = await FileIoHelper.saveBytes(
@@ -2382,6 +2385,11 @@ class _ImportInventoryDialogState
     }
   }
 
+  /// Nombres de los tipos de precio configurados en Ajustes. Nombran las
+  /// columnas de nivel de precio de la plantilla en lugar de `precio_2`…
+  List<dynamic> get _priceTypes =>
+      ref.read(appSettingsProvider).valueOrNull?.salePriceTypes ?? const [];
+
   Future<void> _downloadNew() async {
     setState(() => _busy = 'new');
     try {
@@ -2389,6 +2397,7 @@ class _ImportInventoryDialogState
       if (categories == null) return;
       final bytes = InventoryExcelService().buildTemplate(
         categories: categories,
+        priceTypes: _priceTypes,
       );
       final saved = await FileIoHelper.saveBytes(
         bytes: bytes,
@@ -2416,6 +2425,7 @@ class _ImportInventoryDialogState
       final bytes = InventoryExcelService().buildExport(
         products: products,
         categories: categories,
+        priceTypes: _priceTypes,
       );
       final saved = await FileIoHelper.saveBytes(
         bytes: bytes,
@@ -2459,9 +2469,18 @@ class _ImportInventoryDialogState
       final service = InventoryExcelService();
       final InventoryImportParseResult parsed;
       try {
+        final priceTypes = _priceTypes;
         parsed = isCsv
-            ? service.parseImportCsv(bytes: bytes, categories: categories)
-            : service.parseImport(bytes: bytes, categories: categories);
+            ? service.parseImportCsv(
+                bytes: bytes,
+                categories: categories,
+                priceTypes: priceTypes,
+              )
+            : service.parseImport(
+                bytes: bytes,
+                categories: categories,
+                priceTypes: priceTypes,
+              );
       } catch (error) {
         _snack('Archivo inválido: $error');
         return;

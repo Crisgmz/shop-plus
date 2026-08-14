@@ -98,10 +98,18 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   String? _reopenedHeldSaleId;
 
   int get _cartLines => _cart.length;
+
+  /// Una venta "sin comprobante" es una nota de venta no fiscal: no factura
+  /// ITBIS. Espeja `v_line_tax_rate` del RPC de checkout, que es quien fija
+  /// los totales guardados — si el POS mostrara impuesto acá, el cajero
+  /// cobraría un total distinto al que registra la venta.
+  bool get _chargesTax => _receiptType != 'none';
+
   double get _cartSubtotal =>
       _cart.fold<double>(0, (sum, item) => sum + item.lineSubtotal);
-  double get _cartTax =>
-      _cart.fold<double>(0, (sum, item) => sum + item.lineTax);
+  double get _cartTax => _chargesTax
+      ? _cart.fold<double>(0, (sum, item) => sum + item.lineTax)
+      : 0;
   double get _cartTotal => _cartSubtotal + _cartTax;
 
   @override
@@ -119,16 +127,19 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     _notesController.text = draft.notes;
     _reopenedHeldSaleId = draft.heldSaleId;
 
-    // Default dinámico del comprobante: si la venta es fresca (sin elección
-    // explícita aún) y la sucursal tiene secuencia B02 configurada, arrancar
-    // en Consumidor Final (B02). Si no hay B02, queda "Sin comprobante".
+    // Comprobante por defecto de una venta fresca: el configurado en
+    // Ajustes → Fiscal. Ver [posDefaultReceiptTypeProvider] — si ese tipo
+    // necesita NCF y no hay secuencia disponible, cae a "Sin comprobante".
     if (_cart.isEmpty && _receiptType == 'none' && _reopenedHeldSaleId == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
-        final hasB02 = await ref.read(b02SequenceAvailableProvider.future);
+        final byDefault = await ref.read(posDefaultReceiptTypeProvider.future);
         if (!mounted) return;
-        if (hasB02 && _receiptType == 'none' && _cart.isEmpty) {
-          setState(() => _receiptType = 'consumer_final');
+        // Si el cajero ya eligió algo mientras cargaba, no se lo pisamos.
+        if (byDefault != _receiptType &&
+            _receiptType == 'none' &&
+            _cart.isEmpty) {
+          setState(() => _receiptType = byDefault);
           _persistDraft();
         }
       });
@@ -536,6 +547,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                     itemBuilder: (context, i) => _CartLineTile(
                       key: ValueKey(_cart[i].product.id),
                       item: _cart[i],
+                      chargesTax: _chargesTax,
                       onRemove: () => _removeItem(i),
                       onPriceChanged: (value) => _setUnitPrice(i, value),
                       onQuantityChanged: (value) => _setQty(i, value),
@@ -581,7 +593,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
               children: [
                 _totalLine('Subtotal', money(_cartSubtotal)),
                 const SizedBox(height: 2),
-                _totalLine('ITBIS (18%)', money(_cartTax)),
+                _totalLine(
+                  _chargesTax ? 'ITBIS (18%)' : 'ITBIS',
+                  money(_cartTax),
+                ),
                 const SizedBox(height: 8),
                 Builder(
                   builder: (context) {
@@ -2462,6 +2477,7 @@ class _CartLineTile extends ConsumerStatefulWidget {
   const _CartLineTile({
     super.key,
     required this.item,
+    required this.chargesTax,
     required this.onRemove,
     required this.onPriceChanged,
     required this.onQuantityChanged,
@@ -2470,6 +2486,11 @@ class _CartLineTile extends ConsumerStatefulWidget {
   });
 
   final SaleCartItem item;
+
+  /// False en ventas sin comprobante: la línea muestra el subtotal, no el
+  /// total con ITBIS, para que cuadre con el total del carrito.
+  final bool chargesTax;
+
   final VoidCallback onRemove;
   final ValueChanged<double> onPriceChanged;
   final ValueChanged<double> onQuantityChanged;
@@ -2681,7 +2702,11 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 6),
                       child: Text(
-                        money(item.lineTotal),
+                        money(
+                          widget.chargesTax
+                              ? item.lineTotal
+                              : item.lineSubtotal,
+                        ),
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w800,
