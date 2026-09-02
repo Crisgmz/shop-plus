@@ -128,11 +128,17 @@ create trigger trg_sales_short_number
 
 
 -- ----------------------------------------------------------------------------
--- 4) convert_quotation_to_sale — copia de la 62 + RETURNING sale_number.
+-- 4) convert_quotation_to_sale — copia de la 62 + dos cambios.
 -- ----------------------------------------------------------------------------
 -- Es el tercer RPC que inserta en `sales`. Los otros dos (checkout y hold) se
--- corrigen en la migración 64, que ya los reescribe. Copia FIEL de la 62; el
--- ÚNICO cambio es leer `sale_number` de vuelta en el RETURNING.
+-- corrigen en la migración 64, que ya los reescribe. Copia FIEL de la 62 con
+-- dos únicos cambios:
+--
+--   1) Leer `sale_number` de vuelta en el RETURNING, para devolver el
+--      correlativo corto que asignó el trigger y no el provisional.
+--   2) Copiar a `sales.client_name_snapshot` el nombre escrito a mano en la
+--      cotización (ver migración 65), para que la factura de una venta
+--      convertida diga a quién se le vendió y no "Consumidor Final".
 create or replace function public.convert_quotation_to_sale(
   target_quotation_id uuid,
   requested_receipt_type public.receipt_type default 'consumer_final',
@@ -219,19 +225,33 @@ begin
 
   -- Venta PAGADA (completed): paid = total, balance = 0.
   insert into public.sales (
-    branch_id, sale_number, client_id, cashier_id, cash_session_id, receipt_type, status,
+    branch_id, sale_number, client_id, client_name_snapshot, cashier_id, cash_session_id,
+    receipt_type, status,
     sale_date, notes, subtotal, discount_amount, tax_amount, total_amount, paid_amount, balance_due,
     source_quotation_id, source_quotation_code
   )
   values (
-    v_quote.branch_id, v_sale_number, v_quote.client_id, v_user_id, v_session_id, requested_receipt_type, 'completed',
+    v_quote.branch_id, v_sale_number, v_quote.client_id,
+    -- Nombre escrito a mano en la cotización: sin ficha de cliente es el único
+    -- rastro de a quién se le vendió, así que viaja a la venta para que la
+    -- factura no diga "Consumidor Final". Con ficha no hace falta (el nombre
+    -- sale de clients) y el placeholder no se copia.
+    case
+      when v_quote.client_id is not null then null
+      when btrim(coalesce(v_quote.client_display_name, '')) in ('', 'Cliente general') then null
+      else btrim(v_quote.client_display_name)
+    end,
+    v_user_id, v_session_id, requested_receipt_type, 'completed',
     timezone('utc', now()), v_note_suffix, v_quote.subtotal, v_quote.discount_amount, v_quote.tax_amount, v_quote.total_amount,
     v_quote.total_amount, 0, v_quote.id, v_quote.code
   )
   -- `sale_number` vuelve en el RETURNING: el trigger trg_sales_short_number
   -- reemplaza el número autogenerado por el correlativo corto, y quien
   -- convierte la cotización tiene que ver ESE número, no el provisional.
-  returning id, sale_number into v_sale_id, v_sale_number;
+  -- Calificado con el nombre de la tabla A PROPÓSITO: el RETURNS TABLE de esta
+  -- función expone `sale_number` como columna OUT, así que sin calificar
+  -- Postgres falla con "column reference sale_number is ambiguous".
+  returning sales.id, sales.sale_number into v_sale_id, v_sale_number;
 
   -- Líneas (el trigger de stock descuenta inventario; puede quedar negativo).
   insert into public.sale_items (

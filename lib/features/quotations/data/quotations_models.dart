@@ -26,7 +26,14 @@ class QuoteListItem {
   bool get isExpired =>
       !status.isTerminal && validUntil.isBefore(DateTime.now());
   bool get canEdit => status != QuoteStatus.converted;
-  bool get canConvert => status == QuoteStatus.approved && !isExpired;
+
+  /// El vencimiento NO bloquea la conversión: es informativo. Una cotización
+  /// vencida se sigue pudiendo cobrar sin tener que revalidarla primero
+  /// (la RPC `convert_quotation_to_sale` acepta `approved` y `expired`).
+  bool get canConvert =>
+      saleId == null &&
+      (status == QuoteStatus.approved ||
+          effectiveStatus == QuoteStatus.expired);
   bool get canDelete =>
       status == QuoteStatus.draft ||
       status == QuoteStatus.rejected ||
@@ -244,6 +251,7 @@ class QuoteCreateInput {
     required this.validUntil,
     required this.status,
     this.notes,
+    this.clientName,
   });
 
   final String? clientId;
@@ -251,6 +259,12 @@ class QuoteCreateInput {
   final DateTime validUntil;
   final QuoteStatus status;
   final String? notes;
+
+  /// Nombre escrito a mano cuando la cotización no apunta a un cliente del
+  /// catálogo ([clientId] null). Se guarda en `quotations.client_display_name`
+  /// y es lo que se ve en el listado y en el PDF. Si viene vacío, la
+  /// cotización queda como "Cliente general".
+  final String? clientName;
 }
 
 class QuoteCreateItem {
@@ -343,7 +357,12 @@ class QuoteDetail {
   bool get isExpired =>
       !status.isTerminal && validUntil.isBefore(DateTime.now());
   bool get canEdit => status != QuoteStatus.converted;
-  bool get canConvert => status == QuoteStatus.approved && !isExpired;
+
+  /// Igual que en [QuoteListItem]: vencida también se convierte.
+  bool get canConvert =>
+      saleId == null &&
+      (status == QuoteStatus.approved ||
+          effectiveStatus == QuoteStatus.expired);
   bool get canDelete =>
       status == QuoteStatus.draft ||
       status == QuoteStatus.rejected ||

@@ -21,6 +21,7 @@ class QuotationDraft {
   const QuotationDraft({
     this.items = const [],
     this.clientId,
+    this.clientName,
     this.validUntil,
     this.status,
     this.notes = '',
@@ -28,11 +29,15 @@ class QuotationDraft {
 
   final List<QuoteDraftLine> items;
   final String? clientId;
+
+  /// Nombre escrito a mano cuando no hay cliente del catálogo seleccionado.
+  final String? clientName;
   final DateTime? validUntil;
   final QuoteStatus? status;
   final String notes;
 
-  bool get isEmpty => items.isEmpty && notes.isEmpty && clientId == null;
+  bool get isEmpty =>
+      items.isEmpty && notes.isEmpty && clientId == null && clientName == null;
 }
 
 /// Se hidrata del store al crearse (en web, de localStorage), así el borrador
@@ -60,6 +65,7 @@ void saveQuotationDraftToStore(QuotationDraft draft) {
 
 String _encodeQuotationDraft(QuotationDraft d) => jsonEncode({
       'clientId': d.clientId,
+      'clientName': d.clientName,
       'validUntil': d.validUntil?.toIso8601String(),
       'status': d.status?.name,
       'notes': d.notes,
@@ -90,6 +96,7 @@ QuotationDraft? _decodeQuotationDraft(String? raw) {
     return QuotationDraft(
       items: items,
       clientId: map['clientId']?.toString(),
+      clientName: map['clientName']?.toString(),
       validUntil:
           validUntilRaw == null ? null : DateTime.tryParse(validUntilRaw),
       status: statusName == null

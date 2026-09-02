@@ -31,6 +31,11 @@ class SalesProduct {
     this.priceTier10,
     this.imageUrl,
     this.imeis = const <String>[],
+    this.isService = false,
+    this.isTaxExempt = false,
+    this.allowNegativeStock = false,
+    this.priceIncludesTax = false,
+    this.trackInventory = true,
   });
 
   final String id;
@@ -58,6 +63,36 @@ class SalesProduct {
 
   /// IMEIs disponibles del producto (celulares/dispositivos serializados).
   final List<String> imeis;
+
+  /// Servicio (mano de obra, instalación): no maneja inventario, así que la
+  /// validación de stock no aplica. El RPC de checkout lo respeta; el POS
+  /// tiene que respetarlo igual o los servicios no se podrían vender.
+  final bool isService;
+
+  /// Exento de ITBIS. El RPC fuerza tasa 0 para estos productos: si el POS no
+  /// lo espejara, la pantalla cobraría un impuesto que la venta no registra.
+  final bool isTaxExempt;
+
+  /// El dueño permite vender este producto aunque el stock quede negativo.
+  final bool allowNegativeStock;
+
+  /// El precio de venta ya trae el ITBIS adentro: el impuesto se EXTRAE en vez
+  /// de agregarse encima. Si el POS no lo espejara, mostraría —y cobraría— un
+  /// total mayor que el que registra el RPC.
+  final bool priceIncludesTax;
+
+  /// El producto lleva control de inventario. En `false` el RPC no valida
+  /// stock ni lo descuenta.
+  final bool trackInventory;
+
+  /// Tasa realmente aplicable a este producto. Espeja la tasa efectiva del
+  /// RPC: un producto exento no factura ITBIS aunque tenga tasa configurada.
+  double get effectiveTaxRate => isTaxExempt ? 0 : taxRate;
+
+  /// Si este producto debe validarse contra el stock disponible. Espeja la
+  /// condición del RPC: ni servicios, ni productos sin control de inventario,
+  /// ni los que permiten stock negativo.
+  bool get tracksStock => !isService && trackInventory && !allowNegativeStock;
 
   /// Si el producto maneja IMEI (tiene al menos uno registrado).
   bool get hasImeis => imeis.isNotEmpty;
@@ -128,6 +163,13 @@ class SalesProduct {
       priceTier9: optionalDouble(map['price_tier_9']),
       priceTier10: optionalDouble(map['price_tier_10']),
       imageUrl: map['image_url']?.toString(),
+      isService: map['is_service'] == true,
+      isTaxExempt: map['is_tax_exempt'] == true,
+      allowNegativeStock: map['allow_negative_stock'] == true,
+      priceIncludesTax: map['price_includes_tax'] == true,
+      // Ausente o null ⇒ true, igual que el `coalesce(track_inventory, true)`
+      // del RPC.
+      trackInventory: map['track_inventory'] != false,
       imeis: map['imeis'] is List
           ? (map['imeis'] as List)
               .map((e) => e.toString())
@@ -234,17 +276,54 @@ class SaleCartItem {
   bool get isCustomPrice =>
       (unitPrice - product.priceFor(priceTier)).abs() > 0.005;
 
-  /// Subtotal antes de descuento: cantidad × precio unitario.
-  double get lineGross => _round2(quantity * unitPrice);
+  /// Tasa de ITBIS que se cobra en esta línea: 0 si el producto está exento,
+  /// igual que el RPC. Cualquier cálculo o pantalla del POS debe usar ESTA;
+  /// usar `product.taxRate` a secas cobra impuesto que el backend no registra.
+  double get taxRate => product.effectiveTaxRate;
+
+  // Toda la aritmética va en CENTAVOS ENTEROS (ver sale_checkout_service.dart):
+  // es la única forma de que la pantalla dé exactamente lo mismo que el
+  // `numeric` de Postgres. De estos getters sale el total que ve el cajero y
+  // el monto que se manda como pagos: si difieren del RPC aunque sea un
+  // centavo, el pago dividido rebota o la caja queda descuadrada.
+
+  double get _lineGrossCents => grossCents(quantity, unitPrice);
+
+  double get _lineDiscountCents => (_lineGrossCents * (discountPct / 100))
+      .roundToDouble()
+      .clamp(0, _lineGrossCents)
+      .toDouble();
+
+  /// Bruto después de descuento. Con precio exclusivo es la base imponible;
+  /// con precio ITBIS-incluido es el TOTAL a cobrar de la línea.
+  double get _lineNetCents => _lineGrossCents - _lineDiscountCents;
+
+  bool get _taxIncluded => product.priceIncludesTax && taxRate > 0;
+
+  double get _lineTaxCents =>
+      taxCents(_lineNetCents, taxRate, inclusive: _taxIncluded);
+
+  /// Bruto antes de descuento: cantidad × precio unitario.
+  double get lineGross => fromCents(_lineGrossCents);
 
   /// Monto del descuento aplicado.
-  double get lineDiscount => _round2(lineGross * (discountPct / 100));
+  double get lineDiscount => fromCents(_lineDiscountCents);
 
-  /// Subtotal después de descuento (base imponible).
-  double get lineSubtotal => _round2(lineGross - lineDiscount);
+  /// Bruto menos descuento. Es lo que se cobra cuando la venta no factura
+  /// ITBIS (sin comprobante), y el total de la línea con precio ITBIS-incluido.
+  double get lineNet => fromCents(_lineNetCents);
 
-  double get lineTax => _round2(lineSubtotal * (product.taxRate / 100));
-  double get lineTotal => _round2(lineSubtotal + lineTax);
+  /// Base imponible de la línea (lo que factura sin ITBIS).
+  double get lineSubtotal =>
+      fromCents(_taxIncluded ? _lineNetCents - _lineTaxCents : _lineNetCents);
+
+  /// ITBIS de la línea. Exclusivo: se agrega encima (base × t/100).
+  /// Incluido: se EXTRAE del monto cobrado (neto × t/(100+t)), así el total
+  /// queda exacto — 100.00 sigue siendo 100.00.
+  double get lineTax => fromCents(_lineTaxCents);
+
+  double get lineTotal =>
+      fromCents(_taxIncluded ? _lineNetCents : _lineNetCents + _lineTaxCents);
 }
 
 /// Una línea de pago para ventas con pago mixto (varios métodos que suman el
@@ -405,7 +484,9 @@ class SalesRepository {
           .from('products')
           .select(
             'id, name, sku, barcode, category_id, price, cost, tax_rate, stock, '
-            'is_active, price_tier_1, price_tier_2, price_tier_3, '
+            'is_active, is_service, is_tax_exempt, allow_negative_stock, '
+            'price_includes_tax, track_inventory, '
+            'price_tier_1, price_tier_2, price_tier_3, '
             'price_tier_4, price_tier_5, price_tier_6, price_tier_7, '
             'price_tier_8, price_tier_9, price_tier_10, image_url, imeis',
           )
@@ -468,8 +549,16 @@ class SalesRepository {
                   taxRate: item.product.taxRate,
                   stock: item.product.stock,
                   isActive: item.product.isActive,
+                  isService: item.product.isService,
+                  isTaxExempt: item.product.isTaxExempt,
+                  allowNegativeStock: item.product.allowNegativeStock,
+                  priceIncludesTax: item.product.priceIncludesTax,
+                  trackInventory: item.product.trackInventory,
                 ),
                 quantity: item.quantity,
+                // El descuento de la línea viaja al RPC (migración 67). Antes
+                // se quedaba aquí y la venta se registraba al precio completo.
+                discountPct: item.discountPct,
                 imeis: item.imeis,
               ),
             )
@@ -580,8 +669,16 @@ class SalesRepository {
                   taxRate: item.product.taxRate,
                   stock: item.product.stock,
                   isActive: item.product.isActive,
+                  isService: item.product.isService,
+                  isTaxExempt: item.product.isTaxExempt,
+                  allowNegativeStock: item.product.allowNegativeStock,
+                  priceIncludesTax: item.product.priceIncludesTax,
+                  trackInventory: item.product.trackInventory,
                 ),
                 quantity: item.quantity,
+                // El descuento de la línea viaja al RPC (migración 67). Antes
+                // se quedaba aquí y la venta se registraba al precio completo.
+                discountPct: item.discountPct,
                 imeis: item.imeis,
               ),
             )
@@ -645,7 +742,7 @@ class SalesRepository {
 
     final itemRows = await _client
         .from('sale_items')
-        .select('product_id, quantity, unit_price, imeis')
+        .select('product_id, quantity, unit_price, discount_amount, imeis')
         .eq('branch_id', branchId)
         .eq('sale_id', saleId)
         .order('created_at');
@@ -662,10 +759,19 @@ class SalesRepository {
       if (product == null) continue;
       final qty = _toDouble(row['quantity']);
       if (qty <= 0) continue;
+      // El descuento se guarda en monto; el carrito trabaja en porcentaje.
+      // Misma reconstrucción que hace la pantalla de editar venta.
+      final unitPrice = _toDouble(row['unit_price']);
+      final gross = qty * unitPrice;
+      final discountAmount = _toDouble(row['discount_amount']);
+      final discountPct = gross > 0
+          ? (discountAmount / gross * 100).clamp(0, 100).toDouble()
+          : 0.0;
       items.add(SaleCartItem(
         product: product,
         quantity: qty,
-        unitPrice: _toDouble(row['unit_price']),
+        unitPrice: unitPrice,
+        discountPct: discountPct,
         imeis: row['imeis'] is List
             ? (row['imeis'] as List)
                 .map((e) => e.toString())
@@ -693,7 +799,7 @@ class SalesRepository {
           'id, branch_id, sale_number, sale_date, receipt_type, status, ncf, notes, '
           'subtotal, discount_amount, tax_amount, total_amount, paid_amount, balance_due, '
           'change_amount, service_charge_amount, taxable_amount, exempt_amount, '
-          'client_id, cashier_id, cash_session_id',
+          'client_id, client_name_snapshot, cashier_id, cash_session_id',
         )
         .eq('id', saleId)
         .limit(1);
@@ -837,7 +943,14 @@ class SalesRepository {
       cashRegisterName: cashRegisterName,
       showBarcode: settings['receipt_hide_barcode'] != true,
       showItbis: settings['invoice_show_itbis'] != false,
-      clientName: client['full_name']?.toString(),
+      // Sin ficha de cliente puede haber un nombre escrito a mano: viene de la
+      // cotización convertida (`quotations.client_display_name`) y se guardó en
+      // `sales.client_name_snapshot`. Así la factura dice a quién se le vendió
+      // en vez de "Consumidor Final".
+      clientName: _firstNonEmpty([
+        client['full_name'],
+        sale['client_name_snapshot'],
+      ]),
       clientDocument: _buildClientDocumentLabel(
         documentType: client['document_type']?.toString(),
         documentNumber: client['document_number']?.toString(),
@@ -929,7 +1042,8 @@ class SalesRepository {
     final itemRows = await _client
         .from('sale_items')
         .select(
-          'product_id, description, quantity, unit_price, tax_rate, line_total',
+          'product_id, description, quantity, unit_price, tax_rate, '
+          'line_subtotal, line_total',
         )
         .eq('branch_id', branchId)
         .eq('sale_id', sale['id'])
@@ -949,7 +1063,16 @@ class SalesRepository {
           ? (row['quantity'] as num).toDouble()
           : double.tryParse(row['quantity']?.toString() ?? '') ?? 0;
       if (qty <= 0) continue;
-      items.add(SaleCartItem(product: product, quantity: qty));
+      // Precio NETO realmente cobrado en esa línea: `unit_price` es el bruto,
+      // así que si la venta llevaba descuento hay que partir del subtotal de
+      // la línea. Devolver al precio del catálogo reembolsaría otro monto.
+      final lineSubtotal = _toDoubleResult(row['line_subtotal']);
+      final unitPrice = lineSubtotal > 0
+          ? _round2(lineSubtotal / qty)
+          : _toDoubleResult(row['unit_price']);
+      items.add(
+        SaleCartItem(product: product, quantity: qty, unitPrice: unitPrice),
+      );
     }
 
     return SaleLookupResult(
@@ -1004,16 +1127,23 @@ class SalesRepository {
     final payload = {
       if (input.clientId != null && input.clientId!.isNotEmpty)
         'p_client_id': input.clientId,
+      // Sin la venta original el RPC no puede ajustar `clients.balance_due`:
+      // devolver mercancía de una venta a crédito no bajaba la deuda.
       if (input.originalSaleId != null && input.originalSaleId!.isNotEmpty)
         'p_original_sale_id': input.originalSaleId,
       if (input.notes != null && input.notes!.isNotEmpty)
         'p_notes': input.notes,
+      if (input.cashSessionId != null && input.cashSessionId!.isNotEmpty)
+        'p_cash_session_id': input.cashSessionId,
       'p_items': input.items
           .map((item) => {
                 'product_id': item.product.id,
                 'quantity': item.quantity,
-                'unit_price': item.product.price,
-                'tax_rate': item.product.taxRate,
+                // El precio de la LÍNEA, no el del catálogo: si el producto
+                // cambió de precio, se vendió con tier o con descuento, el
+                // catálogo devuelve un monto distinto al que se cobró.
+                'unit_price': item.unitPrice,
+                'tax_rate': item.product.effectiveTaxRate,
               })
           .toList(growable: false),
     };
@@ -1171,12 +1301,17 @@ class ReturnInput {
     this.clientId,
     this.originalSaleId,
     this.notes,
+    this.cashSessionId,
   });
 
   final List<SaleCartItem> items;
   final String? clientId;
   final String? originalSaleId;
   final String? notes;
+
+  /// Caja de la que sale el efectivo del reembolso. Sin esto el arqueo no
+  /// descuenta lo devuelto y la caja aparece corta (migración 68).
+  final String? cashSessionId;
 }
 
 /// Resultado de buscar una venta por número para precargar una devolución.

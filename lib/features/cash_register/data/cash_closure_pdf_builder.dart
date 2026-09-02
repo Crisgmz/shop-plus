@@ -138,6 +138,16 @@ class CashClosurePdfBuilder {
         _kv('  En efectivo', money(metrics.cashPayments), baseFont: baseFont),
         _kv('Total gastos', money(metrics.totalExpenses), baseFont: baseFont),
         _kv('  En efectivo', money(metrics.cashExpenses), baseFont: baseFont),
+        // Salidas de efectivo que antes no se mostraban ni se descontaban del
+        // esperado; sin ellas la caja daba corta sin explicación.
+        if (metrics.changeGiven > 0)
+          _kv('Cambio entregado', money(metrics.changeGiven),
+              baseFont: baseFont),
+        if (metrics.supplierCashPayments > 0)
+          _kv('Pagos a proveedores', money(metrics.supplierCashPayments),
+              baseFont: baseFont),
+        if (metrics.cashRefunds > 0)
+          _kv('Devoluciones', money(metrics.cashRefunds), baseFont: baseFont),
         _divider(),
         _kv('Esperado en caja', money(expectedCash),
             baseFont: emphasizedFont, bold: true),

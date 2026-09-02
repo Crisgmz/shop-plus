@@ -212,6 +212,26 @@ class PayablesRepository {
       throw Exception('No hay sucursal asignada para este usuario.');
     }
 
+    // Camino transaccional (migración 69), espejo del de Cobros: pago, saldo
+    // de la compra y saldo del proveedor en una sola transacción.
+    final openSessionId = await _currentOpenCashSessionId(branchId);
+    try {
+      await _client.rpc(
+        'register_supplier_payment',
+        params: {
+          'p_purchase_id': input.purchaseId,
+          'p_amount': input.amount,
+          'p_payment_method': input.paymentMethod,
+          'p_reference': ?_nullIfEmpty(input.reference),
+          'p_notes': ?_nullIfEmpty(input.notes),
+          'p_cash_session_id': ?openSessionId,
+        },
+      );
+      return;
+    } on PostgrestException catch (error) {
+      if (!_isMissingRpc(error)) rethrow;
+    }
+
     final purchase = await _client
         .from('purchases')
         .select('id, supplier_id, paid_amount, balance_due, total_amount')
@@ -231,7 +251,7 @@ class PayablesRepository {
     }
 
     final supplierId = purchase['supplier_id']?.toString();
-    final openCashSessionId = await _currentOpenCashSessionId(branchId);
+    final openCashSessionId = openSessionId;
 
     await _client.from('supplier_payments').insert({
       'branch_id': branchId,
@@ -356,3 +376,16 @@ double _toDouble(dynamic value) {
 }
 
 double _round2(double value) => (value * 100).roundToDouble() / 100;
+
+/// True si el error es "la función no existe en el servidor". Sirve para caer
+/// al camino viejo cuando la migración 69 todavía no se ejecutó, en vez de
+/// romperle el cobro al usuario.
+bool _isMissingRpc(PostgrestException error) {
+  if (error.code == 'PGRST202' || error.code == '42883') return true;
+  final message = error.message.toLowerCase();
+  // Se exige que el mensaje hable de la FUNCIÓN: un "does not exist" suelto
+  // (una columna, por ejemplo) no debe hacernos caer al camino viejo y
+  // esconder el error real.
+  return message.contains('could not find the function') ||
+      (message.contains('function') && message.contains('does not exist'));
+}

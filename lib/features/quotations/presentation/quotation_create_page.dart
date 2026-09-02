@@ -28,6 +28,9 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
   final List<QuoteDraftLine> _items = [];
 
   String? _clientId;
+
+  /// Nombre escrito a mano cuando no se eligió un cliente del catálogo.
+  String? _clientName;
   DateTime _validUntil = DateTime.now().add(const Duration(days: 15));
   QuoteStatus _status = QuoteStatus.draft;
   bool _isSubmitting = false;
@@ -54,10 +57,11 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
       _status == QuoteStatus.draft ||
       _status == QuoteStatus.rejected ||
       _status == QuoteStatus.expired;
+  /// Vencida también se convierte: la fecha de vigencia es informativa, no un
+  /// candado. Solo se exige que esté aprobada (o vencida) y sin venta previa.
   bool get _canConvertDocument =>
-      _status == QuoteStatus.approved &&
-      _validUntil.isAfter(DateTime.now()) &&
-      _convertedSaleId == null;
+      _convertedSaleId == null &&
+      (_status == QuoteStatus.approved || _status == QuoteStatus.expired);
 
   @override
   void initState() {
@@ -68,6 +72,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
       final draft = ref.read(quotationDraftProvider);
       _items.addAll(draft.items);
       _clientId = draft.clientId;
+      _clientName = draft.clientName;
       if (draft.validUntil != null) _validUntil = draft.validUntil!;
       if (draft.status != null) _status = draft.status!;
       _notesController.text = draft.notes;
@@ -90,6 +95,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
     final draft = QuotationDraft(
       items: List<QuoteDraftLine>.from(_items),
       clientId: _clientId,
+      clientName: _clientName,
       validUntil: _validUntil,
       status: _status,
       notes: _notesController.text,
@@ -123,6 +129,13 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
         _quoteCode = detail.code;
         _createdAt = detail.createdAt;
         _clientId = detail.clientId;
+        // Sin cliente del catálogo, lo guardado en client_display_name es el
+        // nombre manual — salvo el placeholder, que se trata como "sin nombre".
+        _clientName = detail.clientId == null &&
+                detail.clientName.trim().isNotEmpty &&
+                detail.clientName.trim() != 'Cliente general'
+            ? detail.clientName.trim()
+            : null;
         _validUntil = detail.validUntil.toLocal();
         _status = detail.effectiveStatus == QuoteStatus.expired
             ? QuoteStatus.expired
@@ -256,6 +269,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
       final repository = ref.read(quotationsRepositoryProvider);
       final input = QuoteCreateInput(
         clientId: _clientId,
+        clientName: _clientName,
         notes: _notesController.text,
         validUntil: _validUntil,
         status: _status,
@@ -650,10 +664,15 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                 clientsAsync.when(
                   data: (clients) => _ClientSearchField(
                     currentId: _clientId,
+                    currentName: _clientName,
                     clients: clients,
                     enabled: _canEditDocument,
-                    onChanged: (value) {
-                      setState(() => _clientId = value);
+                    onChanged: (id, name) {
+                      if (id == _clientId && name == _clientName) return;
+                      setState(() {
+                        _clientId = id;
+                        _clientName = name;
+                      });
                       _persistDraft();
                     },
                   ),
@@ -696,7 +715,9 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                 if (_validUntil.isBefore(DateTime.now())) ...[
                   const SizedBox(height: AppTokens.s10),
                   const Text(
-                    'Esta cotización ya está vencida. Ajusta la fecha de vigencia y guarda para reactivarla.',
+                    'Esta cotización ya está vencida. Igual se puede convertir '
+                    'a venta; para editarla y guardarla, adelanta la fecha de '
+                    'vigencia.',
                     style: TextStyle(
                       color: AppTokens.warning,
                       fontSize: 12,
@@ -1272,20 +1293,28 @@ class _QuoteClientPick {
   final String label;
 }
 
-/// Buscador de cliente escribible (mismo patrón que en ventas): al enfocar
-/// muestra la lista completa y al escribir filtra por nombre. Permite elegir
-/// "Cliente general" (id null).
+/// Campo de cliente ESCRIBIBLE. Al enfocar muestra el catálogo completo y al
+/// escribir filtra por nombre, pero —a diferencia de un selector— acepta texto
+/// libre: si lo escrito no corresponde a ningún cliente del catálogo, queda
+/// como nombre manual de la cotización (`quotations.client_display_name`) sin
+/// crear ninguna ficha de cliente.
+///
+/// Reporta las dos cosas: [onChanged] recibe el id del cliente del catálogo
+/// (null si el nombre es manual) y el nombre a mostrar (null = "Cliente
+/// general").
 class _ClientSearchField extends StatefulWidget {
   const _ClientSearchField({
     required this.currentId,
+    required this.currentName,
     required this.clients,
     required this.onChanged,
     required this.enabled,
   });
 
   final String? currentId;
+  final String? currentName;
   final List<QuoteClientOption> clients;
-  final ValueChanged<String?> onChanged;
+  final void Function(String? id, String? name) onChanged;
   final bool enabled;
 
   @override
@@ -1301,14 +1330,19 @@ class _ClientSearchFieldState extends State<_ClientSearchField> {
   @override
   void initState() {
     super.initState();
-    _textController.text = _labelForId(widget.currentId);
+    _textController.text = _currentLabel();
   }
 
   @override
   void didUpdateWidget(_ClientSearchField old) {
     super.didUpdateWidget(old);
-    if (old.currentId != widget.currentId && !_focusNode.hasFocus) {
-      _textController.text = _labelForId(widget.currentId);
+    // Solo re-sincronizamos si el cambio vino de afuera (cargar la cotización
+    // del servidor, por ejemplo). Mientras el usuario escribe no le tocamos
+    // el texto.
+    final changed = old.currentId != widget.currentId ||
+        old.currentName != widget.currentName;
+    if (changed && !_focusNode.hasFocus) {
+      _textController.text = _currentLabel();
     }
   }
 
@@ -1319,12 +1353,35 @@ class _ClientSearchFieldState extends State<_ClientSearchField> {
     super.dispose();
   }
 
-  String _labelForId(String? id) {
-    if (id == null) return _generalLabel;
-    for (final c in widget.clients) {
-      if (c.id == id) return c.fullName;
+  /// Texto que corresponde al estado actual: nombre del cliente del catálogo,
+  /// nombre manual, o el placeholder general.
+  String _currentLabel() {
+    final id = widget.currentId;
+    if (id != null) {
+      for (final c in widget.clients) {
+        if (c.id == id) return c.fullName;
+      }
     }
+    final manual = widget.currentName?.trim();
+    if (manual != null && manual.isNotEmpty) return manual;
     return _generalLabel;
+  }
+
+  /// Traduce lo escrito a (id, nombre). Si coincide exactamente con un cliente
+  /// del catálogo se enlaza a su ficha; si no, queda como nombre manual.
+  void _commitTyped(String raw) {
+    final text = raw.trim();
+    if (text.isEmpty || text == _generalLabel) {
+      widget.onChanged(null, null);
+      return;
+    }
+    for (final c in widget.clients) {
+      if (c.fullName.trim().toLowerCase() == text.toLowerCase()) {
+        widget.onChanged(c.id, c.fullName);
+        return;
+      }
+    }
+    widget.onChanged(null, text);
   }
 
   @override
@@ -1341,45 +1398,59 @@ class _ClientSearchFieldState extends State<_ClientSearchField> {
             _QuoteClientPick(id: c.id, label: c.fullName),
         ];
         final q = value.text.trim().toLowerCase();
-        if (q.isEmpty || q == _labelForId(widget.currentId).toLowerCase()) {
-          return all;
-        }
+        if (q.isEmpty || q == _currentLabel().toLowerCase()) return all;
         return all.where((o) => o.label.toLowerCase().contains(q));
       },
       onSelected: (o) {
-        widget.onChanged(o.id);
+        widget.onChanged(o.id, o.id == null ? null : o.label);
         _textController.text = o.label;
         _focusNode.unfocus();
       },
       fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
-        return TextField(
-          controller: controller,
-          focusNode: focusNode,
-          enabled: widget.enabled,
-          style: const TextStyle(fontSize: 14),
-          onTap: () => controller.selection = TextSelection(
-            baseOffset: 0,
-            extentOffset: controller.text.length,
-          ),
-          decoration: InputDecoration(
-            labelText: 'Cliente',
-            filled: true,
-            fillColor: AppTokens.secondary,
-            border: const OutlineInputBorder(),
-            prefixIcon: const Icon(Icons.person_search_rounded, size: 20),
-            suffixIcon: widget.currentId != null
-                ? IconButton(
-                    icon: const Icon(Icons.close, size: 18),
-                    tooltip: 'Volver a Cliente general',
-                    onPressed: widget.enabled
-                        ? () {
-                            widget.onChanged(null);
-                            _textController.text = _generalLabel;
-                            _focusNode.unfocus();
-                          }
-                        : null,
-                  )
-                : const Icon(Icons.arrow_drop_down),
+        return Focus(
+          // Al salir del campo, lo escrito se toma como nombre manual. Sin
+          // esto el texto libre se perdía al hacer clic afuera.
+          onFocusChange: (hasFocus) {
+            if (!hasFocus) _commitTyped(controller.text);
+          },
+          child: TextField(
+            controller: controller,
+            focusNode: focusNode,
+            enabled: widget.enabled,
+            style: const TextStyle(fontSize: 14),
+            textCapitalization: TextCapitalization.words,
+            onChanged: _commitTyped,
+            onSubmitted: (value) {
+              _commitTyped(value);
+              onSubmitted();
+            },
+            onTap: () => controller.selection = TextSelection(
+              baseOffset: 0,
+              extentOffset: controller.text.length,
+            ),
+            decoration: InputDecoration(
+              labelText: 'Cliente',
+              helperText: 'Elige uno del catálogo o escribe el nombre',
+              helperMaxLines: 2,
+              filled: true,
+              fillColor: AppTokens.secondary,
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.person_search_rounded, size: 20),
+              suffixIcon: (widget.currentId != null ||
+                      (widget.currentName ?? '').trim().isNotEmpty)
+                  ? IconButton(
+                      icon: const Icon(Icons.close, size: 18),
+                      tooltip: 'Volver a Cliente general',
+                      onPressed: widget.enabled
+                          ? () {
+                              widget.onChanged(null, null);
+                              _textController.text = _generalLabel;
+                              _focusNode.unfocus();
+                            }
+                          : null,
+                    )
+                  : const Icon(Icons.arrow_drop_down),
+            ),
           ),
         );
       },

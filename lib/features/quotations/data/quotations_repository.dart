@@ -244,6 +244,7 @@ class QuotationsRepository implements QuotationsRepositoryContract {
       params: {
         'target_quotation_id': quoteId,
         'requested_client_id': _nullIfEmpty(input.clientId),
+        'requested_client_name': _nullIfEmpty(input.clientName),
         'requested_status': input.status.dbValue,
         'requested_valid_until': input.validUntil.toUtc().toIso8601String(),
         'requested_notes': _nullIfEmpty(input.notes),
@@ -381,8 +382,11 @@ class QuotationsRepository implements QuotationsRepositoryContract {
       'status': input.status.dbValue,
       'version_no': 1,
       'owner_user_id': userId,
+      // Cliente del catálogo → su nombre; si no, el que se escribió a mano;
+      // si tampoco hay, "Cliente general".
       'client_display_name':
           _nullIfEmpty(clientSnapshot?['full_name']?.toString()) ??
+          _nullIfEmpty(input.clientName) ??
           'Cliente general',
       'client_legal_name': _nullIfEmpty(
         clientSnapshot?['legal_name']?.toString(),

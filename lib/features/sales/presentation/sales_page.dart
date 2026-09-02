@@ -97,6 +97,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// devolver su stock reservado y no duplicarla. Viaja en el draft.
   String? _reopenedHeldSaleId;
 
+  /// Venta original de la devolución en curso, cargada con el buscador por
+  /// número. Sin esto el RPC `process_return` no puede ajustar la deuda del
+  /// cliente: devolver mercancía de una venta a crédito no bajaba el saldo.
+  String? _returnOriginalSaleId;
+
   int get _cartLines => _cart.length;
 
   /// Una venta "sin comprobante" es una nota de venta no fiscal: no factura
@@ -105,8 +110,12 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// cobraría un total distinto al que registra la venta.
   bool get _chargesTax => _receiptType != 'none';
 
-  double get _cartSubtotal =>
-      _cart.fold<double>(0, (sum, item) => sum + item.lineSubtotal);
+  // Sin comprobante no se factura ITBIS: la base es el NETO completo
+  // (bruto − descuento), no `lineSubtotal`, que con precio ITBIS-incluido ya
+  // viene con el impuesto extraído. Usar lineSubtotal aquí cobraría de menos.
+  double get _cartSubtotal => _chargesTax
+      ? _cart.fold<double>(0, (sum, item) => sum + item.lineSubtotal)
+      : _cart.fold<double>(0, (sum, item) => sum + item.lineNet);
   double get _cartTax => _chargesTax
       ? _cart.fold<double>(0, (sum, item) => sum + item.lineTax)
       : 0;
@@ -811,7 +820,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       return;
     }
     final index = _cart.indexWhere((item) => item.product.id == product.id);
+    // `tracksStock` excluye servicios y productos con stock negativo
+    // permitido: el RPC no los valida contra inventario y el POS tampoco debe
+    // hacerlo, o un servicio (stock 0) sería imposible de vender.
     if (_stockEnforced &&
+        product.tracksStock &&
         index != -1 &&
         _cart[index].quantity + 1 > product.stock) {
       ScaffoldMessenger.of(
@@ -960,7 +973,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       return;
     }
     final item = _cart[index];
-    if (_stockEnforced && value > item.product.stock) {
+    if (_stockEnforced &&
+        item.product.tracksStock &&
+        value > item.product.stock) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Sin stock suficiente')));
@@ -1119,6 +1134,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       _clientId = null;
       _paymentMethod = 'cash';
       _reopenedHeldSaleId = null;
+      _returnOriginalSaleId = null;
       _searchController.clear();
       ref.read(salesSearchProvider.notifier).state = '';
     });
@@ -1517,6 +1533,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         _cart
           ..clear()
           ..addAll(result.items);
+        // La venta original: enlaza la devolución y permite que el RPC
+        // ajuste `clients.balance_due` si fue a crédito.
+        _returnOriginalSaleId = result.saleId;
         // Cliente original si aplica
         if (result.clientId != null && result.clientId!.isNotEmpty) {
           _clientId = result.clientId;
@@ -1559,7 +1578,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         ReturnInput(
           items: List.from(_cart),
           clientId: _clientId,
+          originalSaleId: _returnOriginalSaleId,
           notes: _notesController.text.trim(),
+          cashSessionId: ref.read(activeCashSessionIdProvider),
         ),
       );
 
@@ -2705,7 +2726,7 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
                         money(
                           widget.chargesTax
                               ? item.lineTotal
-                              : item.lineSubtotal,
+                              : item.lineNet,
                         ),
                         style: TextStyle(
                           fontSize: 12,

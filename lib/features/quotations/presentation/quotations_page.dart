@@ -639,7 +639,7 @@ class _QuotesDataTable extends ConsumerWidget {
                 quote: quote,
                 onOpen: () => context.push('/cotizaciones/${quote.id}'),
                 onPrint: () => _printQuote(context, ref, quote),
-                onConvert: () => _convertToSale(context, ref, quote),
+                onConvert: () => _convertQuoteToSale(context, ref, quote),
                 onDelete: () => _deleteQuote(context, ref, quote),
               );
             },
@@ -647,47 +647,6 @@ class _QuotesDataTable extends ConsumerWidget {
         ),
       ],
     );
-  }
-
-  Future<void> _convertToSale(
-    BuildContext context,
-    WidgetRef ref,
-    QuoteListItem quote,
-  ) async {
-    final method = await showConvertPaymentDialog(
-      context,
-      quoteCode: quote.code,
-    );
-
-    if (method == null) return;
-
-    {
-      try {
-        final result = await ref
-            .read(quotationsRepositoryProvider)
-            .convertToSale(
-              quote.id,
-              paymentMethod: method,
-              cashSessionId: ref.read(activeCashSessionIdProvider),
-            );
-        ref.invalidate(quotationsFoundationProvider);
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Cotización convertida a venta ${result.saleNumber}.',
-              ),
-            ),
-          );
-        }
-      } catch (e) {
-        if (context.mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Error: $e')));
-        }
-      }
-    }
   }
 
   Future<void> _printQuote(
@@ -754,6 +713,37 @@ class _QuotesDataTable extends ConsumerWidget {
         }
       }
     }
+  }
+}
+
+/// Cobra la cotización y la convierte en venta. Compartido por la tabla de
+/// escritorio y la tarjeta móvil para que ambas se comporten igual.
+Future<void> _convertQuoteToSale(
+  BuildContext context,
+  WidgetRef ref,
+  QuoteListItem quote,
+) async {
+  // El messenger se toma ANTES del diálogo: después del await el context de
+  // la fila/tarjeta puede haber salido del árbol (lista virtualizada).
+  final messenger = ScaffoldMessenger.of(context);
+  final method = await showConvertPaymentDialog(context, quoteCode: quote.code);
+  if (method == null) return;
+  try {
+    final result = await ref
+        .read(quotationsRepositoryProvider)
+        .convertToSale(
+          quote.id,
+          paymentMethod: method,
+          cashSessionId: ref.read(activeCashSessionIdProvider),
+        );
+    ref.invalidate(quotationsFoundationProvider);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Cotización convertida a venta ${result.saleNumber}.'),
+      ),
+    );
+  } catch (e) {
+    messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
   }
 }
 
@@ -833,6 +823,26 @@ class _QuoteMobileCard extends ConsumerWidget {
                     textStyle: const TextStyle(fontSize: 12),
                   ),
                 ),
+                // En móvil también se convierte: antes solo se podía desde la
+                // tabla de escritorio o entrando al detalle.
+                if (quote.canConvert) ...[
+                  const SizedBox(width: AppTokens.s8),
+                  FilledButton.icon(
+                    onPressed: () => _convertQuoteToSale(context, ref, quote),
+                    icon: const Icon(
+                      Icons.shopping_cart_checkout_rounded,
+                      size: 16,
+                    ),
+                    label: const Text('Convertir'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTokens.success,
+                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      textStyle: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
               ],
             ),
           ],

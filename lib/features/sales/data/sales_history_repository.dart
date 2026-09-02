@@ -311,7 +311,8 @@ class SalesHistoryRepository {
         .select(
           'id, branch_id, sale_number, sale_date, status, receipt_type, '
           'ncf, subtotal, tax_amount, total_amount, paid_amount, '
-          'balance_due, due_date, client_id, cashier_id, notes',
+          'balance_due, due_date, client_id, client_name_snapshot, '
+          'cashier_id, notes',
         )
         .eq('id', saleId)
         .eq('branch_id', branchId)
@@ -329,7 +330,9 @@ class SalesHistoryRepository {
         .order('created_at');
 
     final clientId = sale['client_id']?.toString();
-    String? clientName;
+    // Sin ficha puede haber un nombre escrito a mano (venta que vino de una
+    // cotización con cliente manual). Ver `client_name_snapshot`.
+    String? clientName = _s(sale['client_name_snapshot']);
     if (clientId != null && clientId.isNotEmpty) {
       final clientRows = await _client
           .from('clients')
@@ -338,7 +341,7 @@ class SalesHistoryRepository {
           .limit(1);
       if (clientRows.isNotEmpty) {
         clientName =
-            (clientRows.first as Map)['full_name']?.toString();
+            (clientRows.first as Map)['full_name']?.toString() ?? clientName;
       }
     }
 
@@ -581,6 +584,7 @@ class SalesHistoryItem {
     required this.quantity,
     required this.unitPrice,
     required this.taxRate,
+    required this.discountAmount,
     required this.lineSubtotal,
     required this.lineTax,
     required this.lineTotal,
@@ -592,6 +596,11 @@ class SalesHistoryItem {
   final double quantity;
   final double unitPrice;
   final double taxRate;
+
+  /// Descuento de la línea en pesos. Es el dato bueno para reconstruir el
+  /// porcentaje al editar: con precio ITBIS-incluido, `lineSubtotal` ya viene
+  /// con el impuesto extraído y deducirlo de ahí daba un descuento falso.
+  final double discountAmount;
   final double lineSubtotal;
   final double lineTax;
   final double lineTotal;
@@ -604,6 +613,7 @@ class SalesHistoryItem {
       quantity: _d(map['quantity']),
       unitPrice: _d(map['unit_price']),
       taxRate: _d(map['tax_rate']),
+      discountAmount: _d(map['discount_amount']),
       lineSubtotal: _d(map['line_subtotal']),
       lineTax: _d(map['line_tax']),
       lineTotal: _d(map['line_total']),

@@ -9,6 +9,8 @@ import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../data/sales_history_repository.dart';
 import '../data/sales_repository.dart';
+import '../domain/sale_checkout_service.dart'
+    show fromCents, grossCents, taxCents;
 import 'sales_history_providers.dart';
 import 'sales_providers.dart';
 
@@ -19,6 +21,7 @@ class _EditCartItem {
     required this.quantity,
     required this.unitPrice,
     required this.discountPct,
+    this.chargesTax = true,
   });
 
   final SalesProduct product;
@@ -26,14 +29,31 @@ class _EditCartItem {
   double unitPrice;
   double discountPct;
 
-  double get lineGross => (quantity * unitPrice * 100).roundToDouble() / 100;
-  double get lineDiscount =>
-      (lineGross * discountPct / 100 * 100).roundToDouble() / 100;
+  /// La venta factura ITBIS. En `false` (venta sin comprobante) la tasa va a 0,
+  /// igual que en `edit_sale_transactional`.
+  final bool chargesTax;
+
+  /// Tasa efectiva: 0 si la venta no factura o el producto está exento.
+  double get _rate => chargesTax ? product.effectiveTaxRate : 0;
+
+  bool get _taxIncluded => product.priceIncludesTax && _rate > 0;
+
+  // En centavos enteros, igual que el POS y que el `numeric` de Postgres.
+  double get _grossCents => grossCents(quantity, unitPrice);
+  double get _discountCents => (_grossCents * (discountPct / 100))
+      .roundToDouble()
+      .clamp(0, _grossCents)
+      .toDouble();
+  double get _netCents => _grossCents - _discountCents;
+  double get _taxCents => taxCents(_netCents, _rate, inclusive: _taxIncluded);
+
+  double get lineGross => fromCents(_grossCents);
+  double get lineDiscount => fromCents(_discountCents);
   double get lineSubtotal =>
-      ((lineGross - lineDiscount) * 100).roundToDouble() / 100;
-  double get lineTax =>
-      (lineSubtotal * product.taxRate / 100 * 100).roundToDouble() / 100;
-  double get lineTotal => ((lineSubtotal + lineTax) * 100).roundToDouble() / 100;
+      fromCents(_taxIncluded ? _netCents - _taxCents : _netCents);
+  double get lineTax => fromCents(_taxCents);
+  double get lineTotal =>
+      fromCents(_taxIncluded ? _netCents : _netCents + _taxCents);
 
   Map<String, dynamic> toRpcItem() => {
         'product_id': product.id,
@@ -86,24 +106,29 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     _initialized = true;
 
     final byId = {for (final p in products) p.id: p};
+    // Se resuelve ANTES del bucle: cada línea lo necesita para su tasa.
+    final chargesTax = detail.sale.receiptType != 'none';
     for (final si in detail.items) {
       final pid = si.productId;
       if (pid == null) continue;
       final product = byId[pid];
       if (product == null) continue;
-      // Calcular discountPct a partir del descuento monetario guardado.
+      // El porcentaje se reconstruye desde el MONTO guardado. Antes se
+      // deducía de `lineSubtotal`, pero con precio ITBIS-incluido ese subtotal
+      // ya trae el impuesto extraído y salía un descuento inventado.
       final gross = si.quantity * si.unitPrice;
       final discPct = gross > 0
-          ? ((gross - si.lineSubtotal) / gross * 100).clamp(0, 100).toDouble()
+          ? (si.discountAmount / gross * 100).clamp(0, 100).toDouble()
           : 0.0;
       _items.add(_EditCartItem(
         product: product,
         quantity: si.quantity,
         unitPrice: si.unitPrice,
         discountPct: discPct,
+        chargesTax: chargesTax,
       ));
     }
-    _chargesTax = detail.sale.receiptType != 'none';
+    _chargesTax = chargesTax;
     _clientId = detail.sale.clientId;
     _notesCtrl.text = detail.sale.notes ?? '';
     _paymentMethod = detail.paymentMethod ?? 'cash';
@@ -129,6 +154,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
           quantity: 1,
           unitPrice: picked.price,
           discountPct: 0,
+          chargesTax: _chargesTax,
         ));
       }
     });

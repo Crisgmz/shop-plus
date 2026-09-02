@@ -65,6 +65,8 @@ class CashSessionMetrics {
     this.otherPayments = 0,
     this.salesTotal = 0,
     this.changeGiven = 0,
+    this.supplierCashPayments = 0,
+    this.cashRefunds = 0,
   });
 
   final double totalPayments;
@@ -81,15 +83,32 @@ class CashSessionMetrics {
   /// Cambio entregado en efectivo (sobrepagos). Sale del efectivo de la caja.
   final double changeGiven;
 
+  /// Pagos a proveedores hechos en efectivo desde esta caja. Salen del cajón,
+  /// así que el efectivo esperado tiene que descontarlos.
+  final double supplierCashPayments;
+
+  /// Devoluciones reembolsadas en efectivo en esta caja (migración 68).
+  final double cashRefunds;
+
   double get netPayments => _round2(totalPayments - totalExpenses);
 
-  /// Efectivo esperado = apertura + cobros en efectivo − gastos en efectivo
-  /// − cambio entregado en efectivo.
+  /// Efectivo esperado = apertura + cobros en efectivo − todo lo que salió
+  /// del cajón: gastos en efectivo, cambio entregado, pagos a proveedores en
+  /// efectivo y devoluciones reembolsadas en efectivo.
   double expectedCashFromOpening(double openingAmount) {
     return _round2(
-      openingAmount + cashPayments - cashExpenses - changeGiven,
+      openingAmount +
+          cashPayments -
+          cashExpenses -
+          changeGiven -
+          supplierCashPayments -
+          cashRefunds,
     );
   }
+
+  /// Todo lo que salió del cajón durante la sesión (sin contar la apertura).
+  double get cashOutflows =>
+      _round2(cashExpenses + changeGiven + supplierCashPayments + cashRefunds);
 }
 
 class CashRegisterData {
@@ -577,7 +596,7 @@ class CashRegisterRepository {
         .eq('branch_id', branchId)
         .eq('cash_session_id', cashSessionId)
         .neq('status', 'voided');
-    final (payments, expenses, salesRows) = await (
+    final (payments, expenses, salesRows, supplierPayments, refunds) = await (
       _client
           .from('payments')
           .select('amount, payment_method')
@@ -589,6 +608,18 @@ class CashRegisterRepository {
           .eq('branch_id', branchId)
           .eq('cash_session_id', cashSessionId),
       salesFuture,
+      // Pagos a proveedores cargados a esta caja: efectivo que salió del cajón.
+      _client
+          .from('supplier_payments')
+          .select('amount, payment_method')
+          .eq('branch_id', branchId)
+          .eq('cash_session_id', cashSessionId),
+      // Devoluciones reembolsadas desde esta caja (columnas de la migración 68).
+      _client
+          .from('returns')
+          .select('total_amount, refund_method')
+          .eq('branch_id', branchId)
+          .eq('cash_session_id', cashSessionId),
     ).wait;
 
     final totalPayments = _round2(
@@ -636,6 +667,28 @@ class CashRegisterRepository {
       }),
     );
 
+    double sumCash(
+      List<dynamic> rows, {
+      required String amountKey,
+      required String methodKey,
+    }) =>
+        _round2(rows.fold<double>(0, (sum, item) {
+          final row = item as Map;
+          if ((row[methodKey] ?? 'cash').toString() != 'cash') return sum;
+          return sum + _toDouble(row[amountKey]);
+        }));
+
+    final supplierCashPayments = sumCash(
+      supplierPayments,
+      amountKey: 'amount',
+      methodKey: 'payment_method',
+    );
+    final cashRefunds = sumCash(
+      refunds,
+      amountKey: 'total_amount',
+      methodKey: 'refund_method',
+    );
+
     return CashSessionMetrics(
       totalPayments: totalPayments,
       cashPayments: cashPayments,
@@ -646,6 +699,8 @@ class CashRegisterRepository {
       changeGiven: changeGiven,
       totalExpenses: totalExpenses,
       cashExpenses: cashExpenses,
+      supplierCashPayments: supplierCashPayments,
+      cashRefunds: cashRefunds,
     );
   }
 

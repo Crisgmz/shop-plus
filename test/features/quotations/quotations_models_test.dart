@@ -59,7 +59,43 @@ void main() {
 
       expect(quote.isExpired, true);
       expect(quote.effectiveStatus, QuoteStatus.expired);
-      expect(quote.canConvert, false);
+      // Vencida SÍ se puede convertir: el vencimiento es informativo y la RPC
+      // `convert_quotation_to_sale` acepta `approved` y `expired`.
+      expect(quote.canConvert, true);
+    });
+
+    test('quote already stored as expired can still be converted', () {
+      final quote = QuoteListItem(
+        id: 'q3',
+        code: 'COT-3',
+        clientName: 'Cliente',
+        status: QuoteStatus.expired,
+        createdAt: DateTime.now().subtract(const Duration(days: 30)),
+        validUntil: DateTime.now().subtract(const Duration(days: 15)),
+        total: 100,
+        itemsCount: 1,
+      );
+
+      expect(quote.canConvert, true);
+    });
+
+    test('lost and still-valid draft quotes cannot be converted', () {
+      QuoteListItem build(QuoteStatus status) => QuoteListItem(
+            id: 'q4',
+            code: 'COT-4',
+            clientName: 'Cliente',
+            status: status,
+            createdAt: DateTime.now(),
+            validUntil: DateTime.now().add(const Duration(days: 5)),
+            total: 100,
+            itemsCount: 1,
+          );
+
+      expect(build(QuoteStatus.rejected).canConvert, false);
+      expect(build(QuoteStatus.draft).canConvert, false);
+      expect(build(QuoteStatus.sent).canConvert, false);
+      expect(build(QuoteStatus.underReview).canConvert, false);
+      expect(build(QuoteStatus.approved).canConvert, true);
     });
 
     test('converted quote cannot be edited or deleted', () {
