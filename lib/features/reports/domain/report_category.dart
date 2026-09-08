@@ -38,6 +38,7 @@ enum ReportCategory {
   clientes,
   descuentos,
   // Fiscales DGII
+  estadoDiario,
   reporte606,
   reporte607,
   reporteIt1,
@@ -90,6 +91,8 @@ enum ReportCategory {
         return 'Clientes';
       case ReportCategory.descuentos:
         return 'Descuentos';
+      case ReportCategory.estadoDiario:
+        return 'Estado de Diario';
       case ReportCategory.reporte606:
         return '606 — Compras DGII';
       case ReportCategory.reporte607:
@@ -149,6 +152,8 @@ enum ReportCategory {
         return 'Top clientes, frecuencia y ticket promedio.';
       case ReportCategory.descuentos:
         return 'Descuentos aplicados (cortesías, promos).';
+      case ReportCategory.estadoDiario:
+        return 'Todas las ventas del mes, día por día, listo para descargar y enviar al contable.';
       case ReportCategory.reporte606:
         return 'Archivo mensual de compras con NCF de proveedores.';
       case ReportCategory.reporte607:
@@ -208,6 +213,8 @@ enum ReportCategory {
         return Icons.people_outline;
       case ReportCategory.descuentos:
         return Icons.discount_outlined;
+      case ReportCategory.estadoDiario:
+        return Icons.event_note_outlined;
       case ReportCategory.reporte606:
         return Icons.description_outlined;
       case ReportCategory.reporte607:
@@ -252,6 +259,7 @@ enum ReportCategory {
       case ReportCategory.clientes:
       case ReportCategory.descuentos:
         return ReportCategoryGroup.clientes;
+      case ReportCategory.estadoDiario:
       case ReportCategory.reporte606:
       case ReportCategory.reporte607:
       case ReportCategory.reporteIt1:
@@ -267,6 +275,7 @@ enum ReportCategory {
   /// son sólo resumen + archivo por PRD §4.5.
   bool get supportsGraphicMode {
     switch (this) {
+      case ReportCategory.estadoDiario:
       case ReportCategory.reporte606:
       case ReportCategory.reporte607:
       case ReportCategory.reporteIt1:

@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../shared/packaging/product_packaging.dart';
+
 class InventoryCategory {
   InventoryCategory({
     required this.id,
@@ -60,6 +62,7 @@ class InventoryProduct {
     this.reorderLevel = 0,
     this.maxStock = 0,
     this.allowNegativeStock = false,
+    this.packaging = ProductPackaging.none,
     this.imeis = const <String>[],
     this.priceTier1,
     this.priceTier2,
@@ -101,6 +104,10 @@ class InventoryProduct {
   final double reorderLevel;
   final double maxStock;
   final bool allowNegativeStock;
+
+  /// Empaques del producto: caja → paquete → unidad. `ProductPackaging.none`
+  /// cuando no está configurado — el producto se comporta como siempre.
+  final ProductPackaging packaging;
 
   /// IMEIs registrados del producto (celulares/dispositivos serializados).
   final List<String> imeis;
@@ -172,6 +179,7 @@ class InventoryProduct {
       model: map['model']?.toString(),
       imageUrl: map['image_url']?.toString(),
       notes: map['notes']?.toString(),
+      packaging: ProductPackaging.fromMap(map),
       isService: map['is_service'] == true,
       isTaxExempt: map['is_tax_exempt'] == true,
       trackInventory: map['track_inventory'] != false,
@@ -229,6 +237,7 @@ class InventoryProductInput {
     this.reorderLevel = 0,
     this.maxStock = 0,
     this.allowNegativeStock = false,
+    this.packaging = ProductPackaging.none,
     this.imeis = const <String>[],
     this.priceTier1,
     this.priceTier2,
@@ -268,6 +277,10 @@ class InventoryProductInput {
   final double reorderLevel;
   final double maxStock;
   final bool allowNegativeStock;
+
+  /// Empaques del producto: caja → paquete → unidad. `ProductPackaging.none`
+  /// cuando no está configurado — el producto se comporta como siempre.
+  final ProductPackaging packaging;
 
   /// IMEIs del producto (celulares/dispositivos serializados).
   final List<String> imeis;
@@ -504,7 +517,10 @@ class InventoryRepository {
             'reorder_level, max_stock, allow_negative_stock, '
             'price_tier_1, price_tier_2, price_tier_3, price_tier_4, '
             'price_tier_5, price_tier_6, price_tier_7, price_tier_8, '
-            'price_tier_9, price_tier_10, imeis',
+            'price_tier_9, price_tier_10, imeis, '
+            // Empaques (migración 86). Nulos ⇒ producto sin empaque.
+            'units_per_pack, packs_per_box, unit_label, pack_label, box_label, '
+            'pack_price, box_price, min_unit_qty',
           )
           .eq('branch_id', branchId)
           .order('name')
@@ -697,6 +713,9 @@ class InventoryRepository {
       'notes': _nullIfEmpty(input.notes),
       'is_service': input.isService,
       'is_tax_exempt': input.isTaxExempt,
+      // Empaques (migración 86). Con `units_per_pack` nulo el producto se
+      // comporta exactamente como antes.
+      ...input.packaging.toMap(),
       'track_inventory': input.trackInventory,
       'imeis': input.imeis,
       'price_tier_1': input.priceTier1 ?? input.price,

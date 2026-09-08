@@ -14,8 +14,10 @@
 
 import 'dart:math' as math;
 
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
@@ -25,7 +27,9 @@ import '../../../shared/widgets/module_page.dart';
 import '../../inventory/data/file_io_helper.dart';
 import '../../settings/presentation/app_settings_providers.dart';
 import '../../shell/presentation/shell_providers.dart';
-import '../data/reports_repository.dart' show FiscalZClosureRow;
+import '../data/reports_repository.dart'
+    show FiscalZClosureRow, SaleDetailRow;
+import '../export/estado_diario_csv.dart';
 import '../domain/report_category.dart';
 import '../export/report_export_models.dart';
 import '../export/report_export_service.dart';
@@ -648,6 +652,8 @@ class _CategoryContent extends StatelessWidget {
       case ReportCategory.descuentos:
         return const _DescuentosReport();
       // ── Round 3 (DGII) ─────────────────────────────────────────────
+      case ReportCategory.estadoDiario:
+        return const _EstadoDiarioReport();
       case ReportCategory.reporte606:
         return const _Dgii606Report();
       case ReportCategory.reporte607:
@@ -3538,6 +3544,228 @@ class _DgiiYearMonthPicker extends ConsumerWidget {
   }
 }
 
+/// ESTADO DE DIARIO — todas las ventas del período, día por día.
+///
+/// Es lo que el negocio le manda al contable a fin de mes: cada venta con su
+/// NCF, cliente, subtotal, ITBIS y total, con el corte de cada día y el total
+/// general. Se descarga en CSV, que abre directo en Excel.
+///
+/// No depende de las funciones fiscales (606/607): sale de `sales` a través
+/// de `fetchDetailedSales`, que ya existía.
+class _EstadoDiarioReport extends ConsumerWidget {
+  const _EstadoDiarioReport();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(detailedSalesReportProvider);
+    final range = ref.watch(reportDateRangeProvider);
+
+    return async.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.all(AppTokens.s32),
+        child: Center(child: CircularProgressIndicator()),
+      ),
+      error: (e, _) => ErrorCard(
+        message: 'No se pudo cargar el estado de diario: $e',
+        onRetry: () => ref.invalidate(detailedSalesReportProvider),
+      ),
+      data: (rows) {
+        // Solo ventas que existen fiscalmente: las anuladas no se declaran.
+        final vivas = rows
+            .where((r) => r.status != 'voided')
+            .toList(growable: false)
+          ..sort((a, b) => a.saleDate.compareTo(b.saleDate));
+
+        final porDia = <DateTime, List<SaleDetailRow>>{};
+        for (final r in vivas) {
+          final dia = DateTime(r.saleDate.year, r.saleDate.month, r.saleDate.day);
+          porDia.putIfAbsent(dia, () => []).add(r);
+        }
+        final dias = porDia.keys.toList()..sort();
+
+        final subtotal = vivas.fold<double>(0, (s, r) => s + r.subtotal);
+        final itbis = vivas.fold<double>(0, (s, r) => s + r.taxAmount);
+        final total = vivas.fold<double>(0, (s, r) => s + r.totalAmount);
+        final sinNcf = vivas.where((r) => (r.ncf ?? '').trim().isEmpty).length;
+
+        return _ReportCard(
+          title: 'Estado de Diario · ${formatDate(range.from)} a '
+              '${formatDate(range.to)}',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Wrap(
+                spacing: AppTokens.s12,
+                runSpacing: AppTokens.s8,
+                children: [
+                  _MiniStat(label: 'Ventas', value: '${vivas.length}'),
+                  _MiniStat(label: 'Días con ventas', value: '${dias.length}'),
+                  _MiniStat(label: 'Subtotal', value: money(subtotal)),
+                  _MiniStat(label: 'ITBIS', value: money(itbis)),
+                  _MiniStat(label: 'Total', value: money(total)),
+                ],
+              ),
+              if (sinNcf > 0) ...[
+                const SizedBox(height: AppTokens.s12),
+                Text(
+                  '$sinNcf venta(s) sin NCF. Aparecen en el archivo para que '
+                  'las revises, pero no son declarables como comprobante fiscal.',
+                  style: const TextStyle(
+                    color: AppTokens.warning,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              const SizedBox(height: AppTokens.s12),
+              Row(
+                children: [
+                  FilledButton.icon(
+                    onPressed: vivas.isEmpty
+                        ? null
+                        : () async {
+                            final messenger = ScaffoldMessenger.of(context);
+                            final csv = buildEstadoDiarioCsv(dias, porDia);
+                            final nombre = 'estado_diario_'
+                                '${range.fromIso}_a_${range.toIso}';
+                            final ok = await FileIoHelper.saveBytes(
+                              // BOM UTF-8: sin esto Excel en Windows muestra
+                              // los acentos rotos.
+                              bytes: Uint8List.fromList(
+                                [0xEF, 0xBB, 0xBF, ...utf8.encode(csv)],
+                              ),
+                              fileName: '$nombre.csv',
+                              extension: 'csv',
+                              dialogTitle: 'Guardar estado de diario',
+                            );
+                            if (!ok) return;
+                            messenger.showSnackBar(
+                              SnackBar(
+                                backgroundColor: AppTokens.success,
+                                content: Text(
+                                  '$nombre.csv descargado '
+                                  '(${vivas.length} ventas).',
+                                  style: const TextStyle(
+                                      color: AppTokens.successForeground),
+                                ),
+                              ),
+                            );
+                          },
+                    icon: const Icon(Icons.download_rounded, size: 18),
+                    label: const Text('Descargar CSV'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppTokens.s16),
+              for (final dia in dias) ...[
+                _DiaHeader(dia: dia, ventas: porDia[dia]!),
+                _SimpleTable(
+                  columns: const [
+                    'Venta',
+                    'NCF',
+                    'Cliente',
+                    'Subtotal',
+                    'ITBIS',
+                    'Total',
+                    'Estado',
+                  ],
+                  rows: [
+                    for (final r in porDia[dia]!)
+                      [
+                        r.saleNumber,
+                        (r.ncf ?? '').trim().isEmpty ? '—' : r.ncf!,
+                        r.clientName ?? 'Consumidor Final',
+                        money(r.subtotal),
+                        money(r.taxAmount),
+                        money(r.totalAmount),
+                        r.status == 'credit' ? 'A crédito' : 'Pagada',
+                      ],
+                  ],
+                ),
+                const SizedBox(height: AppTokens.s16),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Encabezado de cada día con su corte: cuántas ventas y cuánto sumaron.
+class _DiaHeader extends StatelessWidget {
+  const _DiaHeader({required this.dia, required this.ventas});
+
+  final DateTime dia;
+  final List<SaleDetailRow> ventas;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = ventas.fold<double>(0, (s, r) => s + r.totalAmount);
+    final itbis = ventas.fold<double>(0, (s, r) => s + r.taxAmount);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppTokens.s8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              formatDate(dia),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: AppTokens.brandBlueDark,
+                  ),
+            ),
+          ),
+          Text(
+            '${ventas.length} venta(s) · ITBIS ${money(itbis)} · '
+            'Total ${money(total)}',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: AppTokens.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Cifra suelta del encabezado del reporte.
+class _MiniStat extends StatelessWidget {
+  const _MiniStat({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppTokens.s12,
+        vertical: AppTokens.s8,
+      ),
+      decoration: BoxDecoration(
+        color: AppTokens.secondary,
+        borderRadius: BorderRadius.circular(AppTokens.radiusM),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 11, color: AppTokens.textSecondary)),
+          Text(value,
+              style: const TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w800)),
+        ],
+      ),
+    );
+  }
+}
+
 /// Serializa los rows del 606 al formato TXT pipe-separated de DGII.
 String _build606Txt(Map<String, dynamic> data) {
   final rnc = (data['rnc_negocio'] ?? '').toString();
@@ -3636,6 +3864,38 @@ class _DgiiReportSection extends StatelessWidget {
                 style: TextStyle(color: AppTokens.warning),
               ),
             ),
+          // Sin RNC configurado el TXT saldría con la cabecera vacía y DGII lo
+          // rechaza. Se explica en vez de dejar un botón muerto sin motivo.
+          if (rnc.isEmpty) ...[
+            const SizedBox(height: AppTokens.s12),
+            Container(
+              padding: const EdgeInsets.all(AppTokens.s12),
+              decoration: BoxDecoration(
+                color: AppTokens.warning.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(AppTokens.radiusM),
+                border: Border.all(
+                  color: AppTokens.warning.withValues(alpha: 0.35),
+                ),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      size: 18, color: AppTokens.warning),
+                  SizedBox(width: AppTokens.s8),
+                  Expanded(
+                    child: Text(
+                      'Tu empresa no tiene RNC configurado. DGII exige el RNC '
+                      'del contribuyente en la primera línea del archivo. '
+                      'Configúralo en Configuración → Datos de la empresa '
+                      'para poder descargar.',
+                      style: TextStyle(fontSize: 12, height: 1.35),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: AppTokens.s12),
           Row(
             children: [
@@ -3643,16 +3903,25 @@ class _DgiiReportSection extends StatelessWidget {
                 onPressed: rnc.isEmpty || count == 0
                     ? null
                     : () async {
+                        final messenger = ScaffoldMessenger.of(context);
                         final txt = txtBuilder(data);
-                        await Clipboard.setData(ClipboardData(text: txt));
+                        // Archivo real, no portapapeles: en web descarga, en
+                        // escritorio abre "Guardar como", en móvil comparte.
+                        // DGII pide el TXT en UTF-8.
+                        final saved = await FileIoHelper.saveBytes(
+                          bytes: Uint8List.fromList(utf8.encode(txt)),
+                          fileName: '$fileName.txt',
+                          extension: 'txt',
+                          dialogTitle: 'Guardar $fileName para DGII',
+                        );
+                        if (!saved) return;
                         if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
+                          messenger.showSnackBar(
                             SnackBar(
                               backgroundColor: AppTokens.success,
                               content: Text(
-                                'TXT $fileName copiado al portapapeles '
-                                '($count registros). Pégalo en un .txt UTF-8 '
-                                'y súbelo a la oficina virtual DGII.',
+                                '$fileName.txt descargado ($count registros). '
+                                'Súbelo a la oficina virtual de DGII.',
                                 style: const TextStyle(
                                     color: AppTokens.successForeground),
                               ),
@@ -3660,8 +3929,8 @@ class _DgiiReportSection extends StatelessWidget {
                           );
                         }
                       },
-                icon: const Icon(Icons.copy_all_outlined, size: 18),
-                label: Text('Copiar TXT ($fileName)'),
+                icon: const Icon(Icons.download_rounded, size: 18),
+                label: Text('Descargar TXT ($fileName)'),
               ),
             ],
           ),

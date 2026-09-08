@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../printing/data/printing.dart';
+import '../../../shared/packaging/product_packaging.dart';
 import '../domain/sale_checkout_service.dart';
 
 class SalesProduct {
@@ -36,6 +37,7 @@ class SalesProduct {
     this.allowNegativeStock = false,
     this.priceIncludesTax = false,
     this.trackInventory = true,
+    this.packaging = ProductPackaging.none,
   });
 
   final String id;
@@ -84,6 +86,10 @@ class SalesProduct {
   /// El producto lleva control de inventario. En `false` el RPC no valida
   /// stock ni lo descuenta.
   final bool trackInventory;
+
+  /// Empaques: caja → paquete → unidad. El POS ofrece las presentaciones que
+  /// estén configuradas y convierte a unidades base antes de cobrar.
+  final ProductPackaging packaging;
 
   /// Tasa realmente aplicable a este producto. Espeja la tasa efectiva del
   /// RPC: un producto exento no factura ITBIS aunque tenga tasa configurada.
@@ -167,6 +173,7 @@ class SalesProduct {
       isTaxExempt: map['is_tax_exempt'] == true,
       allowNegativeStock: map['allow_negative_stock'] == true,
       priceIncludesTax: map['price_includes_tax'] == true,
+      packaging: ProductPackaging.fromMap(map),
       // Ausente o null ⇒ true, igual que el `coalesce(track_inventory, true)`
       // del RPC.
       trackInventory: map['track_inventory'] != false,
@@ -486,6 +493,9 @@ class SalesRepository {
             'id, name, sku, barcode, category_id, price, cost, tax_rate, stock, '
             'is_active, is_service, is_tax_exempt, allow_negative_stock, '
             'price_includes_tax, track_inventory, '
+            // Empaques (migración 86).
+            'units_per_pack, packs_per_box, unit_label, pack_label, box_label, '
+            'pack_price, box_price, min_unit_qty, '
             'price_tier_1, price_tier_2, price_tier_3, '
             'price_tier_4, price_tier_5, price_tier_6, price_tier_7, '
             'price_tier_8, price_tier_9, price_tier_10, image_url, imeis',
