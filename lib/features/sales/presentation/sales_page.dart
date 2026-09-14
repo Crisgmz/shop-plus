@@ -2722,13 +2722,20 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
               ),
             ],
           ),
-          if (priceOptions.length > 1) ...[
+          if (priceOptions.length > 1 || item.product.packaging.hasPacks) ...[
             const SizedBox(height: 8),
-            _buildPriceTypeChip(priceOptions, currentPriceLabel),
-          ],
-          if (item.product.packaging.hasPacks) ...[
-            const SizedBox(height: 8),
-            _buildPresentationChip(item),
+            // Tipo de precio y presentación en la misma fila. En pantallas
+            // angostas el Wrap baja el segundo chip en vez de desbordarse.
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (priceOptions.length > 1)
+                  _buildPriceTypeChip(priceOptions, currentPriceLabel),
+                if (item.product.packaging.hasPacks)
+                  _buildPresentationChip(item),
+              ],
+            ),
           ],
           const SizedBox(height: 8),
           // ── Fila inferior: 4 campos (Precio, Cant, Desc, Total) ──
@@ -2830,6 +2837,7 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
 
     return Align(
       alignment: Alignment.centerLeft,
+      widthFactor: 1,
       child: PopupMenuButton<PackagingUom>(
         tooltip: 'Presentación',
         position: PopupMenuPosition.under,
@@ -2882,7 +2890,7 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
               ),
               const SizedBox(width: 6),
               Text(
-                'Presentación: ${describe(item.uom)}',
+                describe(item.uom),
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
@@ -2911,6 +2919,7 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
   ) {
     return Align(
       alignment: Alignment.centerLeft,
+      widthFactor: 1,
       child: PopupMenuButton<String>(
         tooltip: 'Tipo de precio',
         position: PopupMenuPosition.under,
