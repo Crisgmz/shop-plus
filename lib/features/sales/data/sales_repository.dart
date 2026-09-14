@@ -254,10 +254,19 @@ class SaleCartItem {
     this.discountPct = 0,
     this.imeis = const <String>[],
     this.priceTier = 'retail',
+    this.uom = PackagingUom.unit,
   }) : unitPrice = unitPrice ?? product.price;
 
   final SalesProduct product;
+
+  /// Cantidad en la PRESENTACIÓN de la línea ([uom]): "2" son 2 cajas en una
+  /// línea por caja, o 2 unidades en una suelta. La plata y el inventario se
+  /// calculan con [baseQuantity].
   final double quantity;
+
+  /// Presentación de la línea: `unit` (suelto) o `pack` (la presentación del
+  /// producto: Caja, Paquete…). Con `unit` todo funciona como siempre.
+  final PackagingUom uom;
 
   /// Precio aplicado a esta línea. Por defecto = `product.price`; cuando hay
   /// un cliente con tier asignado, el POS lo setea con `priceFor(tier)`.
@@ -288,13 +297,57 @@ class SaleCartItem {
   /// usar `product.taxRate` a secas cobra impuesto que el backend no registra.
   double get taxRate => product.effectiveTaxRate;
 
+  /// Unidades base de UNA presentación de esta línea (1 caja = 12).
+  double get uomFactor => product.packaging.factorFor(uom);
+
+  /// Cantidad en unidades base: lo que se descuenta del inventario y lo que
+  /// viaja al checkout. 2 cajas de 12 = 24.
+  double get baseQuantity => round3(quantity * uomFactor);
+
+  /// Si la línea se vende por presentación (caja, paquete…) y no suelta.
+  bool get isPresentation => uom != PackagingUom.unit;
+
+  /// Nombre de la presentación de la línea: "Caja", "Unidad"…
+  String get presentationLabel => product.packaging.labelFor(uom);
+
+  /// Precio de UNA presentación. [unitPrice] es siempre por unidad base, así
+  /// que la caja vale unitario × unidades y cuadra al centavo con el RPC.
+  double get presentationPrice => round2(unitPrice * uomFactor);
+
+  /// Si la línea respeta la venta mínima del producto. Solo aplica suelto:
+  /// una presentación completa nunca se bloquea.
+  bool get respectsMinimum =>
+      product.packaging.respectsMinimum(baseQuantity, uom);
+
+  /// Copia cambiando solo lo indicado. Todo cambio a una línea del carrito
+  /// pasa por aquí: copiar campo por campo a mano ya perdió datos antes, y
+  /// perder [uom] convertiría "1 Caja" en "1 unidad" y cobraría mal.
+  SaleCartItem copyWith({
+    double? quantity,
+    double? unitPrice,
+    double? discountPct,
+    List<String>? imeis,
+    String? priceTier,
+    PackagingUom? uom,
+  }) {
+    return SaleCartItem(
+      product: product,
+      quantity: quantity ?? this.quantity,
+      unitPrice: unitPrice ?? this.unitPrice,
+      discountPct: discountPct ?? this.discountPct,
+      imeis: imeis ?? this.imeis,
+      priceTier: priceTier ?? this.priceTier,
+      uom: uom ?? this.uom,
+    );
+  }
+
   // Toda la aritmética va en CENTAVOS ENTEROS (ver sale_checkout_service.dart):
   // es la única forma de que la pantalla dé exactamente lo mismo que el
   // `numeric` de Postgres. De estos getters sale el total que ve el cajero y
   // el monto que se manda como pagos: si difieren del RPC aunque sea un
   // centavo, el pago dividido rebota o la caja queda descuadrada.
 
-  double get _lineGrossCents => grossCents(quantity, unitPrice);
+  double get _lineGrossCents => grossCents(baseQuantity, unitPrice);
 
   double get _lineDiscountCents => (_lineGrossCents * (discountPct / 100))
       .roundToDouble()
@@ -565,11 +618,15 @@ class SalesRepository {
                   priceIncludesTax: item.product.priceIncludesTax,
                   trackInventory: item.product.trackInventory,
                 ),
-                quantity: item.quantity,
+                // En unidades base: el trigger de stock no conoce empaques.
+                quantity: item.baseQuantity,
                 // El descuento de la línea viaja al RPC (migración 67). Antes
                 // se quedaba aquí y la venta se registraba al precio completo.
                 discountPct: item.discountPct,
                 imeis: item.imeis,
+                uom: item.uom.dbValue,
+                uomFactor: item.uomFactor,
+                unitName: item.isPresentation ? item.presentationLabel : null,
               ),
             )
             .toList(growable: false),
@@ -620,6 +677,9 @@ class SalesRepository {
     if (saleId.isEmpty) {
       throw Exception('No se pudo crear la venta.');
     }
+
+    // Antes de armar el recibo, para que la factura ya salga con "1 Caja".
+    await _tagPresentations(saleId, normalizedCheckout);
 
     PreparedPrintJobData? preparedPrintJob;
     final status = (payload['status'] ?? '').toString();
@@ -685,11 +745,15 @@ class SalesRepository {
                   priceIncludesTax: item.product.priceIncludesTax,
                   trackInventory: item.product.trackInventory,
                 ),
-                quantity: item.quantity,
+                // En unidades base: el trigger de stock no conoce empaques.
+                quantity: item.baseQuantity,
                 // El descuento de la línea viaja al RPC (migración 67). Antes
                 // se quedaba aquí y la venta se registraba al precio completo.
                 discountPct: item.discountPct,
                 imeis: item.imeis,
+                uom: item.uom.dbValue,
+                uomFactor: item.uomFactor,
+                unitName: item.isPresentation ? item.presentationLabel : null,
               ),
             )
             .toList(growable: false),
@@ -718,12 +782,38 @@ class SalesRepository {
     if (saleId.isEmpty) {
       throw Exception('No se pudo guardar la cuenta.');
     }
+
+    // Así la cuenta reabre con sus cajas, no en unidades.
+    await _tagPresentations(saleId, normalized);
     return HeldSaleResult(
       saleId: saleId,
       saleNumber: (payload['sale_number'] ?? '').toString(),
       totalAmount: _toDouble(payload['total_amount']),
       itemsCount: _toInt(payload['items_count']),
     );
+  }
+
+  /// Marca en `sale_items` la presentación de cada línea ("1 Caja") con
+  /// `tag_sale_item_presentations` (migración 89).
+  ///
+  /// Es un RPC aparte, después del cobro, a propósito: el checkout lo comparten
+  /// dos apps y no se toca. Si esto falla, la venta ya quedó correcta en plata
+  /// e inventario —solo se imprimiría en unidades—, así que no se propaga el
+  /// error: tumbar un cobro ya hecho por una etiqueta sería peor.
+  Future<void> _tagPresentations(
+    String saleId,
+    NormalizedSaleCheckout checkout,
+  ) async {
+    final tags = checkout.toPresentationTags();
+    if (tags.isEmpty) return;
+    try {
+      await _client.rpc(
+        'tag_sale_item_presentations',
+        params: <String, dynamic>{'p_sale_id': saleId, 'p_lines': tags},
+      );
+    } catch (error) {
+      debugPrint('No se pudo marcar la presentación de la venta $saleId: $error');
+    }
   }
 
   /// Descarta una cuenta GUARDADA (estado `pending`): devuelve el stock
@@ -752,7 +842,10 @@ class SalesRepository {
 
     final itemRows = await _client
         .from('sale_items')
-        .select('product_id, quantity, unit_price, discount_amount, imeis')
+        .select(
+          'product_id, quantity, unit_price, discount_amount, imeis, '
+          'uom, uom_factor',
+        )
         .eq('branch_id', branchId)
         .eq('sale_id', saleId)
         .order('created_at');
@@ -777,9 +870,19 @@ class SalesRepository {
       final discountPct = gross > 0
           ? (discountAmount / gross * 100).clamp(0, 100).toDouble()
           : 0.0;
+      // `quantity` está en unidades base. Si la línea se guardó como caja y el
+      // producto conserva ese mismo empaque, se reabre como "2 Cajas"; si el
+      // empaque cambió desde entonces, se reabre suelta (mismo total).
+      final storedUom = PackagingUom.fromDb(row['uom']?.toString());
+      final storedFactor = _toDouble(row['uom_factor']);
+      final keepsPresentation = storedUom != PackagingUom.unit &&
+          storedFactor > 0 &&
+          (product.packaging.factorFor(storedUom) - storedFactor).abs() <
+              0.0005;
       items.add(SaleCartItem(
         product: product,
-        quantity: qty,
+        quantity: keepsPresentation ? round3(qty / storedFactor) : qty,
+        uom: keepsPresentation ? storedUom : PackagingUom.unit,
         unitPrice: unitPrice,
         discountPct: discountPct,
         imeis: row['imeis'] is List
@@ -913,7 +1016,7 @@ class SalesRepository {
         .from('sale_items')
         .select(
           'description, quantity, unit_price, line_subtotal, line_tax, line_total, '
-          'sku_snapshot, unit_name, imeis',
+          'sku_snapshot, unit_name, imeis, uom, uom_factor',
         )
         .eq('sale_id', saleId)
         .order('created_at');
@@ -987,8 +1090,9 @@ class SalesRepository {
                     ? base
                     : '$base\nIMEI: ${imeis.join(", ")}';
               }(),
-              quantity: _toDouble(item['quantity']),
-              unitPrice: _toDouble(item['unit_price']),
+              quantity: _presentationQuantity(item),
+              unitPrice: _presentationUnitPrice(item),
+              presentationLabel: _presentationLabelOf(item),
               lineSubtotal: _toDouble(item['line_subtotal']),
               lineTax: _toDouble(item['line_tax']),
               lineTotal: _toDouble(item['line_total']),
@@ -1148,7 +1252,8 @@ class SalesRepository {
       'p_items': input.items
           .map((item) => {
                 'product_id': item.product.id,
-                'quantity': item.quantity,
+                // En unidades base: devolver "1 Caja" son 12 unidades al inventario.
+                'quantity': item.baseQuantity,
                 // El precio de la LÍNEA, no el del catálogo: si el producto
                 // cambió de precio, se vendió con tier o con descuento, el
                 // catálogo devuelve un monto distinto al que se cobró.
@@ -1475,3 +1580,34 @@ int _toInt(dynamic value) {
 }
 
 double _round2(double value) => (value * 100).roundToDouble() / 100;
+
+/// Factor de presentación de una fila de `sale_items`: mayor que 1 solo si la
+/// línea quedó marcada como caja/paquete (migración 89). Cualquier otro caso
+/// —sin marcar, factor inválido— da 1 y la línea se imprime en unidades.
+double _presentationFactor(Map<String, dynamic> row) {
+  if (PackagingUom.fromDb(row['uom']?.toString()) == PackagingUom.unit) {
+    return 1;
+  }
+  final factor = _toDouble(row['uom_factor']);
+  return factor > 0 ? factor : 1;
+}
+
+/// Cantidad a imprimir: 2 (cajas) en vez de 24 (unidades).
+double _presentationQuantity(Map<String, dynamic> row) {
+  final factor = _presentationFactor(row);
+  final quantity = _toDouble(row['quantity']);
+  return factor == 1 ? quantity : round3(quantity / factor);
+}
+
+/// Precio de UNA presentación: el unitario × las unidades que trae.
+double _presentationUnitPrice(Map<String, dynamic> row) {
+  final factor = _presentationFactor(row);
+  final price = _toDouble(row['unit_price']);
+  return factor == 1 ? price : round2(price * factor);
+}
+
+String? _presentationLabelOf(Map<String, dynamic> row) {
+  if (_presentationFactor(row) == 1) return null;
+  final name = row['unit_name']?.toString().trim();
+  return (name == null || name.isEmpty) ? 'Presentación' : name;
+}

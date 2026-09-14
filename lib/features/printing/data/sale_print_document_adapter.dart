@@ -108,6 +108,7 @@ class SalePrintItemSource {
     this.sku,
     this.unitLabel,
     this.notes,
+    this.presentationLabel,
   });
 
   final String description;
@@ -119,6 +120,9 @@ class SalePrintItemSource {
   final String? sku;
   final String? unitLabel;
   final String? notes;
+
+  /// Ver [PrintDocumentItem.presentationLabel].
+  final String? presentationLabel;
 }
 
 class SalePrintPaymentSource {
@@ -182,6 +186,7 @@ class SalePrintDocumentAdapter {
               sku: _nullIfBlank(item.sku),
               unitLabel: _nullIfBlank(item.unitLabel),
               notes: _nullIfBlank(item.notes),
+              presentationLabel: _nullIfBlank(item.presentationLabel),
             ),
           )
           .toList(growable: false),

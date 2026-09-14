@@ -143,7 +143,7 @@ class ThermalEscPosRenderer {
   }
 
   String _itemDetail(PrintDocumentItem item, bool hidePrices) {
-    final qty = _qty(item.quantity);
+    final qty = item.quantityLabel;
     if (hidePrices) return qty.padLeft(columns);
     final detail = '$qty x ${money(item.unitPrice)}';
     final total = money(item.lineTotal);
@@ -152,9 +152,6 @@ class ThermalEscPosRenderer {
   }
 
   static bool _has(String? v) => v != null && v.trim().isNotEmpty;
-
-  static String _qty(double v) =>
-      v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
 
   static String _formatDate(DateTime d) {
     final local = d.isUtc ? d.toLocal() : d;

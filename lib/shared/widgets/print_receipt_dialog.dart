@@ -559,7 +559,7 @@ class _ThermalPreview extends StatelessWidget {
           for (final item in d.items)
             TableRow(
               children: [
-                _Cell(item.description, style: _mono),
+                _Cell(item.descriptionWithPresentation, style: _mono),
                 _Cell(_qty(item.quantity),
                     style: _mono, align: Alignment.center),
               ],
@@ -594,7 +594,7 @@ class _ThermalPreview extends StatelessWidget {
         for (final item in d.items)
           TableRow(
             children: [
-              _Cell(item.description, style: _mono),
+              _Cell(item.descriptionWithPresentation, style: _mono),
               _Cell(moneyPlain(item.unitPrice),
                   style: _mono, align: Alignment.centerRight),
               _Cell(_qty(item.quantity),

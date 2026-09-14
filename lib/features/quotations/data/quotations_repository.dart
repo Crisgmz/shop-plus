@@ -20,7 +20,7 @@ class QuotationsRepository implements QuotationsRepositoryContract {
     final rows = await _client
         .from('quotations')
         .select(
-          'id, code, status, created_at, valid_until, total_amount, notes, converted_sale_id, client_display_name, clients(full_name)',
+          'id, code, client_id, status, created_at, valid_until, total_amount, notes, converted_sale_id, client_display_name, clients(full_name)',
         )
         .eq('branch_id', branchId)
         .order('created_at', ascending: false);
@@ -263,16 +263,33 @@ class QuotationsRepository implements QuotationsRepositoryContract {
     String quoteId, {
     required String paymentMethod,
     String? cashSessionId,
+    bool asCredit = false,
+    int? creditDueDays,
   }) async {
-    final result = await _client.rpc(
-      'convert_quotation_to_sale',
-      params: {
-        'target_quotation_id': quoteId,
-        'requested_payment_method': paymentMethod,
-        if (cashSessionId != null && cashSessionId.isNotEmpty)
-          'requested_cash_session_id': cashSessionId,
-      },
-    );
+    final Object? result;
+    try {
+      result = await _client.rpc(
+        'convert_quotation_to_sale',
+        params: buildConvertQuotationParams(
+          quoteId: quoteId,
+          paymentMethod: paymentMethod,
+          cashSessionId: cashSessionId,
+          asCredit: asCredit,
+          creditDueDays: creditDueDays,
+        ),
+      );
+    } on PostgrestException catch (error) {
+      // Sin la migración 88 la firma vieja no conoce los parámetros de
+      // crédito y PostgREST no encuentra la función. Se explica en vez de
+      // mostrar el error crudo; al contado sigue funcionando.
+      if (asCredit && _isMissingFunction(error)) {
+        throw Exception(
+          'La venta a crédito desde cotizaciones requiere la migración 88 en '
+          'la base de datos. Mientras tanto se puede convertir al contado.',
+        );
+      }
+      rethrow;
+    }
 
     final map = _parseMaybeMap(result);
     if (map != null) {
@@ -483,6 +500,7 @@ class QuotationsRepository implements QuotationsRepositoryContract {
         itemsCount: itemCounts[map['id'].toString()] ?? 0,
         summary: map['notes']?.toString() ?? '',
         saleId: _nullIfEmpty(map['converted_sale_id']?.toString()),
+        clientId: _nullIfEmpty(map['client_id']?.toString()),
       );
     };
   }
@@ -710,4 +728,35 @@ double _toDouble(dynamic value) {
   if (value == null) return 0;
   if (value is num) return value.toDouble();
   return double.tryParse(value.toString()) ?? 0;
+}
+
+/// Parámetros de `convert_quotation_to_sale`.
+///
+/// Las claves de crédito solo viajan cuando la venta ES a crédito. Así una
+/// conversión al contado sigue resolviendo contra la firma anterior aunque el
+/// app se despliegue antes de ejecutar la migración 88.
+Map<String, dynamic> buildConvertQuotationParams({
+  required String quoteId,
+  required String paymentMethod,
+  String? cashSessionId,
+  bool asCredit = false,
+  int? creditDueDays,
+}) {
+  return {
+    'target_quotation_id': quoteId,
+    'requested_payment_method': paymentMethod,
+    if (cashSessionId != null && cashSessionId.isNotEmpty)
+      'requested_cash_session_id': cashSessionId,
+    if (asCredit) 'requested_as_credit': true,
+    if (asCredit && creditDueDays != null)
+      'requested_credit_due_days': creditDueDays,
+  };
+}
+
+/// True si PostgREST no encontró la función con esos parámetros.
+bool _isMissingFunction(PostgrestException error) {
+  if (error.code == 'PGRST202' || error.code == '42883') return true;
+  final message = error.message.toLowerCase();
+  return message.contains('could not find the function') ||
+      (message.contains('function') && message.contains('does not exist'));
 }

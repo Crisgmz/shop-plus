@@ -1,3 +1,4 @@
+import '../../../shared/packaging/product_packaging.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -1356,7 +1357,7 @@ class _ProductRow extends StatelessWidget {
           Expanded(
             flex: 2,
             child: Text(
-              qty(product.stock),
+              _stockLabel(product),
               textAlign: TextAlign.right,
               style: TextStyle(
                 fontSize: 13,
@@ -1470,7 +1471,7 @@ class _InventoryProductCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _buildInfo('Precio', money(product.price)),
-                _buildInfo('Stock', qty(product.stock), isBad: product.isLowStock),
+                _buildInfo('Stock', _stockLabel(product), isBad: product.isLowStock),
               ],
             ),
             const SizedBox(height: AppTokens.s16),
@@ -1670,6 +1671,15 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
   late final TextEditingController _barcodeController;
   late final TextEditingController _internalCodeController;
   late final TextEditingController _unitController;
+
+  /// Presentación: "Unidad" (sin empaque) o Empaque / Paquete / Caja.
+  late String _presentation;
+
+  /// Cuántas unidades trae la presentación (`units_per_pack`).
+  late final TextEditingController _unitsPerPackController;
+
+  /// Venta mínima al vender suelto, en unidades (`min_unit_qty`).
+  late final TextEditingController _minUnitQtyController;
   late final TextEditingController _priceController;
   late final TextEditingController _costController;
   late final TextEditingController _stockController;
@@ -1703,6 +1713,14 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     _barcodeController = TextEditingController(text: product?.barcode ?? '');
     _internalCodeController = TextEditingController(text: product?.internalCode ?? '');
     _unitController = TextEditingController(text: product?.unit ?? 'unidad');
+    final packaging = product?.packaging ?? ProductPackaging.none;
+    _presentation = packaging.presentationName ?? 'Unidad';
+    _unitsPerPackController = TextEditingController(
+      text: _fmtQty(packaging.unitsPerPack),
+    );
+    _minUnitQtyController = TextEditingController(
+      text: _fmtQty(packaging.minUnitQty),
+    );
     _priceController = TextEditingController(
       text: product == null ? '' : product.price.toString(),
     );
@@ -1756,6 +1774,8 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     _barcodeController.dispose();
     _internalCodeController.dispose();
     _unitController.dispose();
+    _unitsPerPackController.dispose();
+    _minUnitQtyController.dispose();
     _priceController.dispose();
     _costController.dispose();
     _stockController.dispose();
@@ -1965,7 +1985,11 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    decoration: const InputDecoration(labelText: 'Stock'),
+                    decoration: InputDecoration(
+                      labelText: _presentation == 'Unidad'
+                          ? 'Stock'
+                          : 'Stock (en unidades)',
+                    ),
                     validator: (value) {
                       final parsed = double.tryParse(value ?? '');
                       if (parsed == null) return 'Stock inválido';
@@ -2005,17 +2029,64 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                       return null;
                     },
                   ),
-                  TextFormField(
-                    controller: _unitController,
-                    decoration: const InputDecoration(labelText: 'Unidad'),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Unidad requerida';
-                      }
-                      return null;
+                  DropdownButtonFormField<String>(
+                    initialValue: _presentation,
+                    decoration: const InputDecoration(
+                      labelText: 'Presentación',
+                    ),
+                    items: [
+                      for (final name in _presentationOptions)
+                        DropdownMenuItem(value: name, child: Text(name)),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() => _presentation = value);
                     },
                   ),
                 ]),
+                if (_presentation != 'Unidad') ...[
+                  const SizedBox(height: 10),
+                  _formRow(isMobile, [
+                    TextFormField(
+                      controller: _unitsPerPackController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText:
+                            'Unidades por ${_presentation.toLowerCase()}',
+                        helperText:
+                            '¿Cuántas unidades trae cada ${_presentation.toLowerCase()}?',
+                      ),
+                      validator: (value) {
+                        final parsed = double.tryParse((value ?? '').trim());
+                        if (parsed == null || parsed <= 0) {
+                          return 'Indica cuántas unidades trae';
+                        }
+                        return null;
+                      },
+                    ),
+                    TextFormField(
+                      controller: _minUnitQtyController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Venta mínima (unidades)',
+                        helperText: 'Al vender suelto. Vacío = sin mínimo',
+                      ),
+                      validator: (value) {
+                        final text = (value ?? '').trim();
+                        if (text.isEmpty) return null;
+                        final parsed = double.tryParse(text);
+                        if (parsed == null || parsed < 0) {
+                          return 'Mínimo inválido';
+                        }
+                        return null;
+                      },
+                    ),
+                  ]),
+                ],
                 const SizedBox(height: 10),
                 _ProductImagePicker(
                   controller: _imageUrlController,
@@ -2112,6 +2183,7 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
       isTaxExempt: _isTaxExempt,
       trackInventory: _trackInventory,
       imeis: List<String>.from(_imeis),
+      packaging: _buildPackaging(),
       priceTier1: _parseTier(_priceTierControllers[0].text),
       priceTier2: _parseTier(_priceTierControllers[1].text),
       priceTier3: _parseTier(_priceTierControllers[2].text),
@@ -2125,6 +2197,45 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     );
 
     Navigator.of(context).pop(input);
+  }
+
+  /// Opciones del selector. Si el producto trae un nombre propio de otra vía
+  /// ("Fardo"), se conserva como opción para no perderlo al guardar.
+  List<String> get _presentationOptions => [
+        ...ProductPackaging.presentationNames,
+        if (!ProductPackaging.presentationNames.contains(_presentation))
+          _presentation,
+      ];
+
+  static String _fmtQty(double? value) {
+    if (value == null) return '';
+    return value == value.roundToDouble()
+        ? value.toInt().toString()
+        : value.toString();
+  }
+
+  /// Empaque a guardar según la presentación elegida.
+  ///
+  /// "Unidad" quita el empaque (decisión explícita del usuario). Con otra
+  /// presentación se conserva lo que este formulario no edita —paquetes por
+  /// caja, etiqueta de unidad, precios propios— para no borrar una
+  /// configuración hecha por otra vía.
+  ProductPackaging _buildPackaging() {
+    if (_presentation == 'Unidad') return ProductPackaging.none;
+    final previous = widget.initial?.packaging ?? ProductPackaging.none;
+    final units = double.tryParse(_unitsPerPackController.text.trim());
+    final minText = _minUnitQtyController.text.trim();
+    final min = minText.isEmpty ? null : double.tryParse(minText);
+    return ProductPackaging(
+      unitsPerPack: units,
+      packsPerBox: previous.packsPerBox,
+      unitLabel: previous.unitLabel,
+      packLabel: _presentation,
+      boxLabel: previous.boxLabel,
+      packPrice: previous.packPrice,
+      boxPrice: previous.boxPrice,
+      minUnitQty: (min == null || min <= 0) ? null : min,
+    );
   }
 
   double? _parseTier(String text) {
@@ -3316,3 +3427,8 @@ class _InventoryKpis extends StatelessWidget {
   }
 }
 
+/// Stock para mostrar: "3 Cajas · 5 Unidades" si el producto tiene
+/// presentación; el número de siempre si no.
+String _stockLabel(InventoryProduct product) => product.packaging.hasPacks
+    ? product.packaging.describeStock(product.stock)
+    : qty(product.stock);

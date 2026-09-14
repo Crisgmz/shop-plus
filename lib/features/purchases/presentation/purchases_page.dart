@@ -1,3 +1,4 @@
+import '../../../shared/packaging/product_packaging.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -748,13 +749,25 @@ class _NewPurchaseDialogState extends State<_NewPurchaseDialog> {
               sku: item.sku,
               unit: item.unitName,
             );
+        // En su presentación si el producto conserva ese empaque; si no, en
+        // unidades. El costo sale del subtotal guardado (exacto) para que
+        // volver a guardar no mueva el total por redondeos por unidad.
+        final keepsPresentation = item.isPresentation &&
+            (product.packaging.factorFor(item.uom) - item.uomFactor).abs() <
+                0.0005;
         _lines.add(
           PurchaseLineInput(
             product: product,
-            quantity: item.quantity,
-            unitCost: item.unitCost,
+            quantity:
+                keepsPresentation ? item.presentationQuantity : item.quantity,
+            unitCost: keepsPresentation
+                ? item.presentationUnitCost
+                : (item.quantity > 0
+                    ? item.lineSubtotal / item.quantity
+                    : item.unitCost),
             taxRate: item.taxRate,
             salePrice: product.price,
+            uom: keepsPresentation ? item.uom : PackagingUom.unit,
           ),
         );
       }
@@ -1290,6 +1303,27 @@ class _PurchaseLineTileState extends State<_PurchaseLineTile> {
 
   String _fmt(double v) => v.toStringAsFixed(2);
 
+  /// Cambia la presentación de la línea (Unidad ↔ Caja) conservando lo que ya
+  /// estaba: las unidades base y el costo por unidad. Si las unidades no
+  /// forman presentaciones completas, arranca en 1.
+  void _setUom(PackagingUom next) {
+    final line = widget.line;
+    if (next == line.uom) return;
+    final oldFactor = line.uomFactor;
+    final base = line.quantity * oldFactor;
+    final costPerBase = oldFactor <= 0 ? line.unitCost : line.unitCost / oldFactor;
+    line.uom = next;
+    final newFactor = line.uomFactor;
+    final exact = newFactor > 0 &&
+        ((base / newFactor) - (base / newFactor).roundToDouble()).abs() < 0.0005;
+    line.quantity = exact ? (base / newFactor).roundToDouble() : 1;
+    line.unitCost = costPerBase * newFactor;
+    _qty.text = _fmt(line.quantity);
+    _cost.text = _fmt(line.unitCost);
+    widget.onChanged();
+    setState(() {});
+  }
+
   void _apply() {
     final line = widget.line;
     line.quantity = double.tryParse(_qty.text) ?? line.quantity;
@@ -1309,9 +1343,47 @@ class _PurchaseLineTileState extends State<_PurchaseLineTile> {
     );
   }
 
+  Widget _presentationField(PurchaseLineInput line) {
+    final packaging = line.product.packaging;
+    String describe(PackagingUom uom) {
+      final label = packaging.labelFor(uom);
+      if (uom == PackagingUom.unit) return label;
+      final units = packaging.factorFor(uom);
+      final n = units == units.roundToDouble()
+          ? units.toInt().toString()
+          : units.toString();
+      return '$label ($n unidades)';
+    }
+
+    return DropdownButtonFormField<PackagingUom>(
+      initialValue: line.uom,
+      isDense: true,
+      decoration: const InputDecoration(
+        labelText: 'Presentación',
+        isDense: true,
+      ),
+      items: [
+        for (final uom in packaging.sellableUoms)
+          DropdownMenuItem(value: uom, child: Text(describe(uom))),
+      ],
+      onChanged: (value) {
+        if (value != null) _setUom(value);
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final line = widget.line;
+    final hasPresentation = line.product.packaging.hasPacks;
+    final qtyLabel = line.isPresentation
+        ? pluralLabel(line.presentationLabel, 2)
+        : 'Cantidad';
+    final costLabel = line.isPresentation
+        ? 'Costo por ${line.presentationLabel.toLowerCase()}'
+        : 'Costo';
+    final priceLabel =
+        line.isPresentation ? 'Precio venta c/u' : 'Precio venta';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Column(
@@ -1341,12 +1413,16 @@ class _PurchaseLineTileState extends State<_PurchaseLineTile> {
             ],
           ),
           const SizedBox(height: 6),
+          if (hasPresentation) ...[
+            _presentationField(line),
+            const SizedBox(height: 8),
+          ],
           if (widget.mobile) ...[
             Row(
               children: [
-                Expanded(child: _numField(_qty, 'Cantidad')),
+                Expanded(child: _numField(_qty, qtyLabel)),
                 const SizedBox(width: 8),
-                Expanded(child: _numField(_cost, 'Costo')),
+                Expanded(child: _numField(_cost, costLabel)),
               ],
             ),
             const SizedBox(height: 8),
@@ -1354,19 +1430,19 @@ class _PurchaseLineTileState extends State<_PurchaseLineTile> {
               children: [
                 Expanded(child: _numField(_tax, 'ITBIS %')),
                 const SizedBox(width: 8),
-                Expanded(child: _numField(_price, 'Precio venta')),
+                Expanded(child: _numField(_price, priceLabel)),
               ],
             ),
           ] else
             Row(
               children: [
-                Expanded(child: _numField(_qty, 'Cantidad')),
+                Expanded(child: _numField(_qty, qtyLabel)),
                 const SizedBox(width: 8),
-                Expanded(child: _numField(_cost, 'Costo')),
+                Expanded(child: _numField(_cost, costLabel)),
                 const SizedBox(width: 8),
                 Expanded(child: _numField(_tax, 'ITBIS %')),
                 const SizedBox(width: 8),
-                Expanded(child: _numField(_price, 'Precio venta')),
+                Expanded(child: _numField(_price, priceLabel)),
               ],
             ),
           const Divider(height: 16),
@@ -1463,12 +1539,16 @@ class _PurchaseDetailDialog extends StatelessWidget {
                     children: [
                       Expanded(flex: 4, child: Text(it.description)),
                       Expanded(
-                        child: Text(qty(it.quantity),
-                            textAlign: TextAlign.right),
+                        child: Text(
+                          it.isPresentation
+                              ? '${qty(it.presentationQuantity)} ${pluralLabel(it.unitName ?? 'Caja', it.presentationQuantity)}'
+                              : qty(it.quantity),
+                          textAlign: TextAlign.right,
+                        ),
                       ),
                       Expanded(
                         flex: 2,
-                        child: Text(money(it.unitCost),
+                        child: Text(money(it.presentationUnitCost),
                             textAlign: TextAlign.right),
                       ),
                       Expanded(

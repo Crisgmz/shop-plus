@@ -41,7 +41,7 @@ class PrintingTemplateService {
     for (final item in document.items) {
       rows.add(
         ThermalTicketRow(
-          left: '${_qty(item.quantity)} x ${item.description}',
+          left: '${item.quantityLabel} x ${item.description}',
           // Conduce: sin monto por línea.
           right: hidePrices ? null : money(item.lineTotal),
         ),
@@ -135,7 +135,7 @@ class PrintingTemplateService {
           .map(
             (item) => A4LineItemRow(
               description: item.description,
-              quantityLabel: _qty(item.quantity),
+              quantityLabel: item.quantityLabel,
               unitPriceLabel: hidePrices ? '' : money(item.unitPrice),
               totalLabel: hidePrices ? '' : money(item.lineTotal),
             ),
@@ -210,10 +210,3 @@ String _a4Title(PrintDocumentType type) {
 }
 
 bool _notEmpty(String? value) => value != null && value.trim().isNotEmpty;
-
-String _qty(double value) {
-  if (value == value.roundToDouble()) {
-    return value.toStringAsFixed(0);
-  }
-  return value.toStringAsFixed(2);
-}

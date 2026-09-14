@@ -6,6 +6,8 @@ import '../../../core/theme/tokens.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../cash_register/presentation/cash_register_providers.dart';
+import '../../cobros/presentation/cobros_providers.dart';
+import '../../settings/presentation/app_settings_providers.dart';
 import '../data/quotations_models.dart';
 import 'convert_payment_dialog.dart';
 import 'quotations_providers.dart';
@@ -373,23 +375,34 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
     final quoteId = widget.quoteId;
     if (quoteId == null) return;
 
-    final method = await showConvertPaymentDialog(
+    final settings = ref.read(appSettingsProvider).valueOrNull;
+    final choice = await showConvertPaymentDialog(
       context,
       quoteCode: _quoteCode ?? 'la cotización',
+      total: _total,
+      // A crédito exige cliente del catálogo. Si el cliente se cambió y no se
+      // guardó, el servidor valida contra lo guardado y lo explica.
+      hasClient: _clientId != null,
+      creditAllowed: settings?.creditAllowSales ?? true,
+      defaultCreditDays: settings?.creditDefaultDays ?? 30,
     );
 
-    if (method == null || !mounted) return;
+    if (choice == null || !mounted) return;
 
     try {
       final result = await ref
           .read(quotationsRepositoryProvider)
           .convertToSale(
             quoteId,
-            paymentMethod: method,
+            paymentMethod: choice.paymentMethod,
             cashSessionId: ref.read(activeCashSessionIdProvider),
+            asCredit: choice.asCredit,
+            creditDueDays: choice.creditDueDays,
           );
       ref.invalidate(quotationDetailProvider(quoteId));
       ref.invalidate(quotationsFoundationProvider);
+      // Una venta a crédito aparece en Cuentas por cobrar.
+      if (choice.asCredit) ref.invalidate(cobrosReceivablesProvider);
       if (!mounted) return;
       setState(() {
         _status = QuoteStatus.converted;
@@ -397,7 +410,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Cotización convertida a venta ${result.saleNumber}.'),
+          content: Text(quoteConversionMessage(result.saleNumber, choice)),
         ),
       );
     } catch (error) {

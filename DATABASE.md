@@ -179,6 +179,30 @@ sucursal: `<app_settings.prefix_sale>-NNNNNN`, p. ej. `FA-000123`.
   reusado (cuenta guardada que se reabre y se cobra) conserva el suyo.
 - Las ventas anteriores a la migración conservan su número `VTA-…`.
 
+### Presentaciones (empaques)
+Migraciones `20260908_86_product_packaging.sql` y
+`20260914_89_tag_sale_item_presentations.sql`. `products.stock` guarda
+SIEMPRE la unidad base; cajas y paquetes se derivan, nunca se guardan aparte.
+
+- Configuración por producto (86): `pack_label` = presentación (Empaque /
+  Paquete / Caja), `units_per_pack` = unidades que trae, `min_unit_qty` = venta
+  mínima al vender suelto. `units_per_pack` NULL = producto sin empaque.
+- El precio UNITARIO manda: una presentación vale unitario × unidades, así el
+  checkout calcula exacto al centavo sin conocer empaques.
+- `checkout_sale_transactional` NO se toca (lo comparte `flutter_shop+`): recibe
+  `quantity` en unidades base.
+- `tag_sale_item_presentations(sale_id, lines)` (89, función nueva) marca después
+  del cobro `sale_items.uom`, `uom_factor` y `unit_name` para que la factura diga
+  "1 Caja". Busca la fila por (venta, producto, cantidad, precio) entre las que
+  siguen en `'unit'` y solo cambia esas tres columnas: el trigger de stock recibe
+  delta 0 y los montos no se mueven. Si la llamada falla, la venta ya es correcta
+  y solo se imprime en unidades.
+- Compras escribe `purchase_items.uom` / `uom_factor` directo (no hay RPC): la
+  cantidad va en unidades base y los montos salen del costo por presentación,
+  para cuadrar con la factura del proveedor.
+- Límite conocido: `edit_sale_transactional` reinserta las líneas y pierde la
+  marca. La venta editada se imprime en unidades (plata e inventario correctos).
+
 ## 6) Vistas actuales de reportes
 
 Definidas en `03_reports_views.sql`:

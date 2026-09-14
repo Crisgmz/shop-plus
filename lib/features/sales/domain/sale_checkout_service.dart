@@ -13,7 +13,11 @@ class SaleCheckoutService {
     // ITBIS. Espeja `v_line_tax_rate` del RPC `checkout_sale_transactional`
     // (migración 64), que es quien fija los totales que se guardan.
     final chargesTax = receiptType != 'none';
+    // Clave = producto + presentación: una caja y unas unidades sueltas del
+    // mismo producto son líneas distintas en la factura ("1 Caja" y "5
+    // Unidades"). El inventario, en cambio, se valida sumando por producto.
     final normalizedItems = <String, _MutableSaleLine>{};
+    final baseByProduct = <String, double>{};
 
     for (final item in input.items) {
       final product = item.product;
@@ -51,9 +55,13 @@ class SaleCheckoutService {
         );
       }
 
-      final existing = normalizedItems[product.id];
+      baseByProduct[product.id] =
+          round3((baseByProduct[product.id] ?? 0) + item.quantity);
+
+      final key = '${product.id}|${item.uom}';
+      final existing = normalizedItems[key];
       if (existing == null) {
-        normalizedItems[product.id] = _MutableSaleLine(
+        normalizedItems[key] = _MutableSaleLine(
           productId: product.id,
           description: product.name,
           quantity: item.quantity,
@@ -65,6 +73,9 @@ class SaleCheckoutService {
           priceIncludesTax: product.priceIncludesTax,
           tracksStock: product.tracksStock,
           imeis: item.imeis,
+          uom: item.uom,
+          uomFactor: item.uomFactor,
+          unitName: item.unitName,
         );
       } else {
         existing.quantity = round3(existing.quantity + item.quantity);
@@ -78,9 +89,10 @@ class SaleCheckoutService {
           // setting global está prendido. Si el dueño permite venta sin
           // stock, dejamos pasar y que el RPC decida (con el flag por
           // producto si aplica).
+          final productBase = baseByProduct[line.productId] ?? line.quantity;
           if (input.disallowNoStock &&
               line.tracksStock &&
-              line.quantity > line.availableStock) {
+              productBase > line.availableStock) {
             throw SaleCheckoutValidationException(
               'Stock insuficiente para ${line.description}. Disponible: ${line.availableStock.toStringAsFixed(line.availableStock % 1 == 0 ? 0 : 3)}.',
             );
@@ -127,6 +139,9 @@ class SaleCheckoutService {
             lineTax: lineTax,
             lineTotal: lineTotal,
             imeis: line.imeis,
+            uom: line.uom,
+            uomFactor: line.uomFactor,
+            unitName: line.unitName,
           );
         })
         .toList(growable: false);
@@ -225,10 +240,25 @@ class SaleCheckoutSourceItem {
     required this.quantity,
     this.discountPct = 0,
     this.imeis = const <String>[],
+    this.uom = 'unit',
+    this.uomFactor = 1,
+    this.unitName,
   });
 
   final SaleCheckoutSourceProduct product;
+
+  /// Cantidad en UNIDADES BASE (2 cajas de 12 = 24). Es lo que descuenta el
+  /// trigger de stock, que no conoce los empaques.
   final double quantity;
+
+  /// Presentación con que se vendió: 'unit' | 'pack' | 'box'.
+  final String uom;
+
+  /// Unidades base de UNA presentación (1 caja = 12). 1 para 'unit'.
+  final double uomFactor;
+
+  /// Nombre de la presentación para la factura ("Caja"). Null en 'unit'.
+  final String? unitName;
 
   /// Descuento porcentual de la línea (0-100). Viaja al RPC como
   /// `discount_pct`; el servidor lo aplica sobre el bruto.
@@ -329,6 +359,25 @@ class NormalizedSaleCheckout {
         )
         .toList(growable: false);
   }
+
+  /// Líneas vendidas por presentación (caja, paquete…) para marcarlas en
+  /// `sale_items` después del cobro con `tag_sale_item_presentations`
+  /// (migración 89). Las de unidad no hacen falta: `uom` ya nace en 'unit'.
+  ///
+  /// `quantity` y `unit_price` van con el mismo redondeo que [toRpcItems]:
+  /// el RPC los usa para encontrar la fila exacta que insertó el checkout.
+  List<Map<String, dynamic>> toPresentationTags() => [
+        for (final item in items)
+          if (item.uom != 'unit' && item.uomFactor > 0)
+            {
+              'product_id': item.productId,
+              'quantity': item.quantity,
+              'unit_price': item.unitPrice,
+              'uom': item.uom,
+              'uom_factor': item.uomFactor,
+              'unit_name': item.unitName,
+            },
+      ];
 }
 
 class NormalizedSaleCheckoutItem {
@@ -345,14 +394,24 @@ class NormalizedSaleCheckoutItem {
     this.discountPct = 0,
     this.discountAmount = 0,
     this.imeis = const <String>[],
+    this.uom = 'unit',
+    this.uomFactor = 1,
+    this.unitName,
   });
 
   final String productId;
   final String description;
+
+  /// Cantidad en unidades base.
   final double quantity;
   final double availableStock;
   final double unitPrice;
   final double taxRate;
+
+  /// Presentación de la línea (ver [SaleCheckoutSourceItem.uom]).
+  final String uom;
+  final double uomFactor;
+  final String? unitName;
 
   /// Descuento de la línea: porcentaje aplicado y su monto en pesos.
   final double discountPct;
@@ -384,6 +443,9 @@ class _MutableSaleLine {
     required this.isTaxExempt,
     required this.priceIncludesTax,
     required this.tracksStock,
+    required this.uom,
+    required this.uomFactor,
+    this.unitName,
     List<String>? imeis,
   }) : imeis = [...?imeis];
 
@@ -397,6 +459,9 @@ class _MutableSaleLine {
   final bool isTaxExempt;
   final bool priceIncludesTax;
   final bool tracksStock;
+  final String uom;
+  final double uomFactor;
+  final String? unitName;
   final List<String> imeis;
 }
 

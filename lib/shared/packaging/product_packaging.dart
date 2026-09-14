@@ -59,6 +59,31 @@ class ProductPackaging {
   /// Producto sin empaque: se vende y se cuenta por unidad, como siempre.
   static const ProductPackaging none = ProductPackaging();
 
+  /// Presentaciones que ofrece el formulario de inventario. "Unidad" significa
+  /// sin empaque; las demás se venden completas o sueltas por unidad.
+  static const List<String> presentationNames = [
+    'Unidad',
+    'Empaque',
+    'Paquete',
+    'Caja',
+  ];
+
+  /// Nombre de la presentación con que se vende además de la unidad ("Caja",
+  /// "Paquete"…), o `null` si el producto no tiene empaque.
+  String? get presentationName => hasPacks ? effectivePackLabel : null;
+
+  /// Precio unitario que corresponde a un precio por presentación.
+  ///
+  /// El precio UNITARIO manda: una presentación vale unitario × unidades, así
+  /// que siempre cuadra al centavo con lo que calcula el checkout. Un precio
+  /// de presentación que no se reparte exacto entre sus unidades se ajusta al
+  /// centavo por unidad (una caja de 12 a 100.00 → 8.33 c/u → 99.96).
+  static double unitPriceFromPresentation(
+    double presentationPrice,
+    double factor,
+  ) =>
+      factor <= 0 ? presentationPrice : _round2(presentationPrice / factor);
+
   /// Unidades base que trae un paquete. `null` ⇒ el producto no tiene empaque.
   final double? unitsPerPack;
 
@@ -129,7 +154,7 @@ class ProductPackaging {
   ///
   ///     200 cajas de 40 paquetes de 25 vasos = 200_000 vasos
   ///     vender 10 paquetes (250 vasos) deja 199_750
-  ///       → 199 cajas, 39 paquetes, 0 unidades
+  ///       → 199 cajas, 30 paquetes, 0 unidades
   StockBreakdown breakdown(double stockInBaseUnits) {
     if (!hasPacks) {
       return StockBreakdown(boxes: 0, packs: 0, units: _round3(stockInBaseUnits));
@@ -277,3 +302,7 @@ String _plural(String label, num count) {
   if (RegExp(r'[aeiouáéíóú]$').hasMatch(lower)) return '${label}s';
   return '${label}es';
 }
+
+/// Pluraliza una etiqueta de presentación para mostrarla con su cantidad:
+/// "2 Cajas", "3 Unidades", "1 Paquete".
+String pluralLabel(String label, num count) => _plural(label, count);

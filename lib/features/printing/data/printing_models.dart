@@ -1,3 +1,5 @@
+import '../../../shared/packaging/product_packaging.dart';
+
 enum PrintDocumentType {
   saleReceipt,
   fiscalInvoice,
@@ -161,6 +163,7 @@ class PrintDocumentItem {
     this.sku,
     this.unitLabel,
     this.notes,
+    this.presentationLabel,
   });
 
   final String description;
@@ -172,6 +175,28 @@ class PrintDocumentItem {
   final String? sku;
   final String? unitLabel;
   final String? notes;
+
+  /// Presentación con que se vendió la línea ("Caja"). Cuando está, [quantity]
+  /// y [unitPrice] ya vienen en esa presentación (2 cajas a RD$ 1,200). Null en
+  /// líneas por unidad.
+  final String? presentationLabel;
+
+  bool get _hasPresentation => (presentationLabel ?? '').trim().isNotEmpty;
+
+  /// Cantidad lista para imprimir: "2 Cajas" en una presentación, "2" suelto.
+  String get quantityLabel {
+    final number = quantity == quantity.roundToDouble()
+        ? quantity.toStringAsFixed(0)
+        : quantity.toStringAsFixed(2);
+    if (!_hasPresentation) return number;
+    return '$number ${pluralLabel(presentationLabel!.trim(), quantity)}';
+  }
+
+  /// Descripción con la presentación al lado, para columnas de cantidad
+  /// angostas (ticket 80mm): "Vasos 12oz (Caja)".
+  String get descriptionWithPresentation => _hasPresentation
+      ? '$description (${presentationLabel!.trim()})'
+      : description;
 }
 
 class PrintPaymentLine {

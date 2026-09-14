@@ -655,6 +655,11 @@ class InventoryRepository {
         final payload = _buildProductPayload(input);
         // El import no maneja IMEIs: no tocar la columna para no borrarlos.
         payload.remove('imeis');
+        // La plantilla Excel no trae columnas de presentación: mandarlas iría
+        // en NULL y borraría la presentación ya configurada del producto.
+        for (final key in ProductPackaging.none.toMap().keys) {
+          payload.remove(key);
+        }
         if (existingId == null) {
           payload['branch_id'] = branchId;
           await _client.from('products').insert(payload);

@@ -408,7 +408,7 @@ class PdfReceiptBuilder {
           for (final item in data.items)
             pw.TableRow(
               children: [
-                _thermalCell(item.description, style: base),
+                _thermalCell(item.descriptionWithPresentation, style: base),
                 _thermalCell(
                   _qty(item.quantity),
                   style: base,
@@ -449,7 +449,7 @@ class PdfReceiptBuilder {
         for (final item in data.items)
           pw.TableRow(
             children: [
-              _thermalCell(item.description, style: base),
+              _thermalCell(item.descriptionWithPresentation, style: base),
               _thermalCell(
                 moneyPlain(item.unitPrice),
                 style: amountStyle,
@@ -810,7 +810,7 @@ class PdfReceiptBuilder {
                 ),
               ),
               children: [
-                cell(_qty(it.quantity), align: pw.Alignment.center),
+                cell(it.quantityLabel, align: pw.Alignment.center),
                 cell(it.description),
               ],
             ),
@@ -866,7 +866,7 @@ class PdfReceiptBuilder {
               ),
             ),
             children: [
-              cell(_qty(it.quantity), align: pw.Alignment.center),
+              cell(it.quantityLabel, align: pw.Alignment.center),
               cell(it.description),
               moneyCell(money(it.unitPrice)),
               moneyCell(money(it.lineSubtotal)),

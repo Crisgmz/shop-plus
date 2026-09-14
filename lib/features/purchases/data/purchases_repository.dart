@@ -1,5 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../shared/packaging/product_packaging.dart';
 import '../../printing/data/printing.dart';
 
 class PurchaseSupplier {
@@ -27,6 +28,7 @@ class PurchaseProduct {
     this.barcode,
     this.unit,
     this.imageUrl,
+    this.packaging = ProductPackaging.none,
   });
 
   final String id;
@@ -39,6 +41,9 @@ class PurchaseProduct {
   final String? unit;
   final String? imageUrl;
 
+  /// Presentación del producto (caja, paquete…) para comprar por presentación.
+  final ProductPackaging packaging;
+
   factory PurchaseProduct.fromMap(Map<String, dynamic> map) {
     return PurchaseProduct(
       id: (map['id'] ?? '').toString(),
@@ -50,6 +55,7 @@ class PurchaseProduct {
       barcode: map['barcode']?.toString(),
       unit: (map['sale_unit'] ?? map['unit'])?.toString(),
       imageUrl: map['image_url']?.toString(),
+      packaging: ProductPackaging.fromMap(map),
     );
   }
 }
@@ -124,15 +130,42 @@ class PurchaseLineInput {
     required this.taxRate,
     this.salePrice = 0,
     this.notes,
+    this.uom = PackagingUom.unit,
   });
 
   final PurchaseProduct product;
   // Editables en línea desde el diálogo de compra.
+  //
+  // [quantity] y [unitCost] están en la PRESENTACIÓN de la línea, tal como
+  // los factura el proveedor: 3 cajas a RD$ 1,234.56 la caja. Así los montos
+  // cuadran exacto con su factura (y con el 606). Al guardar, la cantidad se
+  // convierte a unidades base para el inventario — ver [baseQuantity].
   double quantity;
   double unitCost;
   double taxRate;
+
+  /// Precio de venta POR UNIDAD (es lo que significa `products.price`).
   double salePrice;
   final String? notes;
+
+  /// Presentación de la línea: `unit` o la del producto (`pack`).
+  PackagingUom uom;
+
+  /// Unidades base de UNA presentación de la línea (1 caja = 12).
+  double get uomFactor => product.packaging.factorFor(uom);
+
+  bool get isPresentation => uom != PackagingUom.unit;
+
+  String get presentationLabel => product.packaging.labelFor(uom);
+
+  /// Cantidad en unidades base: lo que suma el trigger de stock.
+  double get baseQuantity => _round3(quantity * uomFactor);
+
+  /// Costo por unidad base: lo que significan `products.cost` y
+  /// `purchase_items.unit_cost`. Redondeado al centavo; los montos de la línea
+  /// NO salen de aquí sino de [unitCost], que es exacto.
+  double get unitCostPerBase =>
+      uomFactor <= 0 ? unitCost : _round2(unitCost / uomFactor);
 
   double get lineSubtotal => _round2(quantity * unitCost);
   double get lineTax => _round2(lineSubtotal * (taxRate / 100));
@@ -179,18 +212,40 @@ class PurchaseItemDetail {
     this.productId,
     this.sku,
     this.unitName,
+    this.uom = PackagingUom.unit,
+    this.uomFactor = 1,
   });
 
   final String? productId;
   final String description;
+
+  /// Cantidad en unidades base, como está en `purchase_items`.
   final double quantity;
+
+  /// Costo por unidad base (redondeado al centavo).
   final double unitCost;
   final double taxRate;
   final double lineSubtotal;
   final double lineTax;
   final double lineTotal;
   final String? sku;
+
+  /// En una línea por presentación, su nombre ("Caja").
   final String? unitName;
+  final PackagingUom uom;
+  final double uomFactor;
+
+  bool get isPresentation => uom != PackagingUom.unit && uomFactor > 0;
+
+  /// Cantidad en la presentación: 3 (cajas) en vez de 36 (unidades).
+  double get presentationQuantity =>
+      isPresentation ? _round3(quantity / uomFactor) : quantity;
+
+  /// Costo de UNA presentación. Sale del subtotal guardado, que es exacto, y
+  /// no de `unit_cost × factor`, que viene redondeado por unidad.
+  double get presentationUnitCost => !isPresentation || presentationQuantity <= 0
+      ? unitCost
+      : lineSubtotal / presentationQuantity;
 }
 
 class PurchaseDetail {
@@ -259,7 +314,11 @@ class PurchasesRepository {
 
     final rows = await _client
         .from('products')
-        .select('id, name, cost, price, stock, sku, barcode, sale_unit, unit, image_url')
+        .select(
+          'id, name, cost, price, stock, sku, barcode, sale_unit, unit, '
+          'image_url, units_per_pack, packs_per_box, unit_label, pack_label, '
+          'box_label, pack_price, box_price, min_unit_qty',
+        )
         .eq('branch_id', branchId)
         .eq('is_active', true)
         .order('name');
@@ -504,7 +563,7 @@ class PurchasesRepository {
         .select(
           'product_id, description, product_name_snapshot, sku_snapshot, '
           'unit_name, quantity, unit_cost, tax_rate, line_subtotal, line_tax, '
-          'line_total',
+          'line_total, uom, uom_factor',
         )
         .eq('purchase_id', purchaseId)
         .eq('branch_id', branchId)
@@ -524,6 +583,10 @@ class PurchasesRepository {
         lineSubtotal: _toDouble(m['line_subtotal']),
         lineTax: _toDouble(m['line_tax']),
         lineTotal: _toDouble(m['line_total']),
+        uom: PackagingUom.fromDb(m['uom']?.toString()),
+        uomFactor: _toDouble(m['uom_factor']) > 0
+            ? _toDouble(m['uom_factor'])
+            : 1,
       );
     }).toList(growable: false);
 
@@ -595,8 +658,9 @@ class PurchasesRepository {
           .map(
             (it) => PrintDocumentItem(
               description: it.description,
-              quantity: it.quantity,
-              unitPrice: it.unitCost,
+              quantity: it.presentationQuantity,
+              unitPrice: it.presentationUnitCost,
+              presentationLabel: it.isPresentation ? it.unitName : null,
               lineSubtotal: it.lineSubtotal,
               lineTax: it.lineTax,
               lineTotal: it.lineTotal,
@@ -642,10 +706,18 @@ class PurchasesRepository {
             'product_name_snapshot': line.product.name,
             'sku_snapshot': line.product.sku,
             'barcode_snapshot': line.product.barcode,
-            'unit_name': line.product.unit,
-            'quantity': line.quantity,
+            // `quantity` en unidades base: el trigger de stock la suma sin
+            // conocer empaques. Los montos salen de la presentación tal como
+            // la cobró el proveedor, así la compra cuadra con su factura.
+            'unit_name':
+                line.isPresentation ? line.presentationLabel : line.product.unit,
+            'quantity': line.baseQuantity,
             'received_quantity': 0,
-            'unit_cost': line.unitCost,
+            'unit_cost': line.unitCostPerBase,
+            // Solo en líneas por presentación: una compra por unidad queda
+            // idéntica a como se guardaba antes de la migración 86.
+            if (line.isPresentation) 'uom': line.uom.dbValue,
+            if (line.isPresentation) 'uom_factor': line.uomFactor,
             'discount_amount': 0,
             'tax_rate': line.taxRate,
             'line_subtotal': line.lineSubtotal,
@@ -663,7 +735,8 @@ class PurchasesRepository {
     List<PurchaseLineInput> items,
   ) async {
     for (final line in items) {
-      final update = <String, dynamic>{'cost': line.unitCost};
+      // `products.cost` es por unidad, aunque se haya comprado por caja.
+      final update = <String, dynamic>{'cost': line.unitCostPerBase};
       // Solo actualizamos el precio de venta si se especificó uno (> 0),
       // para no borrar el precio existente del producto.
       if (line.salePrice > 0) {
@@ -739,3 +812,5 @@ int _toInt(dynamic value) {
   if (value is double) return value.toInt();
   return int.tryParse(value.toString()) ?? 0;
 }
+
+double _round3(double value) => (value * 1000).roundToDouble() / 1000;

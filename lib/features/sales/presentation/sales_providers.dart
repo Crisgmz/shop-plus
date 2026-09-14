@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/web/kv_store.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../settings/presentation/settings_providers.dart';
+import '../../../shared/packaging/product_packaging.dart';
 import '../data/sales_repository.dart';
 
 final salesSearchProvider = StateProvider<String>((ref) => '');
@@ -137,6 +138,9 @@ String _encodeSaleDraft(SaleDraft d) => jsonEncode({
             'discountPct': it.discountPct,
             'imeis': it.imeis,
             'priceTier': it.priceTier,
+            // Presentación de la línea. Sin esto, "2 Cajas" volvería como 2
+            // unidades al recargar la página y se cobraría de menos.
+            'uom': it.uom.dbValue,
           },
       ],
     });
@@ -159,6 +163,7 @@ SaleDraft? _decodeSaleDraft(String? raw) {
                     .toList(growable: false) ??
                 const <String>[],
             priceTier: e['priceTier']?.toString() ?? 'retail',
+            uom: PackagingUom.fromDb(e['uom']?.toString()),
           ),
     ];
     return SaleDraft(
@@ -199,6 +204,16 @@ Map<String, dynamic> _salesProductToJson(SalesProduct p) => {
       'price_tier_10': p.priceTier10,
       'image_url': p.imageUrl,
       'imeis': p.imeis,
+      // Todo lo que cambia la plata o el inventario de una línea. Sin estas
+      // banderas un borrador restaurado cobraba ITBIS a un producto exento o
+      // encima de un precio que ya lo incluía; sin el empaque, una caja
+      // volvía como una unidad.
+      'is_service': p.isService,
+      'is_tax_exempt': p.isTaxExempt,
+      'allow_negative_stock': p.allowNegativeStock,
+      'price_includes_tax': p.priceIncludesTax,
+      'track_inventory': p.trackInventory,
+      ...p.packaging.toMap(),
     };
 
 SalesProduct _salesProductFromJson(Map<String, dynamic> m) {

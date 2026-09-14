@@ -1,3 +1,4 @@
+import '../../../shared/packaging/product_packaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -562,6 +563,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                       onQuantityChanged: (value) => _setQty(i, value),
                       onDiscountChanged: (value) => _setDiscountPct(i, value),
                       onPriceTierChanged: (tier) => _setLinePriceTier(i, tier),
+                      onUomChanged: (uom) => _setLineUom(i, uom),
                     ),
                   ),
           ),
@@ -819,14 +821,30 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       _pickImeisAndAdd(product);
       return;
     }
-    final index = _cart.indexWhere((item) => item.product.id == product.id);
+    // Un producto con presentación entra por presentación (1 Caja): es como
+    // se vende normalmente. Si no alcanza el inventario para una completa,
+    // entra suelto. Suelto también se elige desde la línea.
+    final packaging = product.packaging;
+    var uom = packaging.hasPacks ? PackagingUom.pack : PackagingUom.unit;
     // `tracksStock` excluye servicios y productos con stock negativo
     // permitido: el RPC no los valida contra inventario y el POS tampoco debe
     // hacerlo, o un servicio (stock 0) sería imposible de vender.
-    if (_stockEnforced &&
-        product.tracksStock &&
-        index != -1 &&
-        _cart[index].quantity + 1 > product.stock) {
+    final checksStock = _stockEnforced && product.tracksStock;
+    if (uom == PackagingUom.pack &&
+        checksStock &&
+        _cartBaseFor(product.id) + packaging.factorFor(uom) > product.stock) {
+      uom = PackagingUom.unit;
+    }
+    final index = _cart.indexWhere(
+      (item) => item.product.id == product.id && item.uom == uom,
+    );
+    // Una línea suelta nueva arranca en la venta mínima del producto.
+    final minUnits = packaging.minUnitQty ?? 0;
+    final startQty =
+        uom == PackagingUom.unit && minUnits > 1 ? minUnits : 1.0;
+    final addedBase =
+        (index == -1 ? startQty : 1) * packaging.factorFor(uom);
+    if (checksStock && _cartBaseFor(product.id) + addedBase > product.stock) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Sin stock suficiente')));
@@ -839,21 +857,65 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         _cart.add(
           SaleCartItem(
             product: product,
-            quantity: 1,
+            quantity: startQty,
             unitPrice: price,
             priceTier: tier,
+            uom: uom,
           ),
         );
       } else {
         final current = _cart[index];
-        _cart[index] = SaleCartItem(
-          product: current.product,
-          quantity: current.quantity + 1,
-          unitPrice: current.unitPrice,
-          discountPct: current.discountPct,
-          imeis: current.imeis,
-          priceTier: current.priceTier,
+        _cart[index] = current.copyWith(quantity: current.quantity + 1);
+      }
+    });
+    _persistDraft();
+  }
+
+  /// Unidades base de [productId] que ya hay en el carrito, sumando todas sus
+  /// presentaciones (1 caja de 12 + 3 sueltas = 15). El inventario se valida
+  /// contra este total, no línea por línea.
+  double _cartBaseFor(String productId, {int? exceptIndex}) {
+    var total = 0.0;
+    for (var i = 0; i < _cart.length; i++) {
+      if (i == exceptIndex) continue;
+      final it = _cart[i];
+      if (it.product.id == productId) total += it.baseQuantity;
+    }
+    return total;
+  }
+
+  /// Cambia la presentación de una línea (Caja ↔ Unidad). Conserva el precio
+  /// unitario —la caja vale unitario × unidades— y reinicia la cantidad: 1
+  /// presentación, o la venta mínima si pasa a suelto. Si ya hay una línea
+  /// del producto en esa presentación, se suma a ella.
+  void _setLineUom(int index, PackagingUom next) {
+    final item = _cart[index];
+    if (item.uom == next) return;
+    final minUnits = item.product.packaging.minUnitQty ?? 0;
+    final startQty =
+        next == PackagingUom.unit && minUnits > 1 ? minUnits : 1.0;
+    final candidate = item.copyWith(uom: next, quantity: startQty);
+    if (_stockEnforced &&
+        item.product.tracksStock &&
+        _cartBaseFor(item.product.id, exceptIndex: index) +
+                candidate.baseQuantity >
+            item.product.stock) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Sin stock suficiente')));
+      return;
+    }
+    final target = _cart.indexWhere(
+      (it) => it.product.id == item.product.id && it.uom == next,
+    );
+    setState(() {
+      if (target == -1) {
+        _cart[index] = candidate;
+      } else {
+        _cart[target] = _cart[target].copyWith(
+          quantity: _cart[target].quantity + startQty,
         );
+        _cart.removeAt(index);
       }
     });
     _persistDraft();
@@ -952,13 +1014,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       } else {
         final cur = _cart[index];
         final merged = [...cur.imeis, ...imeis];
-        _cart[index] = SaleCartItem(
-          product: cur.product,
+        _cart[index] = cur.copyWith(
           quantity: merged.length.toDouble(),
-          unitPrice: cur.unitPrice,
-          discountPct: cur.discountPct,
           imeis: merged,
-          priceTier: cur.priceTier,
         );
       }
     });
@@ -973,24 +1031,23 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       return;
     }
     final item = _cart[index];
+    final next = item.copyWith(quantity: value);
     if (_stockEnforced &&
         item.product.tracksStock &&
-        value > item.product.stock) {
+        _cartBaseFor(item.product.id, exceptIndex: index) + next.baseQuantity >
+            item.product.stock) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Sin stock suficiente')));
       return;
     }
-    setState(
-      () => _cart[index] = SaleCartItem(
-        product: item.product,
-        quantity: value,
-        unitPrice: item.unitPrice,
-        discountPct: item.discountPct,
-        imeis: item.imeis,
-        priceTier: item.priceTier,
-      ),
-    );
+    if (!next.respectsMinimum) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(item.product.packaging.minimumMessage())),
+      );
+      return;
+    }
+    setState(() => _cart[index] = next);
     _persistDraft();
   }
 
@@ -1000,7 +1057,26 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   void _setUnitPrice(int index, double value) {
     if (value < 0) return;
     final item = _cart[index];
-    if (_belowCostEnforced && value < item.product.cost) {
+    // En una línea por presentación el campo muestra el precio de la caja. El
+    // precio que manda es el unitario: si el de la caja no se reparte exacto
+    // entre sus unidades, se ajusta al centavo por unidad y se avisa.
+    final unitValue = item.isPresentation
+        ? ProductPackaging.unitPriceFromPresentation(value, item.uomFactor)
+        : value;
+    if (item.isPresentation) {
+      final adjusted = (unitValue * item.uomFactor * 100).roundToDouble() / 100;
+      if ((adjusted - value).abs() >= 0.005) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Precio por ${item.presentationLabel.toLowerCase()} ajustado a '
+              '${money(adjusted)} (${money(unitValue)} por unidad).',
+            ),
+          ),
+        );
+      }
+    }
+    if (_belowCostEnforced && unitValue < item.product.cost) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -1009,16 +1085,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         ),
       );
     }
-    setState(
-      () => _cart[index] = SaleCartItem(
-        product: item.product,
-        quantity: item.quantity,
-        unitPrice: value,
-        discountPct: item.discountPct,
-        imeis: item.imeis,
-        priceTier: item.priceTier,
-      ),
-    );
+    setState(() => _cart[index] = item.copyWith(unitPrice: unitValue));
     _persistDraft();
   }
 
@@ -1037,12 +1104,8 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       );
     }
     setState(
-      () => _cart[index] = SaleCartItem(
-        product: item.product,
-        quantity: item.quantity,
+      () => _cart[index] = item.copyWith(
         unitPrice: newPrice,
-        discountPct: item.discountPct,
-        imeis: item.imeis,
         priceTier: tierKey,
       ),
     );
@@ -1054,14 +1117,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     final clamped = value.clamp(0, 100).toDouble();
     final item = _cart[index];
     setState(
-      () => _cart[index] = SaleCartItem(
-        product: item.product,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        discountPct: clamped,
-        imeis: item.imeis,
-        priceTier: item.priceTier,
-      ),
+      () => _cart[index] = item.copyWith(discountPct: clamped),
     );
     _persistDraft();
   }
@@ -1079,12 +1135,8 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           'retail';
       for (var i = 0; i < _cart.length; i++) {
         final item = _cart[i];
-        _cart[i] = SaleCartItem(
-          product: item.product,
-          quantity: item.quantity,
+        _cart[i] = item.copyWith(
           unitPrice: item.product.priceFor(tier),
-          discountPct: item.discountPct,
-          imeis: item.imeis,
           priceTier: tier,
         );
       }
@@ -2504,6 +2556,7 @@ class _CartLineTile extends ConsumerStatefulWidget {
     required this.onQuantityChanged,
     required this.onDiscountChanged,
     required this.onPriceTierChanged,
+    required this.onUomChanged,
   });
 
   final SaleCartItem item;
@@ -2517,6 +2570,7 @@ class _CartLineTile extends ConsumerStatefulWidget {
   final ValueChanged<double> onQuantityChanged;
   final ValueChanged<double> onDiscountChanged;
   final ValueChanged<String> onPriceTierChanged;
+  final ValueChanged<PackagingUom> onUomChanged;
 
   @override
   ConsumerState<_CartLineTile> createState() => _CartLineTileState();
@@ -2530,7 +2584,10 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
   @override
   void initState() {
     super.initState();
-    _priceCtrl = TextEditingController(text: _fmtNum(widget.item.unitPrice));
+    // Precio de la presentación de la línea (la caja completa, o la unidad).
+    _priceCtrl = TextEditingController(
+      text: _fmtNum(widget.item.presentationPrice),
+    );
     _qtyCtrl = TextEditingController(text: _fmtNum(widget.item.quantity));
     _discountCtrl = TextEditingController(
       text: _fmtNum(widget.item.discountPct),
@@ -2542,10 +2599,12 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
     super.didUpdateWidget(oldWidget);
     // Sincronizamos los controllers cuando el padre cambia el item desde
     // afuera (ej. tier-change re-pricia, suma de cantidad por re-add, etc.).
-    if (oldWidget.item.unitPrice != widget.item.unitPrice) {
-      _priceCtrl.text = _fmtNum(widget.item.unitPrice);
+    final uomChanged = oldWidget.item.uom != widget.item.uom;
+    if (uomChanged ||
+        oldWidget.item.presentationPrice != widget.item.presentationPrice) {
+      _priceCtrl.text = _fmtNum(widget.item.presentationPrice);
     }
-    if (oldWidget.item.quantity != widget.item.quantity) {
+    if (uomChanged || oldWidget.item.quantity != widget.item.quantity) {
       _qtyCtrl.text = _fmtNum(widget.item.quantity);
     }
     if (oldWidget.item.discountPct != widget.item.discountPct) {
@@ -2611,7 +2670,7 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
                       ),
                     ),
                     Text(
-                      'Inventario: ${_fmtNum(item.product.stock)}'
+                      'Inventario: ${item.product.packaging.hasPacks ? item.product.packaging.describeStock(item.product.stock) : _fmtNum(item.product.stock)}'
                       '${item.product.sku != null ? '  ·  SKU: ${item.product.sku}' : ''}',
                       style: const TextStyle(
                         fontSize: 10,
@@ -2667,6 +2726,10 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
             const SizedBox(height: 8),
             _buildPriceTypeChip(priceOptions, currentPriceLabel),
           ],
+          if (item.product.packaging.hasPacks) ...[
+            const SizedBox(height: 8),
+            _buildPresentationChip(item),
+          ],
           const SizedBox(height: 8),
           // ── Fila inferior: 4 campos (Precio, Cant, Desc, Total) ──
           Row(
@@ -2674,11 +2737,13 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
             children: [
               Expanded(
                 child: _CartField(
-                  label: 'Precio',
+                  label: item.isPresentation
+                      ? 'Precio ${item.presentationLabel.toLowerCase()}'
+                      : 'Precio',
                   controller: _priceCtrl,
                   suffix: r'$',
                   onSubmit: (raw) {
-                    final v = double.tryParse(raw) ?? item.unitPrice;
+                    final v = double.tryParse(raw) ?? item.presentationPrice;
                     widget.onPriceChanged(v);
                   },
                 ),
@@ -2686,7 +2751,9 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
               const SizedBox(width: 6),
               Expanded(
                 child: _CartField(
-                  label: 'Cantidad',
+                  label: item.isPresentation
+                      ? pluralLabel(item.presentationLabel, 2)
+                      : 'Cantidad',
                   controller: _qtyCtrl,
                   onSubmit: (raw) {
                     final v = double.tryParse(raw) ?? item.quantity;
@@ -2743,6 +2810,93 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  /// Chip-selector de la presentación de la línea: la del producto ("Caja ·
+  /// 12 u") o suelta por unidad. Mismo patrón que el chip de tipo de precio.
+  Widget _buildPresentationChip(SaleCartItem item) {
+    final packaging = item.product.packaging;
+    String describe(PackagingUom uom) {
+      final label = packaging.labelFor(uom);
+      if (uom == PackagingUom.unit) return label;
+      final units = packaging.factorFor(uom);
+      final n = units == units.roundToDouble()
+          ? units.toInt().toString()
+          : units.toString();
+      return '$label · $n u';
+    }
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: PopupMenuButton<PackagingUom>(
+        tooltip: 'Presentación',
+        position: PopupMenuPosition.under,
+        constraints: const BoxConstraints(minWidth: 220),
+        itemBuilder: (ctx) => [
+          for (final uom in packaging.sellableUoms)
+            PopupMenuItem<PackagingUom>(
+              value: uom,
+              height: 40,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    describe(uom),
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: uom == item.uom
+                          ? FontWeight.w700
+                          : FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    money(item.unitPrice * packaging.factorFor(uom)),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF2563EB),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+        onSelected: widget.onUomChanged,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFFE2E8F0)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.inventory_2_outlined,
+                size: 14,
+                color: Color(0xFF64748B),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Presentación: ${describe(item.uom)}',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF334155),
+                ),
+              ),
+              const Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 16,
+                color: Color(0xFF64748B),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -14,8 +14,10 @@ import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/print_receipt_dialog.dart';
 import '../../cash_register/presentation/cash_register_providers.dart';
+import '../../cobros/presentation/cobros_providers.dart';
 import '../../inventory/data/file_io_helper.dart';
 import '../data/quotations_excel_service.dart';
+import '../../settings/presentation/app_settings_providers.dart';
 import '../data/quotations_models.dart';
 import 'convert_payment_dialog.dart';
 import 'quotations_providers.dart';
@@ -726,20 +728,33 @@ Future<void> _convertQuoteToSale(
   // El messenger se toma ANTES del diálogo: después del await el context de
   // la fila/tarjeta puede haber salido del árbol (lista virtualizada).
   final messenger = ScaffoldMessenger.of(context);
-  final method = await showConvertPaymentDialog(context, quoteCode: quote.code);
-  if (method == null) return;
+  final settings = ref.read(appSettingsProvider).valueOrNull;
+  final choice = await showConvertPaymentDialog(
+    context,
+    quoteCode: quote.code,
+    total: quote.total,
+    // A crédito exige cliente del catálogo; el servidor lo vuelve a validar.
+    hasClient: quote.clientId != null,
+    creditAllowed: settings?.creditAllowSales ?? true,
+    defaultCreditDays: settings?.creditDefaultDays ?? 30,
+  );
+  if (choice == null) return;
   try {
     final result = await ref
         .read(quotationsRepositoryProvider)
         .convertToSale(
           quote.id,
-          paymentMethod: method,
+          paymentMethod: choice.paymentMethod,
           cashSessionId: ref.read(activeCashSessionIdProvider),
+          asCredit: choice.asCredit,
+          creditDueDays: choice.creditDueDays,
         );
     ref.invalidate(quotationsFoundationProvider);
+    // Una venta a crédito aparece en Cuentas por cobrar.
+    if (choice.asCredit) ref.invalidate(cobrosReceivablesProvider);
     messenger.showSnackBar(
       SnackBar(
-        content: Text('Cotización convertida a venta ${result.saleNumber}.'),
+        content: Text(quoteConversionMessage(result.saleNumber, choice)),
       ),
     );
   } catch (e) {

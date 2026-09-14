@@ -10,6 +10,7 @@ class QuoteListItem {
     required this.itemsCount,
     this.summary = '',
     this.saleId,
+    this.clientId,
   });
 
   final String id;
@@ -22,6 +23,10 @@ class QuoteListItem {
   final int itemsCount;
   final String summary;
   final String? saleId;
+
+  /// Cliente del catálogo. `null` con nombre escrito a mano: esa cotización
+  /// no puede convertirse a crédito, porque la deuda necesita una cuenta.
+  final String? clientId;
 
   bool get isExpired =>
       !status.isTerminal && validUntil.isBefore(DateTime.now());
@@ -463,6 +468,8 @@ abstract class QuotationsRepositoryContract {
     String quoteId, {
     required String paymentMethod,
     String? cashSessionId,
+    bool asCredit = false,
+    int? creditDueDays,
   });
   Future<void> deleteQuote(String quoteId);
 }
