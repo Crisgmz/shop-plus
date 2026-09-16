@@ -37,6 +37,10 @@ dependencies:
   pdf: ^3.12.0
   printing: ^5.14.3
   excel: ^4.0.6
+  # Ya venían dentro de `excel`. Se declaran para reparar los .xlsx que
+  # `excel` rechaza (formatos de número con id < 164, ver xlsx_repair.dart).
+  archive: ^3.6.1
+  xml: ^6.6.1
   file_picker: ^8.1.7
   share_plus: ^10.1.4
   path_provider: ^2.1.5

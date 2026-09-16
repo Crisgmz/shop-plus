@@ -15,6 +15,7 @@ import '../../../shared/widgets/ui_custom.dart';
 import '../../settings/presentation/app_settings_providers.dart';
 import '../data/file_io_helper.dart';
 import '../data/inventory_excel_service.dart';
+import '../data/inventory_import_review.dart';
 import '../data/inventory_repository.dart';
 import 'inventory_providers.dart';
 import 'package:pdf/pdf.dart';
@@ -2778,18 +2779,39 @@ class _ImportInventoryDialogState
         return;
       }
 
-      if (!mounted) return;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (_) => _ImportPreviewDialog(parseResult: parsed),
+      // Contra el catálogo actual: qué filas desharían una caja/paquete o
+      // reactivarían un producto desactivado. Si no se puede leer, se importa
+      // como siempre, sin avisos.
+      var catalog = const <InventoryProduct>[];
+      try {
+        catalog = await ref.read(inventoryProductsProvider.future);
+      } catch (_) {}
+      final warnings = reviewImportAgainstCatalog(
+        inputs: parsed.inputs,
+        catalog: catalog,
       );
-      if (confirmed != true || !mounted) return;
-      if (parsed.inputs.isEmpty) return;
+
+      if (!mounted) return;
+      final choice = await showDialog<_ImportChoice>(
+        context: context,
+        builder: (_) => _ImportPreviewDialog(
+          parseResult: parsed,
+          warnings: warnings,
+        ),
+      );
+      if (choice == null || !mounted) return;
+      final flagged = {for (final w in warnings) w.sku};
+      final inputs = choice == _ImportChoice.skipFlagged
+          ? parsed.inputs
+              .where((i) => !flagged.contains(i.sku?.trim() ?? ''))
+              .toList(growable: false)
+          : parsed.inputs;
+      if (inputs.isEmpty) return;
 
       final repository = ref.read(inventoryRepositoryProvider);
       final InventoryBulkUpsertResult result;
       try {
-        result = await repository.bulkUpsertProducts(parsed.inputs);
+        result = await repository.bulkUpsertProducts(inputs);
       } catch (error) {
         _snack('Error durante la importación: $error');
         return;
@@ -2957,15 +2979,28 @@ class _ImportInventoryDialogState
   }
 }
 
+enum _ImportChoice { all, skipFlagged }
+
 class _ImportPreviewDialog extends StatelessWidget {
-  const _ImportPreviewDialog({required this.parseResult});
+  const _ImportPreviewDialog({
+    required this.parseResult,
+    this.warnings = const [],
+  });
 
   final InventoryImportParseResult parseResult;
+
+  /// Productos existentes que el archivo cambiaría de forma riesgosa.
+  final List<InventoryImportWarning> warnings;
 
   @override
   Widget build(BuildContext context) {
     final hasValid = parseResult.inputs.isNotEmpty;
     final hasErrors = parseResult.errors.isNotEmpty;
+    final hasWarnings = warnings.isNotEmpty;
+    final flagged = {for (final w in warnings) w.sku};
+    final unflaggedCount = parseResult.inputs
+        .where((i) => !flagged.contains(i.sku?.trim() ?? ''))
+        .length;
 
     return AlertDialog(
       title: const Text('Vista previa de importación'),
@@ -3013,6 +3048,69 @@ class _ImportPreviewDialog extends StatelessWidget {
               ),
               const SizedBox(height: AppTokens.s12),
             ],
+            if (hasWarnings) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTokens.s12),
+                decoration: BoxDecoration(
+                  color: AppTokens.warning.withValues(alpha: 0.12),
+                  border: Border.all(color: AppTokens.warning),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Revisa ${warnings.length} '
+                      '${warnings.length == 1 ? 'producto' : 'productos'} '
+                      'antes de importar',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: AppTokens.s4),
+                    const Text(
+                      'El archivo cambiaría productos vendidos por caja y '
+                      'paquete, o reactivaría productos desactivados.',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                    const SizedBox(height: AppTokens.s8),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 220),
+                      child: SingleChildScrollView(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (final w in warnings)
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  bottom: AppTokens.s8,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '${w.sku} · ${w.name}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    for (final m in w.messages)
+                                      Text(
+                                        m,
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTokens.s12),
+            ],
             if (hasValid)
               const Text(
                 'Las filas válidas se importarán. Las filas con error se ignorarán.',
@@ -3028,17 +3126,32 @@ class _ImportPreviewDialog extends StatelessWidget {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
+          onPressed: () => Navigator.of(context).pop(),
           child: const Text('Cancelar'),
         ),
-        FilledButton(
-          onPressed: hasValid
-              ? () => Navigator.of(context).pop(true)
-              : null,
-          child: Text(
-            hasValid ? 'Importar ${parseResult.inputs.length}' : 'Importar',
+        if (hasWarnings) ...[
+          // Lo seguro va primero: importar el resto sin tocar los marcados.
+          TextButton(
+            onPressed: hasValid
+                ? () => Navigator.of(context).pop(_ImportChoice.all)
+                : null,
+            child: Text('Importar todo (${parseResult.inputs.length})'),
           ),
-        ),
+          FilledButton(
+            onPressed: unflaggedCount > 0
+                ? () => Navigator.of(context).pop(_ImportChoice.skipFlagged)
+                : null,
+            child: Text('Importar sin los marcados ($unflaggedCount)'),
+          ),
+        ] else
+          FilledButton(
+            onPressed: hasValid
+                ? () => Navigator.of(context).pop(_ImportChoice.all)
+                : null,
+            child: Text(
+              hasValid ? 'Importar ${parseResult.inputs.length}' : 'Importar',
+            ),
+          ),
       ],
     );
   }

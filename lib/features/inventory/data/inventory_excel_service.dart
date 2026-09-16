@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
 
+import '../../../shared/excel/xlsx_repair.dart';
 import 'inventory_repository.dart';
 
 const _productSheet = 'Productos';
@@ -179,7 +180,7 @@ class InventoryExcelService {
     required List<InventoryCategory> categories,
     List<dynamic> priceTypes = const [],
   }) {
-    final excel = Excel.decodeBytes(bytes);
+    final excel = Excel.decodeBytes(repairXlsxNumFormats(bytes));
     final sheet = excel.tables[_productSheet];
     if (sheet == null) {
       throw Exception(

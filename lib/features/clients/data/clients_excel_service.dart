@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
 
+import '../../../shared/excel/xlsx_repair.dart';
 import 'clients_repository.dart';
 
 const _clientsSheet = 'Clientes';
@@ -113,7 +114,7 @@ class ClientsExcelService {
     required Uint8List bytes,
     required List<ClientEntity> existingClients,
   }) {
-    final excel = Excel.decodeBytes(bytes);
+    final excel = Excel.decodeBytes(repairXlsxNumFormats(bytes));
     final sheet = excel.tables[_clientsSheet];
     if (sheet == null) {
       throw Exception(
