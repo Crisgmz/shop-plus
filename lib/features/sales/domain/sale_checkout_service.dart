@@ -9,10 +9,11 @@ class SaleCheckoutService {
     }
 
     final receiptType = normalizeReceiptType(input.receiptType);
-    // Una venta sin comprobante es una nota de venta no fiscal: no factura
-    // ITBIS. Espeja `v_line_tax_rate` del RPC `checkout_sale_transactional`
-    // (migración 64), que es quien fija los totales que se guardan.
-    final chargesTax = receiptType != 'none';
+    // Sin ITBIS: una venta sin comprobante (nota de venta no fiscal) o un
+    // cliente con "Cobrar ITBIS" apagado / exento. Espeja la tasa por línea de
+    // `checkout_sale_transactional` (migraciones 83 y 91), que es quien fija
+    // los totales que se guardan.
+    final chargesTax = receiptType != 'none' && !input.clientSkipsTax;
     // Clave = producto + presentación: una caja y unas unidades sueltas del
     // mismo producto son líneas distintas en la factura ("1 Caja" y "5
     // Unidades"). El inventario, en cambio, se valida sumando por producto.
@@ -75,6 +76,7 @@ class SaleCheckoutService {
           imeis: item.imeis,
           uom: item.uom,
           uomFactor: item.uomFactor,
+          uomPrice: item.uomPrice,
           unitName: item.unitName,
         );
       } else {
@@ -108,7 +110,14 @@ class SaleCheckoutService {
           // centavo redondeaba hacia el otro lado y dejaba la pantalla un
           // centavo por debajo del RPC — suficiente para que un pago dividido
           // rebote con "los pagos no cubren el total".
-          final grossC = grossCents(line.quantity, line.unitPrice);
+          // Espeja el RPC (migración 92): con precio de presentación el bruto
+          // sale de él; si no, de unitario × unidades base. Si la pantalla
+          // redondeara distinto, el pago dividido rebotaría por centavos.
+          final presentationPrice = line.uomPrice;
+          final grossC = (presentationPrice != null && line.uomFactor > 0)
+              ? grossCents(
+                  round3(line.quantity / line.uomFactor), presentationPrice)
+              : grossCents(line.quantity, line.unitPrice);
           final discountC = (grossC * (line.discountPct / 100))
               .roundToDouble()
               .clamp(0, grossC)
@@ -141,6 +150,7 @@ class SaleCheckoutService {
             imeis: line.imeis,
             uom: line.uom,
             uomFactor: line.uomFactor,
+            uomPrice: line.uomPrice,
             unitName: line.unitName,
           );
         })
@@ -215,6 +225,7 @@ class SaleCheckoutServiceInput {
     this.disallowNoStock = false,
     this.customerRequiredForSale = false,
     this.creditAllowSales = true,
+    this.clientSkipsTax = false,
   });
 
   final List<SaleCheckoutSourceItem> items;
@@ -232,6 +243,11 @@ class SaleCheckoutServiceInput {
 
   /// app_settings.credit_allow_sales
   final bool creditAllowSales;
+
+  /// El cliente tiene "Cobrar ITBIS" apagado o está exento (ver
+  /// `SalesClient.skipsTax`). El RPC aplica la misma regla cuando se le pasa
+  /// `p_honor_client_tax` (migración 91).
+  final bool clientSkipsTax;
 }
 
 class SaleCheckoutSourceItem {
@@ -242,6 +258,7 @@ class SaleCheckoutSourceItem {
     this.imeis = const <String>[],
     this.uom = 'unit',
     this.uomFactor = 1,
+    this.uomPrice,
     this.unitName,
   });
 
@@ -256,6 +273,10 @@ class SaleCheckoutSourceItem {
 
   /// Unidades base de UNA presentación (1 caja = 12). 1 para 'unit'.
   final double uomFactor;
+
+  /// Precio de UNA presentación. Cuando está, la línea se cobra desde él
+  /// (migración 92) en vez de unitario × unidades base.
+  final double? uomPrice;
 
   /// Nombre de la presentación para la factura ("Caja"). Null en 'unit'.
   final String? unitName;
@@ -354,6 +375,15 @@ class NormalizedSaleCheckout {
             // el pago dividido por centavos.
             'discount_amount': item.discountAmount,
             'tax_rate': item.taxRate,
+            // Presentación (migración 92): el RPC cobra la línea desde
+            // `uom_price` y guarda cómo se vendió. Una línea suelta no los
+            // manda, así que sigue el camino de siempre.
+            if (item.uom != 'unit') ...<String, dynamic>{
+              'uom': item.uom,
+              'uom_factor': item.uomFactor,
+              if (item.uomPrice != null) 'uom_price': item.uomPrice,
+              if (item.unitName != null) 'unit_name': item.unitName,
+            },
             if (item.imeis.isNotEmpty) 'imeis': item.imeis,
           },
         )
@@ -396,6 +426,7 @@ class NormalizedSaleCheckoutItem {
     this.imeis = const <String>[],
     this.uom = 'unit',
     this.uomFactor = 1,
+    this.uomPrice,
     this.unitName,
   });
 
@@ -411,6 +442,7 @@ class NormalizedSaleCheckoutItem {
   /// Presentación de la línea (ver [SaleCheckoutSourceItem.uom]).
   final String uom;
   final double uomFactor;
+  final double? uomPrice;
   final String? unitName;
 
   /// Descuento de la línea: porcentaje aplicado y su monto en pesos.
@@ -445,6 +477,7 @@ class _MutableSaleLine {
     required this.tracksStock,
     required this.uom,
     required this.uomFactor,
+    this.uomPrice,
     this.unitName,
     List<String>? imeis,
   }) : imeis = [...?imeis];
@@ -461,6 +494,7 @@ class _MutableSaleLine {
   final bool tracksStock;
   final String uom;
   final double uomFactor;
+  final double? uomPrice;
   final String? unitName;
   final List<String> imeis;
 }

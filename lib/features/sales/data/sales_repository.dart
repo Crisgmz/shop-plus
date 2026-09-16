@@ -100,6 +100,15 @@ class SalesProduct {
   /// ni los que permiten stock negativo.
   bool get tracksStock => !isService && trackInventory && !allowNegativeStock;
 
+  /// El producto TIENE existencia que mostrar y que agotarse.
+  ///
+  /// Distinto de [tracksStock]: aquel decide si se BLOQUEA la venta sin stock,
+  /// y por eso excluye los que admiten negativo. Un producto que admite stock
+  /// negativo sí tiene existencia real y su cantidad vale mostrarla; un
+  /// servicio no tiene ninguna. La 68 de la otra app aplica esta misma regla
+  /// en la base (`is_service` / `track_inventory`).
+  bool get hasInventory => !isService && trackInventory;
+
   /// Si el producto maneja IMEI (tiene al menos uno registrado).
   bool get hasImeis => imeis.isNotEmpty;
 
@@ -208,10 +217,20 @@ class SalesClient {
     this.priceTier = 'retail',
     this.documentNumber,
     this.legalName,
+    this.taxExempt = false,
+    this.chargeItbis = true,
   });
 
   final String id;
   final String fullName;
+
+  /// "Exento de impuestos" y "Cobrar ITBIS" de la ficha del cliente.
+  final bool taxExempt;
+  final bool chargeItbis;
+
+  /// A este cliente no se le factura ITBIS. Misma regla que el RPC de cobro
+  /// con `p_honor_client_tax` (migración 91).
+  bool get skipsTax => taxExempt || !chargeItbis;
 
   /// 'retail' | 'tier_1' | 'tier_2' | 'tier_3'.
   final String priceTier;
@@ -242,6 +261,9 @@ class SalesClient {
       priceTier: (map['price_tier'] ?? 'retail').toString(),
       documentNumber: nz(map['document_number']),
       legalName: nz(map['legal_name']),
+      taxExempt: map['tax_exempt'] == true,
+      // Ausente o null ⇒ cobra, igual que el default de la columna.
+      chargeItbis: map['charge_itbis'] != false,
     );
   }
 }
@@ -255,6 +277,7 @@ class SaleCartItem {
     this.imeis = const <String>[],
     this.priceTier = 'retail',
     this.uom = PackagingUom.unit,
+    this.presentationPriceOverride,
   }) : unitPrice = unitPrice ?? product.price;
 
   final SalesProduct product;
@@ -267,6 +290,10 @@ class SaleCartItem {
   /// Presentación de la línea: `unit` (suelto) o `pack` (la presentación del
   /// producto: Caja, Paquete…). Con `unit` todo funciona como siempre.
   final PackagingUom uom;
+
+  /// Precio de la presentación escrito a mano por el cajero. Null = el que
+  /// tiene configurado el producto.
+  final double? presentationPriceOverride;
 
   /// Precio aplicado a esta línea. Por defecto = `product.price`; cuando hay
   /// un cliente con tier asignado, el POS lo setea con `priceFor(tier)`.
@@ -310,9 +337,14 @@ class SaleCartItem {
   /// Nombre de la presentación de la línea: "Caja", "Unidad"…
   String get presentationLabel => product.packaging.labelFor(uom);
 
-  /// Precio de UNA presentación. [unitPrice] es siempre por unidad base, así
-  /// que la caja vale unitario × unidades y cuadra al centavo con el RPC.
-  double get presentationPrice => round2(unitPrice * uomFactor);
+  /// Precio de UNA presentación: el propio de la caja si el producto lo tiene
+  /// configurado (o el que escribió el cajero) y, si no, el unitario × unidades.
+  ///
+  /// Es el precio que se cobra: el RPC calcula la línea desde él (migración
+  /// 92), así que una caja de 20 paquetes a 2,639.83 se cobra exacta y no
+  /// 2,639.80, que es lo que daría repartirla al centavo por paquete.
+  double get presentationPrice =>
+      presentationPriceOverride ?? product.packaging.priceFor(uom, unitPrice);
 
   /// Si la línea respeta la venta mínima del producto. Solo aplica suelto:
   /// una presentación completa nunca se bloquea.
@@ -329,6 +361,8 @@ class SaleCartItem {
     List<String>? imeis,
     String? priceTier,
     PackagingUom? uom,
+    double? presentationPriceOverride,
+    bool clearPresentationPrice = false,
   }) {
     return SaleCartItem(
       product: product,
@@ -338,6 +372,11 @@ class SaleCartItem {
       imeis: imeis ?? this.imeis,
       priceTier: priceTier ?? this.priceTier,
       uom: uom ?? this.uom,
+      // Cambiar de presentación o de tipo de precio descarta el precio escrito
+      // a mano: era el de la presentación anterior.
+      presentationPriceOverride: clearPresentationPrice
+          ? null
+          : (presentationPriceOverride ?? this.presentationPriceOverride),
     );
   }
 
@@ -347,7 +386,9 @@ class SaleCartItem {
   // el monto que se manda como pagos: si difieren del RPC aunque sea un
   // centavo, el pago dividido rebota o la caja queda descuadrada.
 
-  double get _lineGrossCents => grossCents(baseQuantity, unitPrice);
+  // Bruto desde el precio de la presentación × cuántas se llevan, igual que
+  // el RPC. En una línea suelta es idéntico a unitario × cantidad.
+  double get _lineGrossCents => grossCents(quantity, presentationPrice);
 
   double get _lineDiscountCents => (_lineGrossCents * (discountPct / 100))
       .roundToDouble()
@@ -414,6 +455,7 @@ class SaleCheckoutInput {
     this.creditDueDays,
     this.cashSessionId,
     this.holdSaleIdToComplete,
+    this.clientSkipsTax = false,
   });
 
   final List<SaleCartItem> items;
@@ -458,6 +500,10 @@ class SaleCheckoutInput {
   /// reservado y la reemplaza por esta venta real, todo en una transacción. Así
   /// la cuenta reabierta conserva su número original al cobrarse.
   final String? holdSaleIdToComplete;
+
+  /// El cliente no paga ITBIS ("Cobrar ITBIS" apagado o exento en su ficha).
+  /// Ver [SalesClient.skipsTax] y la migración 91.
+  final bool clientSkipsTax;
 }
 
 class SaleCheckoutResult {
@@ -475,6 +521,7 @@ class SaleCheckoutResult {
     this.cashSessionId,
     this.ncf,
     this.preparedPrintJob,
+    this.receiptError,
   });
 
   final String saleId;
@@ -494,6 +541,11 @@ class SaleCheckoutResult {
   final String? ncf;
 
   final PreparedPrintJobData? preparedPrintJob;
+
+  /// La venta quedó REGISTRADA, pero su recibo no se pudo armar. Null si salió
+  /// bien. Existe para que el POS nunca reporte como fallida una venta que ya
+  /// está cobrada: eso hacía que el cajero la cobrara dos veces.
+  final String? receiptError;
 }
 
 class SalesRepository {
@@ -576,7 +628,10 @@ class SalesRepository {
 
     final rows = await _client
         .from('clients')
-        .select('id, full_name, legal_name, document_number, price_tier')
+        .select(
+          'id, full_name, legal_name, document_number, price_tier, '
+          'tax_exempt, charge_itbis',
+        )
         .eq('branch_id', branchId)
         .eq('is_active', true)
         .order('full_name');
@@ -626,6 +681,7 @@ class SalesRepository {
                 imeis: item.imeis,
                 uom: item.uom.dbValue,
                 uomFactor: item.uomFactor,
+                uomPrice: item.isPresentation ? item.presentationPrice : null,
                 unitName: item.isPresentation ? item.presentationLabel : null,
               ),
             )
@@ -638,6 +694,7 @@ class SalesRepository {
         disallowNoStock: input.disallowNoStock,
         customerRequiredForSale: input.customerRequiredForSale,
         creditAllowSales: input.creditAllowSales,
+        clientSkipsTax: input.clientSkipsTax,
       ),
     );
 
@@ -651,6 +708,10 @@ class SalesRepository {
       'p_credit_due_days': input.creditDueDays,
       'p_cash_session_id': _nullIfEmpty(input.cashSessionId),
       'p_hold_sale_id': _nullIfEmpty(input.holdSaleIdToComplete),
+      // Solo para un cliente que no paga ITBIS (migración 91). Mandarlo siempre
+      // rompería TODAS las ventas si la app llega antes que la migración; así,
+      // en esa ventana solo falla este caso, con un mensaje claro.
+      if (input.clientSkipsTax) 'p_honor_client_tax': true,
     };
 
     // Mandamos p_payments cuando hay 2+ métodos (pago mixto) o cuando se pagó
@@ -667,10 +728,15 @@ class SalesRepository {
           input.payments.map((p) => p.toJson()).toList(growable: false);
     }
 
-    final rpcResult = await _client.rpc(
-      'checkout_sale_transactional',
-      params: params,
-    );
+    final dynamic rpcResult;
+    try {
+      rpcResult = await _client.rpc(
+        'checkout_sale_transactional',
+        params: params,
+      );
+    } on PostgrestException catch (error) {
+      throw _missingClientTaxMigration(error, input.clientSkipsTax) ?? error;
+    }
 
     final payload = Map<String, dynamic>.from(rpcResult as Map);
     final saleId = (payload['sale_id'] ?? '').toString();
@@ -685,8 +751,19 @@ class SalesRepository {
     final status = (payload['status'] ?? '').toString();
     // Tanto las ventas completadas como las que quedan a crédito deben generar
     // recibo — el cliente necesita comprobante del saldo aunque no haya pagado.
+    String? receiptError;
     if (status == 'completed' || status == 'credit') {
-      preparedPrintJob = await prepareCompletedSalePrintJob(saleId: saleId);
+      // Aquí la venta YA está registrada: la RPC hizo commit (dinero, stock y
+      // NCF). Si armar el recibo falla —una columna que falta, la red—, el
+      // error NO puede subir: el POS diría "No se pudo procesar la venta"
+      // sobre una venta cobrada y el cajero la cobraría otra vez. Se devuelve
+      // la venta sin recibo; se reimprime desde el historial.
+      try {
+        preparedPrintJob = await prepareCompletedSalePrintJob(saleId: saleId);
+      } catch (error) {
+        debugPrint('Venta $saleId registrada, pero el recibo falló: $error');
+        receiptError = error.toString();
+      }
     }
 
     return SaleCheckoutResult(
@@ -707,6 +784,7 @@ class SalesRepository {
       // extra). El checkout RPC no lo devuelve en su payload.
       ncf: _nullIfEmpty(preparedPrintJob?.document.ncf),
       preparedPrintJob: preparedPrintJob,
+      receiptError: receiptError,
     );
   }
 
@@ -753,6 +831,7 @@ class SalesRepository {
                 imeis: item.imeis,
                 uom: item.uom.dbValue,
                 uomFactor: item.uomFactor,
+                uomPrice: item.isPresentation ? item.presentationPrice : null,
                 unitName: item.isPresentation ? item.presentationLabel : null,
               ),
             )
@@ -763,19 +842,26 @@ class SalesRepository {
         notes: input.notes,
         disallowNoStock: input.disallowNoStock,
         customerRequiredForSale: input.customerRequiredForSale,
+        clientSkipsTax: input.clientSkipsTax,
       ),
     );
 
-    final rpcResult = await _client.rpc(
-      'hold_sale_transactional',
-      params: <String, dynamic>{
-        'p_items': normalized.toRpcItems(),
-        'p_receipt_type': normalized.receiptType,
-        'p_client_id': normalized.clientId,
-        'p_notes': normalized.notes,
-        'p_replace_hold_sale_id': _nullIfEmpty(input.replaceHoldSaleId),
-      },
-    );
+    final dynamic rpcResult;
+    try {
+      rpcResult = await _client.rpc(
+        'hold_sale_transactional',
+        params: <String, dynamic>{
+          'p_items': normalized.toRpcItems(),
+          'p_receipt_type': normalized.receiptType,
+          'p_client_id': normalized.clientId,
+          'p_notes': normalized.notes,
+          'p_replace_hold_sale_id': _nullIfEmpty(input.replaceHoldSaleId),
+          if (input.clientSkipsTax) 'p_honor_client_tax': true,
+        },
+      );
+    } on PostgrestException catch (error) {
+      throw _missingClientTaxMigration(error, input.clientSkipsTax) ?? error;
+    }
 
     final payload = Map<String, dynamic>.from(rpcResult as Map);
     final saleId = (payload['sale_id'] ?? '').toString();
@@ -1012,14 +1098,30 @@ class SalesRepository {
       }
     }
 
-    final itemRows = await _client
-        .from('sale_items')
-        .select(
-          'description, quantity, unit_price, line_subtotal, line_tax, line_total, '
-          'sku_snapshot, unit_name, imeis, uom, uom_factor',
-        )
-        .eq('sale_id', saleId)
-        .order('created_at');
+    // `uom_price` llega con la migración 92. Si la base todavía no la tiene,
+    // se relee sin esa columna en vez de fallar: el recibo deriva el precio de
+    // la caja del unitario (ver `_presentationUnitPrice`). Solo se atrapa ESE
+    // caso; cualquier otra columna que falte sigue subiendo como error.
+    const itemColumns =
+        'description, quantity, unit_price, line_subtotal, line_tax, line_total, '
+        'sku_snapshot, unit_name, imeis, uom, uom_factor';
+    PostgrestList itemRows;
+    try {
+      itemRows = await _client
+          .from('sale_items')
+          .select('$itemColumns, uom_price')
+          .eq('sale_id', saleId)
+          .order('created_at');
+    } on PostgrestException catch (error) {
+      final missingUomPrice =
+          error.code == '42703' && error.message.contains('uom_price');
+      if (!missingUomPrice) rethrow;
+      itemRows = await _client
+          .from('sale_items')
+          .select(itemColumns)
+          .eq('sale_id', saleId)
+          .order('created_at');
+    }
 
     final paymentRows = await _client
         .from('payments')
@@ -1364,6 +1466,7 @@ class HeldSaleInput {
     this.disallowNoStock = false,
     this.customerRequiredForSale = false,
     this.replaceHoldSaleId,
+    this.clientSkipsTax = false,
   });
 
   final List<SaleCartItem> items;
@@ -1378,6 +1481,9 @@ class HeldSaleInput {
   /// su stock reservado y la reemplaza. Así la cuenta conserva su número aunque
   /// se le sigan agregando productos. Null = cuenta nueva.
   final String? replaceHoldSaleId;
+
+  /// Ver [SaleCheckoutInput.clientSkipsTax].
+  final bool clientSkipsTax;
 }
 
 /// Resultado de guardar una cuenta como pendiente.
@@ -1599,15 +1705,33 @@ double _presentationQuantity(Map<String, dynamic> row) {
   return factor == 1 ? quantity : round3(quantity / factor);
 }
 
-/// Precio de UNA presentación: el unitario × las unidades que trae.
+/// Precio de UNA presentación. Sale de `uom_price` (migración 92), que guarda
+/// el precio con que se cobró la caja; solo si falta se deriva del unitario.
 double _presentationUnitPrice(Map<String, dynamic> row) {
   final factor = _presentationFactor(row);
   final price = _toDouble(row['unit_price']);
-  return factor == 1 ? price : round2(price * factor);
+  if (factor == 1) return price;
+  final stored = _toDouble(row['uom_price']);
+  return stored > 0 ? stored : round2(price * factor);
 }
 
 String? _presentationLabelOf(Map<String, dynamic> row) {
   if (_presentationFactor(row) == 1) return null;
   final name = row['unit_name']?.toString().trim();
   return (name == null || name.isEmpty) ? 'Presentación' : name;
+}
+
+/// Si la base todavía no tiene la migración 91, PostgREST no encuentra la
+/// función con `p_honor_client_tax` (PGRST202). Solo puede pasar al vender a
+/// un cliente sin ITBIS —las demás ventas no mandan el parámetro—, así que se
+/// explica en vez de mostrar el error crudo del servidor.
+Exception? _missingClientTaxMigration(
+  PostgrestException error,
+  bool clientSkipsTax,
+) {
+  if (!clientSkipsTax || error.code != 'PGRST202') return null;
+  return Exception(
+    'Para vender sin ITBIS a este cliente falta aplicar la migración 91 en '
+    'la base de datos. Las ventas a los demás clientes siguen funcionando.',
+  );
 }

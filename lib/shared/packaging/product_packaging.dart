@@ -121,6 +121,26 @@ class ProductPackaging {
         PackagingUom.unit,
       ];
 
+  /// La presentación más grande en que se vende: la caja si hay tres niveles,
+  /// el empaque si hay dos. Es la que se lee primero en el POS e inventario.
+  PackagingUom get largestUom => sellableUoms.first;
+
+  /// "Caja de 20 Paquetes". `null` si el producto no tiene empaque.
+  String? get contentLabel {
+    if (!hasPacks) return null;
+    final units = factorFor(largestUom);
+    return '${labelFor(largestUom)} de ${_num(units)} '
+        '${_plural(effectiveUnitLabel, units)}';
+  }
+
+  /// Presentaciones grandes COMPLETAS en un stock (en unidades base): 1020
+  /// paquetes con cajas de 20 → 51. Sin empaque, el stock entero.
+  int wholeLargest(double stockInBaseUnits) {
+    if (!hasPacks) return stockInBaseUnits.floor();
+    final b = breakdown(stockInBaseUnits);
+    return hasBoxes ? b.boxes : b.packs;
+  }
+
   /// Cuántas unidades base representa UNA de esa presentación.
   double factorFor(PackagingUom uom) {
     switch (uom) {

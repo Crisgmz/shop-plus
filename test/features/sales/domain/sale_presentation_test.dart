@@ -39,6 +39,7 @@ void main() {
         discountPct: item.discountPct,
         uom: item.uom.dbValue,
         uomFactor: item.uomFactor,
+        uomPrice: item.isPresentation ? item.presentationPrice : null,
         unitName: item.isPresentation ? item.presentationLabel : null,
       );
 
@@ -242,6 +243,79 @@ void main() {
           ]);
       expect(left, 7950);
       expect(product.packaging.describeStock(left), '198 Cajas · 30 Unidades');
+    });
+  });
+
+  group('precio propio de la presentación · caso CIBAO FROZEN', () {
+    // Caja de 20 paquetes a RD$2,639.83. El paquete a 131.99: repartir la caja
+    // al centavo por paquete daría 2,639.80 — tres centavos menos por caja.
+    SalesProduct vasoPet() => SalesProduct(
+          id: 'sp001',
+          name: 'VASO PET 9 OZ',
+          price: 131.99,
+          cost: 80,
+          taxRate: 18,
+          stock: 1300,
+          isActive: true,
+          packaging: const ProductPackaging(
+            unitsPerPack: 20,
+            unitLabel: 'Paquete',
+            packLabel: 'Caja',
+            packPrice: 2639.83,
+          ),
+        );
+
+    test('la caja se cobra a su precio, no unitario × 20', () {
+      final line =
+          SaleCartItem(product: vasoPet(), quantity: 1, uom: PackagingUom.pack);
+      expect(line.presentationPrice, 2639.83);
+      expect(line.lineGross, 2639.83);
+      expect(line.baseQuantity, 20);
+    });
+
+    test('el precio escrito a mano manda sobre el configurado', () {
+      final line = SaleCartItem(
+        product: vasoPet(),
+        quantity: 2,
+        uom: PackagingUom.pack,
+        presentationPriceOverride: 2500,
+      );
+      expect(line.lineGross, 5000);
+    });
+
+    test('suelto sigue cobrando el precio del paquete', () {
+      final line = SaleCartItem(product: vasoPet(), quantity: 3);
+      expect(line.presentationPrice, 131.99);
+      expect(line.lineGross, closeTo(395.97, 0.001));
+    });
+
+    test('al checkout viaja el precio de la caja y la cantidad en paquetes',
+        () {
+      final item = checkout([
+        SaleCartItem(product: vasoPet(), quantity: 1, uom: PackagingUom.pack),
+      ]).toRpcItems().single;
+
+      expect(item['quantity'], 20);        // unidades base → descuenta stock
+      expect(item['uom_price'], 2639.83);  // precio con que se cobra
+      expect(item['uom_factor'], 20);
+      expect(item['unit_name'], 'Caja');
+    });
+
+    test('una línea suelta no manda campos de presentación', () {
+      final item = checkout([SaleCartItem(product: vasoPet(), quantity: 3)])
+          .toRpcItems()
+          .single;
+      expect(item.containsKey('uom_price'), isFalse);
+      expect(item.containsKey('uom'), isFalse);
+    });
+
+    test('pantalla y checkout dan el mismo total', () {
+      final cart = [
+        SaleCartItem(product: vasoPet(), quantity: 2, uom: PackagingUom.pack),
+        SaleCartItem(product: vasoPet(), quantity: 5),
+      ];
+      final pantalla = cart.fold<double>(0, (s, it) => s + it.lineTotal);
+      expect(checkout(cart).total, closeTo(pantalla, 0.001));
     });
   });
 }

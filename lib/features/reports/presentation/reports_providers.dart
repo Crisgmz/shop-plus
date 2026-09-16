@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../auth/presentation/auth_providers.dart';
@@ -283,6 +285,7 @@ class ReportExportSnapshot {
   ReportExportSnapshot({
     required this.fileBaseName,
     required this.buildData,
+    this.buildXlsx,
   });
 
   /// Nombre del archivo sin extensión (ej. 'ventas_resumen_20260513').
@@ -292,6 +295,10 @@ class ReportExportSnapshot {
   /// usa una función (no el modelo directo) para que la metadata de
   /// compañía / sucursal se evalúe en tiempo de export, no de render.
   final ReportExportData Function() buildData;
+
+  /// Excel propio del reporte (ej. 606/607 con todas sus columnas). Si es
+  /// null, el Excel sale del renderer genérico a partir de [buildData].
+  final Uint8List Function()? buildXlsx;
 }
 
 // ─── Sub-reportes de Ventas (PRD §F-Ventas) ──────────────────────────────

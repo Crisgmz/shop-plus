@@ -1,13 +1,15 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
 import '../../../shared/formatters/formatters.dart';
-import '../../../shared/responsive/responsive_layout.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/ui_custom.dart';
+import '../../inventory/data/file_io_helper.dart';
+import '../data/taxes_excel_service.dart';
 import '../data/taxes_repository.dart';
 import 'taxes_providers.dart';
 
@@ -73,7 +75,7 @@ class TaxesPage extends ConsumerWidget {
           dataAsync.when(
             data: (data) {
               final kpis = data.kpis;
-              final repository = ref.read(taxesRepositoryProvider);
+              final excel = TaxesExcelService();
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -94,10 +96,12 @@ class TaxesPage extends ConsumerWidget {
                         FilledButton.icon(
                           onPressed: data.purchases.isEmpty
                               ? null
-                              : () => _showCsv(
+                              : () => _exportExcel(
                                     context: context,
-                                    title: 'Exportar 606 (CSV)',
-                                    csv: repository.build606Csv(data.purchases),
+                                    report: '606',
+                                    range: data.range,
+                                    count: data.purchases.length,
+                                    build: () => excel.build606(data.purchases),
                                   ),
                           icon: const Icon(Icons.download, size: 18),
                           label: const Text('Exportar 606'),
@@ -105,10 +109,16 @@ class TaxesPage extends ConsumerWidget {
                         FilledButton.icon(
                           onPressed: data.sales.isEmpty
                               ? null
-                              : () => _showCsv(
+                              : () => _exportExcel(
                                     context: context,
-                                    title: 'Exportar 607 (CSV)',
-                                    csv: repository.build607Csv(data.sales),
+                                    report: '607',
+                                    range: data.range,
+                                    count: data.sales.length,
+                                    build: () => excel.build607(
+                                      data.sales,
+                                      receiptLabel: (type) =>
+                                          _receiptLabels[type] ?? type,
+                                    ),
                                   ),
                           icon: const Icon(Icons.download, size: 18),
                           label: const Text('Exportar 607'),
@@ -318,42 +328,34 @@ class TaxesPage extends ConsumerWidget {
     );
   }
 
-  Future<void> _showCsv({
+  Future<void> _exportExcel({
     required BuildContext context,
-    required String title,
-    required String csv,
+    required String report,
+    required TaxesDateRange range,
+    required int count,
+    required Uint8List Function() build,
   }) async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: ResponsiveLayout.isMobile(context) ? double.maxFinite : 760,
-            maxHeight: 420,
-          ),
-          child: SingleChildScrollView(child: SelectableText(csv)),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cerrar'),
-          ),
-          FilledButton.icon(
-            onPressed: () async {
-              await Clipboard.setData(ClipboardData(text: csv));
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('CSV copiado al portapapeles')),
-              );
-            },
-            icon: const Icon(Icons.copy_all_outlined, size: 18),
-            label: const Text('Copiar'),
-          ),
-        ],
-      ),
-    );
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final saved = await FileIoHelper.saveBytes(
+        bytes: build(),
+        fileName: '${report}_${_isoDate(range.start)}_a_${_isoDate(range.end)}.xlsx',
+        extension: 'xlsx',
+        dialogTitle: 'Guardar $report en Excel',
+      );
+      if (!saved) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('$report exportado a Excel ($count registros).')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('No se pudo exportar a Excel: $e')),
+      );
+    }
   }
+
+  static String _isoDate(DateTime d) =>
+      '${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}';
 }
 
 class _TaxKpis extends StatelessWidget {

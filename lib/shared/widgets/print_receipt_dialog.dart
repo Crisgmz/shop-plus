@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
+import '../../features/printing/data/print_file_name.dart';
 import '../../features/printing/data/printing.dart';
 import '../../features/printing/presentation/network_printer_providers.dart';
 import '../formatters/formatters.dart';
@@ -91,7 +92,9 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
   ///      ventana), mostramos un hint sobre el bloqueador de pop-ups.
   ///   4. Solo cerramos el diálogo si la operación se completó OK.
   Future<void> _onPrintPressed(BuildContext context) async {
-    final name = _document.documentNumber;
+    // El navegador propone este nombre al guardar el PDF: cliente y
+    // terminal del comprobante en vez del número interno de la venta.
+    final name = printDocumentFileName(_document);
     final useThermal = _selectedSize == PrintPaperSize.thermal80mm;
     final navigator = Navigator.of(context);
     final messengerContext = context;
@@ -124,6 +127,40 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
     } catch (error) {
       if (messengerContext.mounted) {
         AppSnackBar.error(messengerContext, 'No se pudo imprimir', error);
+      }
+    }
+  }
+
+  /// Descarga el PDF con un nombre legible: "Juan Pérez - 00000123.pdf".
+  ///
+  /// Hace falta un botón aparte porque el `name:` de `layoutPdf` NO gobierna el
+  /// nombre del archivo en Flutter Web: esa ruta mete el PDF en un iframe
+  /// oculto y llama `print()`, así que lo que el navegador propone al "Guardar
+  /// como PDF" no sale de ahí. `sharePdf` sí escribe el atributo `download`
+  /// del enlace, que es quien manda. En escritorio y móvil nativo abre el
+  /// compartir del sistema con ese mismo nombre.
+  Future<void> _onDownloadPressed(BuildContext context) async {
+    final docs = <PrintDocumentData>[
+      _document,
+      if (_alsoPrintConduce) _document.copyWith(hidePrices: true),
+    ];
+    final useThermal = _selectedSize == PrintPaperSize.thermal80mm;
+    final fileName =
+        printDocumentFileName(_document, withConduce: docs.length > 1);
+    final messengerContext = context;
+
+    try {
+      final bytes = useThermal
+          ? await const PdfReceiptBuilder().buildThermalDocumentsBytes(docs)
+          : await const PdfReceiptBuilder().buildDocumentsBytes(docs);
+      await Printing.sharePdf(bytes: bytes, filename: '$fileName.pdf');
+    } catch (error) {
+      if (messengerContext.mounted) {
+        AppSnackBar.error(
+          messengerContext,
+          'No se pudo descargar el PDF',
+          error,
+        );
       }
     }
   }
@@ -229,6 +266,11 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
         TextButton(
           onPressed: _sendingTcp ? null : () => Navigator.pop(context),
           child: const Text('Cerrar'),
+        ),
+        TextButton.icon(
+          onPressed: _sendingTcp ? null : () => _onDownloadPressed(context),
+          icon: const Icon(Icons.download_rounded, size: 18),
+          label: const Text('Descargar PDF'),
         ),
         if (canNetworkPrint)
           OutlinedButton.icon(

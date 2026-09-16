@@ -1338,7 +1338,7 @@ class _ProductRow extends StatelessWidget {
           Expanded(
             flex: 2,
             child: Text(
-              money(product.cost),
+              _costLabel(product),
               textAlign: TextAlign.right,
               style: const TextStyle(
                 fontSize: 13,
@@ -1349,7 +1349,7 @@ class _ProductRow extends StatelessWidget {
           Expanded(
             flex: 2,
             child: Text(
-              money(product.price),
+              _priceLabel(product),
               textAlign: TextAlign.right,
               style: const TextStyle(fontSize: 13),
             ),
@@ -1470,7 +1470,7 @@ class _InventoryProductCard extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _buildInfo('Precio', money(product.price)),
+                _buildInfo('Precio', _priceLabel(product)),
                 _buildInfo('Stock', _stockLabel(product), isBad: product.isLowStock),
               ],
             ),
@@ -1541,6 +1541,11 @@ class _StockAdjustDialog extends StatefulWidget {
 
 class _StockAdjustDialogState extends State<_StockAdjustDialog> {
   late final TextEditingController _stockController;
+
+  /// Con empaque el conteo se escribe como en la hoja semanal: cajas
+  /// completas + sueltos. `_newStock` lo lleva a la unidad base.
+  late final TextEditingController _largeController;
+  late final TextEditingController _looseController;
   final _notesController = TextEditingController();
   String _reason = 'Conteo físico';
 
@@ -1558,16 +1563,52 @@ class _StockAdjustDialogState extends State<_StockAdjustDialog> {
     super.initState();
     _stockController =
         TextEditingController(text: qty(widget.product.stock));
+    final packaging = widget.product.packaging;
+    final stock = widget.product.stock;
+    final large = stock > 0 ? packaging.wholeLargest(stock) : 0;
+    final loose = stock > 0 ? stock - large * _largeFactor : 0.0;
+    _largeController = TextEditingController(text: '$large');
+    _looseController = TextEditingController(text: _fmt(loose));
   }
 
   @override
   void dispose() {
     _stockController.dispose();
+    _largeController.dispose();
+    _looseController.dispose();
     _notesController.dispose();
     super.dispose();
   }
 
-  double? get _newStock => double.tryParse(_stockController.text.trim());
+  ProductPackaging get _packaging => widget.product.packaging;
+
+  double get _largeFactor => _packaging.factorFor(_packaging.largestUom);
+
+  double? get _newStock {
+    if (!_packaging.hasPacks) {
+      return double.tryParse(_stockController.text.trim());
+    }
+    double? read(TextEditingController c) {
+      final text = c.text.trim();
+      return text.isEmpty ? 0 : double.tryParse(text);
+    }
+
+    final large = read(_largeController);
+    final loose = read(_looseController);
+    if (large == null || loose == null || large < 0 || loose < 0) return null;
+    return large * _largeFactor + loose;
+  }
+
+  /// "51 Cajas", "+1 Caja · 5 Paquetes": el stock en palabras del negocio.
+  String _describe(double baseUnits) {
+    if (!_packaging.hasPacks) return qty(baseUnits);
+    if (baseUnits >= 0) return _packaging.describeStock(baseUnits);
+    return '-${_packaging.describeStock(-baseUnits)}';
+  }
+
+  static String _fmt(double value) => value == value.roundToDouble()
+      ? value.toInt().toString()
+      : value.toString();
 
   @override
   Widget build(BuildContext context) {
@@ -1589,24 +1630,59 @@ class _StockAdjustDialogState extends State<_StockAdjustDialog> {
             ),
             const SizedBox(height: AppTokens.s4),
             Text(
-              'Stock actual: ${qty(current)}',
+              'Stock actual: ${_describe(current)}',
               style: const TextStyle(color: AppTokens.mutedForeground),
             ),
             const SizedBox(height: AppTokens.s16),
-            TextField(
-              controller: _stockController,
-              autofocus: true,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Nuevo stock (conteo físico)',
+            if (_packaging.hasPacks)
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _largeController,
+                      autofocus: true,
+                      keyboardType: const TextInputType.numberWithOptions(),
+                      decoration: InputDecoration(
+                        labelText: pluralLabel(
+                          _packaging.labelFor(_packaging.largestUom),
+                          2,
+                        ),
+                        helperText: _packaging.contentLabel,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(width: AppTokens.s12),
+                  Expanded(
+                    child: TextField(
+                      controller: _looseController,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        labelText:
+                            pluralLabel(_packaging.effectiveUnitLabel, 2),
+                        helperText: 'Fuera de caja',
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              )
+            else
+              TextField(
+                controller: _stockController,
+                autofocus: true,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Nuevo stock (conteo físico)',
+                ),
+                onChanged: (_) => setState(() {}),
               ),
-              onChanged: (_) => setState(() {}),
-            ),
             const SizedBox(height: AppTokens.s8),
             if (delta != null && delta != 0)
               Text(
-                'Diferencia: ${delta > 0 ? '+' : ''}${qty(delta)}',
+                'Diferencia: ${delta > 0 ? '+' : ''}${_describe(delta)}',
                 style: TextStyle(
                   fontWeight: FontWeight.w600,
                   color: delta > 0 ? AppTokens.success : AppTokens.error,
@@ -1680,6 +1756,14 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
 
   /// Venta mínima al vender suelto, en unidades (`min_unit_qty`).
   late final TextEditingController _minUnitQtyController;
+
+  /// Precio de UNA presentación completa (`pack_price`). Vacío = se deriva del
+  /// precio unitario. Existe porque el mayoreo casi nunca es el unitario ×
+  /// las unidades que trae.
+  late final TextEditingController _packPriceController;
+
+  /// Cómo se llama la unidad base: "Unidad", "Paquete"… (`unit_label`).
+  late final TextEditingController _unitLabelController;
   late final TextEditingController _priceController;
   late final TextEditingController _costController;
   late final TextEditingController _stockController;
@@ -1721,6 +1805,12 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     _minUnitQtyController = TextEditingController(
       text: _fmtQty(packaging.minUnitQty),
     );
+    _packPriceController = TextEditingController(
+      text: _fmtQty(packaging.packPrice),
+    );
+    _unitLabelController = TextEditingController(
+      text: packaging.unitLabel ?? '',
+    );
     _priceController = TextEditingController(
       text: product == null ? '' : product.price.toString(),
     );
@@ -1753,6 +1843,44 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     _isTaxExempt = product?.isTaxExempt ?? false;
     _trackInventory = product?.trackInventory ?? true;
     _imeis.addAll(product?.imeis ?? const <String>[]);
+
+    // "Paquetes por caja" y "= 51 Cajas" dependen de lo que se va escribiendo.
+    _unitLabelController.addListener(_refreshPackagingLabels);
+    _unitsPerPackController.addListener(_refreshPackagingLabels);
+    _stockController.addListener(_refreshPackagingLabels);
+  }
+
+  void _refreshPackagingLabels() {
+    if (mounted) setState(() {});
+  }
+
+  bool get _packaged => _presentation != 'Unidad';
+
+  /// Unidad base en minúscula: "paquete", "unidad".
+  String get _unitSingular {
+    final text = _unitLabelController.text.trim();
+    return (text.isEmpty ? 'Unidad' : text).toLowerCase();
+  }
+
+  /// Unidad base en plural y minúscula: "paquetes", "unidades".
+  String get _unitPlural => pluralLabel(_unitSingular, 2);
+
+  /// "= 51 Cajas" bajo el stock, con lo que hay escrito ahora mismo.
+  String? get _stockEquivalence {
+    if (!_packaged) return null;
+    final stock = double.tryParse(_stockController.text.trim());
+    final perPack = double.tryParse(_unitsPerPackController.text.trim());
+    if (stock == null || perPack == null || perPack <= 0) return null;
+    final unitLabel = _unitLabelController.text.trim();
+    final previous = widget.initial?.packaging ?? ProductPackaging.none;
+    final packaging = ProductPackaging(
+      unitsPerPack: perPack,
+      packsPerBox: previous.packsPerBox,
+      unitLabel: unitLabel.isEmpty ? null : unitLabel,
+      packLabel: _presentation,
+      boxLabel: previous.boxLabel,
+    );
+    return '= ${packaging.describeStock(stock)}';
   }
 
   void _addImei() {
@@ -1776,6 +1904,8 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     _unitController.dispose();
     _unitsPerPackController.dispose();
     _minUnitQtyController.dispose();
+    _packPriceController.dispose();
+    _unitLabelController.dispose();
     _priceController.dispose();
     _costController.dispose();
     _stockController.dispose();
@@ -1949,7 +2079,11 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    decoration: const InputDecoration(labelText: 'Precio'),
+                    decoration: InputDecoration(
+                      labelText: _packaged
+                          ? 'Precio por $_unitSingular'
+                          : 'Precio',
+                    ),
                     validator: (value) {
                       final parsed = double.tryParse(value ?? '');
                       if (parsed == null || parsed < 0) {
@@ -1963,7 +2097,11 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    decoration: const InputDecoration(labelText: 'Costo'),
+                    decoration: InputDecoration(
+                      labelText: _packaged
+                          ? 'Costo por $_unitSingular'
+                          : 'Costo',
+                    ),
                     validator: (value) {
                       final parsed = double.tryParse(value ?? '');
                       if (parsed == null || parsed < 0) {
@@ -1986,9 +2124,8 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                       decimal: true,
                     ),
                     decoration: InputDecoration(
-                      labelText: _presentation == 'Unidad'
-                          ? 'Stock'
-                          : 'Stock (en unidades)',
+                      labelText: _packaged ? 'Stock (en $_unitPlural)' : 'Stock',
+                      helperText: _stockEquivalence,
                     ),
                     validator: (value) {
                       final parsed = double.tryParse(value ?? '');
@@ -2054,9 +2191,9 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                       ),
                       decoration: InputDecoration(
                         labelText:
-                            'Unidades por ${_presentation.toLowerCase()}',
+                            '${_capitalize(_unitPlural)} por ${_presentation.toLowerCase()}',
                         helperText:
-                            '¿Cuántas unidades trae cada ${_presentation.toLowerCase()}?',
+                            'Cantidad de $_unitPlural que trae cada ${_presentation.toLowerCase()}',
                       ),
                       validator: (value) {
                         final parsed = double.tryParse((value ?? '').trim());
@@ -2071,8 +2208,8 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(
-                        labelText: 'Venta mínima (unidades)',
+                      decoration: InputDecoration(
+                        labelText: 'Venta mínima ($_unitPlural)',
                         helperText: 'Al vender suelto. Vacío = sin mínimo',
                       ),
                       validator: (value) {
@@ -2084,6 +2221,37 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                         }
                         return null;
                       },
+                    ),
+                  ]),
+                  const SizedBox(height: 10),
+                  _formRow(isMobile, [
+                    TextFormField(
+                      controller: _packPriceController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText:
+                            'Precio de la ${_presentation.toLowerCase()}',
+                        helperText:
+                            'Vacío = precio unitario × unidades que trae',
+                      ),
+                      validator: (value) {
+                        final text = (value ?? '').trim();
+                        if (text.isEmpty) return null;
+                        final parsed = double.tryParse(text);
+                        if (parsed == null || parsed < 0) {
+                          return 'Precio inválido';
+                        }
+                        return null;
+                      },
+                    ),
+                    TextFormField(
+                      controller: _unitLabelController,
+                      decoration: const InputDecoration(
+                        labelText: 'Nombre de la unidad',
+                        helperText: 'Unidad, Paquete… Vacío = "Unidad"',
+                      ),
                     ),
                   ]),
                 ],
@@ -2207,6 +2375,10 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
           _presentation,
       ];
 
+  static String _capitalize(String text) => text.isEmpty
+      ? text
+      : '${text[0].toUpperCase()}${text.substring(1)}';
+
   static String _fmtQty(double? value) {
     if (value == null) return '';
     return value == value.roundToDouble()
@@ -2226,13 +2398,17 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     final units = double.tryParse(_unitsPerPackController.text.trim());
     final minText = _minUnitQtyController.text.trim();
     final min = minText.isEmpty ? null : double.tryParse(minText);
+    final packPriceText = _packPriceController.text.trim();
+    final packPrice =
+        packPriceText.isEmpty ? null : double.tryParse(packPriceText);
+    final unitLabel = _unitLabelController.text.trim();
     return ProductPackaging(
       unitsPerPack: units,
       packsPerBox: previous.packsPerBox,
-      unitLabel: previous.unitLabel,
+      unitLabel: unitLabel.isEmpty ? null : unitLabel,
       packLabel: _presentation,
       boxLabel: previous.boxLabel,
-      packPrice: previous.packPrice,
+      packPrice: (packPrice == null || packPrice <= 0) ? null : packPrice,
       boxPrice: previous.boxPrice,
       minUnitQty: (min == null || min <= 0) ? null : min,
     );
@@ -3432,3 +3608,20 @@ class _InventoryKpis extends StatelessWidget {
 String _stockLabel(InventoryProduct product) => product.packaging.hasPacks
     ? product.packaging.describeStock(product.stock)
     : qty(product.stock);
+
+/// Con empaque, el precio se lee por la presentación grande ("RD\$ 3,372.88 /
+/// Caja"), igual que el stock se lee en cajas.
+String _priceLabel(InventoryProduct product) {
+  final packaging = product.packaging;
+  if (!packaging.hasPacks) return money(product.price);
+  final uom = packaging.largestUom;
+  return '${money(packaging.priceFor(uom, product.price))} / '
+      '${packaging.labelFor(uom)}';
+}
+
+/// El costo se guarda por unidad base; la caja no tiene costo propio.
+String _costLabel(InventoryProduct product) {
+  final packaging = product.packaging;
+  if (!packaging.hasPacks) return money(product.cost);
+  return money(product.cost * packaging.factorFor(packaging.largestUom));
+}

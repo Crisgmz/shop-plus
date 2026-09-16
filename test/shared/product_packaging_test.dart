@@ -176,4 +176,47 @@ void main() {
       expect(b.units, closeTo(0.999, 0.0001));
     });
   });
+
+  group('como quedó el negocio · la caja se lee primero', () {
+    // Lo que deja el script 11: unidad base = paquete, 20 por caja.
+    const vasoAlto = ProductPackaging(
+      unitsPerPack: 20,
+      unitLabel: 'Paquete',
+      packLabel: 'Caja',
+      packPrice: 3372.88,
+    );
+
+    test('1020 paquetes son 51 cajas completas', () {
+      expect(vasoAlto.largestUom, PackagingUom.pack);
+      expect(vasoAlto.wholeLargest(1020), 51);
+      expect(vasoAlto.describeStock(1020), '51 Cajas');
+    });
+
+    test('los paquetes sueltos no cuentan como caja', () {
+      expect(vasoAlto.wholeLargest(1039), 51);
+      expect(vasoAlto.wholeLargest(19), 0);
+      expect(vasoAlto.wholeLargest(-40), 0);
+    });
+
+    test('la tarjeta dice qué trae y cuánto vale la caja', () {
+      expect(vasoAlto.contentLabel, 'Caja de 20 Paquetes');
+      expect(vasoAlto.priceFor(vasoAlto.largestUom, 168.64), 3372.88);
+    });
+
+    test('con tres niveles la más grande es la caja', () {
+      const tresNiveles = ProductPackaging(
+        unitsPerPack: 50,
+        packsPerBox: 20,
+        unitLabel: 'Vaso',
+      );
+      expect(tresNiveles.largestUom, PackagingUom.box);
+      expect(tresNiveles.wholeLargest(2500), 2);
+      expect(tresNiveles.contentLabel, 'Caja de 1000 Vasos');
+    });
+
+    test('sin empaque no hay presentación y el stock va entero', () {
+      expect(ProductPackaging.none.contentLabel, isNull);
+      expect(ProductPackaging.none.wholeLargest(7.5), 7);
+    });
+  });
 }

@@ -29,9 +29,10 @@ class _EditCartItem {
   double unitPrice;
   double discountPct;
 
-  /// La venta factura ITBIS. En `false` (venta sin comprobante) la tasa va a 0,
-  /// igual que en `edit_sale_transactional`.
-  final bool chargesTax;
+  /// La venta factura ITBIS. En `false` (venta sin comprobante o cliente que
+  /// no paga ITBIS) la tasa va a 0, igual que en `edit_sale_transactional`.
+  /// Mutable: cambia si se elige otro cliente mientras se edita.
+  bool chargesTax;
 
   /// Tasa efectiva: 0 si la venta no factura o el producto está exento.
   double get _rate => chargesTax ? product.effectiveTaxRate : 0;
@@ -88,10 +89,20 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     super.dispose();
   }
 
-  /// False en ventas sin comprobante (nota de venta no fiscal): no llevan
-  /// ITBIS. Espeja la regla de `edit_sale_transactional`, que es quien
-  /// recalcula y guarda los totales.
-  bool _chargesTax = true;
+  bool _receiptIsNone = false;
+
+  /// La venta factura ITBIS: no es sin comprobante y el cliente con que queda
+  /// la paga. Espeja `edit_sale_transactional` (migraciones 83 y 91), que es
+  /// quien recalcula y guarda los totales.
+  bool get _chargesTax => !_receiptIsNone && !_clientSkipsTax;
+
+  /// El cliente con que queda la venta no paga ITBIS ("Cobrar ITBIS" apagado o
+  /// exento en su ficha).
+  bool get _clientSkipsTax {
+    final id = _clientId;
+    if (id == null) return false;
+    return ref.read(salesClientsByIdProvider)[id]?.skipsTax ?? false;
+  }
 
   double get _subtotal =>
       _items.fold<double>(0, (s, it) => s + it.lineSubtotal);
@@ -107,7 +118,9 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
 
     final byId = {for (final p in products) p.id: p};
     // Se resuelve ANTES del bucle: cada línea lo necesita para su tasa.
-    final chargesTax = detail.sale.receiptType != 'none';
+    _receiptIsNone = detail.sale.receiptType == 'none';
+    _clientId = detail.sale.clientId;
+    final chargesTax = _chargesTax;
     for (final si in detail.items) {
       final pid = si.productId;
       if (pid == null) continue;
@@ -128,11 +141,19 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
         chargesTax: chargesTax,
       ));
     }
-    _chargesTax = chargesTax;
-    _clientId = detail.sale.clientId;
     _notesCtrl.text = detail.sale.notes ?? '';
     _paymentMethod = detail.paymentMethod ?? 'cash';
     _originalPaymentMethod = _paymentMethod;
+  }
+
+  /// Aplica a cada línea si la venta factura ITBIS. Corre en cada build: el
+  /// valor cambia al elegir otro cliente y cuando terminan de cargar los
+  /// clientes (que pueden llegar después que los productos).
+  void _syncChargesTax() {
+    final charges = _chargesTax;
+    for (final it in _items) {
+      it.chargesTax = charges;
+    }
   }
 
   Future<void> _addProduct() async {
@@ -180,6 +201,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
         clearClient: _clientId == null,
         notes: _notesCtrl.text,
         clearNotes: _notesCtrl.text.trim().isEmpty,
+        clientSkipsTax: _clientSkipsTax,
       );
 
       // Si el método de pago cambió, actualizar los payments en una segunda
@@ -269,6 +291,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
             ),
             data: (products) {
               _hydrate(detail, products);
+              _syncChargesTax();
               return _EditForm(
                 detail: detail,
                 items: _items,
@@ -427,7 +450,7 @@ class _EditForm extends StatelessWidget {
                 _EditableLineTile(
                   key: ValueKey('${items[i].product.id}-$i'),
                   item: items[i],
-                  chargesTax: detail.sale.receiptType != 'none',
+                  chargesTax: items[i].chargesTax,
                   onRemove: () => onRemoveItem(i),
                   onChanged: onItemChanged,
                 ),

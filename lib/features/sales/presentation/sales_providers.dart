@@ -141,6 +141,9 @@ String _encodeSaleDraft(SaleDraft d) => jsonEncode({
             // Presentación de la línea. Sin esto, "2 Cajas" volvería como 2
             // unidades al recargar la página y se cobraría de menos.
             'uom': it.uom.dbValue,
+            // Precio de caja escrito a mano: sin esto, recargar la página lo
+            // devolvería al precio configurado y cobraría otra cosa.
+            'presentationPrice': it.presentationPriceOverride,
           },
       ],
     });
@@ -164,6 +167,8 @@ SaleDraft? _decodeSaleDraft(String? raw) {
                 const <String>[],
             priceTier: e['priceTier']?.toString() ?? 'retail',
             uom: PackagingUom.fromDb(e['uom']?.toString()),
+            presentationPriceOverride:
+                (e['presentationPrice'] as num?)?.toDouble(),
           ),
     ];
     return SaleDraft(

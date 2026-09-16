@@ -29,7 +29,9 @@ import '../../settings/presentation/app_settings_providers.dart';
 import '../../shell/presentation/shell_providers.dart';
 import '../data/reports_repository.dart'
     show FiscalZClosureRow, SaleDetailRow;
+import '../export/dgii_xlsx.dart';
 import '../export/estado_diario_csv.dart';
+import '../domain/dgii_formato.dart';
 import '../domain/report_category.dart';
 import '../export/report_export_models.dart';
 import '../export/report_export_service.dart';
@@ -3766,80 +3768,34 @@ class _MiniStat extends StatelessWidget {
   }
 }
 
-/// Serializa los rows del 606 al formato TXT pipe-separated de DGII.
-String _build606Txt(Map<String, dynamic> data) {
-  final rnc = (data['rnc_negocio'] ?? '').toString();
-  final period = (data['period'] ?? '').toString();
-  final rows = (data['rows'] as List?) ?? const [];
-  final buf = StringBuffer();
-  buf.writeln('606|$rnc|$period|${rows.length}');
-  for (final raw in rows) {
-    final r = raw as Map;
-    buf.writeln([
-      r['rnc_proveedor'] ?? '',
-      r['tipo_id'] ?? '',
-      r['tipo_bien_servicio'] ?? '',
-      r['ncf'] ?? '',
-      r['ncf_modificado'] ?? '',
-      r['fecha_comprobante'] ?? '',
-      r['fecha_pago'] ?? '',
-      r['monto_facturado'] ?? 0,
-      r['itbis_facturado'] ?? 0,
-    ].join('|'));
-  }
-  return buf.toString();
-}
-
-String _build607Txt(Map<String, dynamic> data) {
-  final rnc = (data['rnc_negocio'] ?? '').toString();
-  final period = (data['period'] ?? '').toString();
-  final rows = (data['rows'] as List?) ?? const [];
-  final buf = StringBuffer();
-  buf.writeln('607|$rnc|$period|${rows.length}');
-  for (final raw in rows) {
-    final r = raw as Map;
-    buf.writeln([
-      r['rnc_cliente'] ?? '',
-      r['tipo_id'] ?? '',
-      r['ncf'] ?? '',
-      r['ncf_modificado'] ?? '',
-      r['tipo_ingreso'] ?? '',
-      r['fecha_comprobante'] ?? '',
-      r['monto_facturado'] ?? 0,
-      r['itbis_facturado'] ?? 0,
-      r['efectivo'] ?? 0,
-      r['credito'] ?? 0,
-    ].join('|'));
-  }
-  return buf.toString();
-}
-
 class _DgiiReportSection extends StatelessWidget {
   const _DgiiReportSection({
     required this.title,
     required this.data,
-    required this.txtBuilder,
+    required this.formato,
+    required this.xlsxBuilder,
     required this.fileName,
   });
 
   final String title;
   final Map<String, dynamic> data;
-  final String Function(Map<String, dynamic>) txtBuilder;
+  final DgiiFormato formato;
+  final Uint8List Function(Map<String, dynamic>) xlsxBuilder;
   final String fileName;
 
   @override
   Widget build(BuildContext context) {
-    final rnc = (data['rnc_negocio'] ?? '').toString();
-    final period = (data['period'] ?? '').toString();
-    final count = (data['records_count'] as num?)?.toInt() ?? 0;
+    final rnc = formato.rnc;
+    final count = formato.filas.length;
+    final consumo = formato.resumenConsumo;
     final inconsistencies =
         (data['inconsistencies'] as List?) ?? const [];
     final inconsistenciesCount =
         (data['inconsistencies_count'] as num?)?.toInt() ?? 0;
-    final rows = (data['rows'] as List?) ?? const [];
+    final claves = formato.claves;
 
     return _ReportCard(
-      title: '$title · Período $period',
+      title: '$title · Período ${formato.periodo}',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3849,68 +3805,63 @@ class _DgiiReportSection extends StatelessWidget {
             children: [
               _DgiiBadge('RNC: ${rnc.isEmpty ? "no configurado" : rnc}',
                   isWarning: rnc.isEmpty),
-              _DgiiBadge('Registros válidos: $count'),
+              _DgiiBadge('Registros: $count'),
+              if (consumo != null)
+                _DgiiBadge('Facturas de consumo: ${consumo.cantidad}'),
               _DgiiBadge(
                 'Inconsistencias: $inconsistenciesCount',
                 isWarning: inconsistenciesCount > 0,
               ),
             ],
           ),
-          if (rnc.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: AppTokens.s8),
-              child: Text(
-                'Falta configurar el RNC en /configuracion antes de generar.',
-                style: TextStyle(color: AppTokens.warning),
-              ),
-            ),
           // Sin RNC configurado el TXT saldría con la cabecera vacía y DGII lo
           // rechaza. Se explica en vez de dejar un botón muerto sin motivo.
-          if (rnc.isEmpty) ...[
-            const SizedBox(height: AppTokens.s12),
-            Container(
-              padding: const EdgeInsets.all(AppTokens.s12),
-              decoration: BoxDecoration(
-                color: AppTokens.warning.withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(AppTokens.radiusM),
-                border: Border.all(
-                  color: AppTokens.warning.withValues(alpha: 0.35),
-                ),
-              ),
-              child: const Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.warning_amber_rounded,
-                      size: 18, color: AppTokens.warning),
-                  SizedBox(width: AppTokens.s8),
-                  Expanded(
-                    child: Text(
-                      'Tu empresa no tiene RNC configurado. DGII exige el RNC '
-                      'del contribuyente en la primera línea del archivo. '
-                      'Configúralo en Configuración → Datos de la empresa '
-                      'para poder descargar.',
-                      style: TextStyle(fontSize: 12, height: 1.35),
-                    ),
-                  ),
-                ],
-              ),
+          if (rnc.isEmpty)
+            const _DgiiAviso(
+              'Tu empresa no tiene RNC configurado. DGII exige el RNC '
+              'del contribuyente en la primera línea del archivo. '
+              'Configúralo en Configuración → Datos de la empresa '
+              'para poder descargar.',
             ),
-          ],
+          if (!formato.desglosado)
+            _DgiiAviso(
+              formato.tipo == '606'
+                  ? 'La base de datos aún no tiene la migración 93: la forma '
+                      'de pago, la fecha de pago y el monto en servicios salen '
+                      'vacíos. Ejecútala en Supabase antes de enviar el 606.'
+                  : 'La base de datos aún no tiene la migración 93: todo lo '
+                      'cobrado sale como efectivo y la propina legal no se '
+                      'incluye. Ejecútala en Supabase antes de enviar el 607.',
+            ),
+          if (consumo != null && consumo.cantidad > 0)
+            _DgiiAviso(
+              'Facturas de consumo del mes: ${consumo.cantidad} · Monto '
+              '${money(consumo.montoFacturado)} · ITBIS '
+              '${money(consumo.itbis)}. Las menores de RD\$250,000 no van en '
+              'el TXT: se declaran en el "Resumen General de Facturas de '
+              'Consumo" de la Oficina Virtual (hoja "Resumen consumo" del '
+              'Excel).${count == 0 ? ' Como no hay otros comprobantes, marca '
+                  '"Sólo remitirá Factura(s) de Consumo" al enviar.' : ''}',
+              isWarning: false,
+            ),
           const SizedBox(height: AppTokens.s12),
-          Row(
+          Wrap(
+            spacing: AppTokens.s8,
+            runSpacing: AppTokens.s8,
             children: [
               FilledButton.icon(
                 onPressed: rnc.isEmpty || count == 0
                     ? null
                     : () async {
                         final messenger = ScaffoldMessenger.of(context);
-                        final txt = txtBuilder(data);
                         // Archivo real, no portapapeles: en web descarga, en
                         // escritorio abre "Guardar como", en móvil comparte.
                         // DGII pide el TXT en UTF-8.
                         final saved = await FileIoHelper.saveBytes(
-                          bytes: Uint8List.fromList(utf8.encode(txt)),
-                          fileName: '$fileName.txt',
+                          bytes: Uint8List.fromList(
+                            utf8.encode(formato.toTxt()),
+                          ),
+                          fileName: '$fileName.TXT',
                           extension: 'txt',
                           dialogTitle: 'Guardar $fileName para DGII',
                         );
@@ -3920,7 +3871,7 @@ class _DgiiReportSection extends StatelessWidget {
                             SnackBar(
                               backgroundColor: AppTokens.success,
                               content: Text(
-                                '$fileName.txt descargado ($count registros). '
+                                '$fileName.TXT descargado ($count registros). '
                                 'Súbelo a la oficina virtual de DGII.',
                                 style: const TextStyle(
                                     color: AppTokens.successForeground),
@@ -3931,6 +3882,41 @@ class _DgiiReportSection extends StatelessWidget {
                       },
                 icon: const Icon(Icons.download_rounded, size: 18),
                 label: Text('Descargar TXT ($fileName)'),
+              ),
+              // El Excel es para revisar / pasárselo al contable: no exige
+              // RNC y también sirve si solo hay consumo o inconsistencias.
+              OutlinedButton.icon(
+                onPressed: count == 0 &&
+                        inconsistenciesCount == 0 &&
+                        (consumo?.cantidad ?? 0) == 0
+                    ? null
+                    : () async {
+                        final messenger = ScaffoldMessenger.of(context);
+                        try {
+                          final saved = await FileIoHelper.saveBytes(
+                            bytes: xlsxBuilder(data),
+                            fileName: '$fileName.xlsx',
+                            extension: 'xlsx',
+                            dialogTitle: 'Guardar $fileName en Excel',
+                          );
+                          if (!saved) return;
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                '$fileName.xlsx descargado ($count registros).',
+                              ),
+                            ),
+                          );
+                        } catch (e) {
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text('No se pudo exportar a Excel: $e'),
+                            ),
+                          );
+                        }
+                      },
+                icon: const Icon(Icons.table_chart_outlined, size: 18),
+                label: const Text('Descargar Excel'),
               ),
             ],
           ),
@@ -3968,19 +3954,58 @@ class _DgiiReportSection extends StatelessWidget {
                 ),
           ),
           _SimpleTable(
-            columns: const ['NCF', 'Fecha', 'Documento', 'Monto', 'ITBIS'],
+            columns: const ['NCF', 'Fecha', 'RNC/Cédula', 'Monto', 'ITBIS'],
             rows: [
-              for (final raw in rows.take(50))
-                if (raw is Map)
-                  [
-                    (raw['ncf'] ?? '').toString(),
-                    (raw['fecha_comprobante'] ?? '').toString(),
-                    (raw['rnc_proveedor'] ?? raw['rnc_cliente'] ?? '—')
-                        .toString(),
-                    money((raw['monto_facturado'] as num?)?.toDouble() ?? 0),
-                    money((raw['itbis_facturado'] as num?)?.toDouble() ?? 0),
-                  ],
+              for (final fila in formato.filas.take(50))
+                [
+                  fila[claves.ncf] as String,
+                  fila[claves.fecha] as String,
+                  _orDash(fila[claves.documento] as String),
+                  money(fila[claves.monto]),
+                  money(fila[claves.itbis]),
+                ],
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _orDash(String v) => v.isEmpty ? '—' : v;
+}
+
+/// Aviso de la sección DGII (RNC faltante, migración pendiente, consumo).
+class _DgiiAviso extends StatelessWidget {
+  const _DgiiAviso(this.text, {this.isWarning = true});
+
+  final String text;
+  final bool isWarning;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isWarning ? AppTokens.warning : AppTokens.primary;
+    return Container(
+      margin: const EdgeInsets.only(top: AppTokens.s12),
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppTokens.radiusM),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            isWarning ? Icons.warning_amber_rounded : Icons.info_outline,
+            size: 18,
+            color: color,
+          ),
+          const SizedBox(width: AppTokens.s8),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 12, height: 1.35),
+            ),
           ),
         ],
       ),
@@ -4026,24 +4051,21 @@ class _Dgii606Report extends ConsumerWidget {
             onRetry: () => ref.invalidate(dgii606Provider),
           ),
           data: (data) {
-            final year = ref.read(dgiiYearProvider);
-            final month = ref.read(dgiiMonthProvider);
+            final formato = dgiiFormato606(data);
             _publishDgiiExport(
               ref,
+              formato: formato,
               data: data,
-              year: year,
-              month: month,
               fileBaseName: 'dgii_606',
               title: '606 — Compras DGII',
-              proveedorOrCliente: 'Proveedor',
+              xlsxBuilder: buildDgii606Xlsx,
             );
             return _DgiiReportSection(
               title: '606 — Compras DGII',
               data: data,
-              txtBuilder: _build606Txt,
-              fileName:
-                  'DGII_F_606_${(data['rnc_negocio'] ?? '').toString()}_'
-                  '$year${month.toString().padLeft(2, "0")}.TXT',
+              formato: formato,
+              xlsxBuilder: buildDgii606Xlsx,
+              fileName: 'DGII_F_606_${formato.rnc}_${formato.periodo}',
             );
           },
         ),
@@ -4069,24 +4091,21 @@ class _Dgii607Report extends ConsumerWidget {
             onRetry: () => ref.invalidate(dgii607Provider),
           ),
           data: (data) {
-            final year = ref.read(dgiiYearProvider);
-            final month = ref.read(dgiiMonthProvider);
+            final formato = dgiiFormato607(data);
             _publishDgiiExport(
               ref,
+              formato: formato,
               data: data,
-              year: year,
-              month: month,
               fileBaseName: 'dgii_607',
               title: '607 — Ventas DGII',
-              proveedorOrCliente: 'Cliente',
+              xlsxBuilder: buildDgii607Xlsx,
             );
             return _DgiiReportSection(
               title: '607 — Ventas DGII',
               data: data,
-              txtBuilder: _build607Txt,
-              fileName:
-                  'DGII_F_607_${(data['rnc_negocio'] ?? '').toString()}_'
-                  '$year${month.toString().padLeft(2, "0")}.TXT',
+              formato: formato,
+              xlsxBuilder: buildDgii607Xlsx,
+              fileName: 'DGII_F_607_${formato.rnc}_${formato.periodo}',
             );
           },
         ),
@@ -4452,12 +4471,14 @@ void _publishExport(
   WidgetRef ref, {
   required String fileBaseName,
   required ReportExportData Function() build,
+  Uint8List Function()? buildXlsx,
 }) {
   WidgetsBinding.instance.addPostFrameCallback((_) {
     ref.read(currentReportExportProvider.notifier).state =
         ReportExportSnapshot(
       fileBaseName: fileBaseName,
       buildData: build,
+      buildXlsx: buildXlsx,
     );
   });
 }
@@ -4778,43 +4799,41 @@ String _paymentMethodLabel(String method) {
   }
 }
 
-/// Publica un snapshot exportable para 606/607 con el formato común DGII:
-/// metadata (RNC, período, registros válidos/inconsistencias) + tabla con
-/// los primeros 200 registros para que quepa en el PDF/XLSX. El TXT oficial
-/// sigue siendo el botón "Copiar TXT" del propio reporte.
+/// Publica un snapshot exportable para 606/607. El PDF lleva la metadata
+/// (RNC, período, registros válidos/inconsistencias) + los primeros 200
+/// registros; el Excel sale de [xlsxBuilder] con todas las filas y columnas.
+/// El TXT oficial sigue siendo el botón "Descargar TXT" del propio reporte.
 void _publishDgiiExport(
   WidgetRef ref, {
+  required DgiiFormato formato,
   required Map<String, dynamic> data,
-  required int year,
-  required int month,
   required String fileBaseName,
   required String title,
-  required String proveedorOrCliente,
+  required Uint8List Function(Map<String, dynamic>) xlsxBuilder,
 }) {
-  final rnc = (data['rnc_negocio'] ?? '').toString();
-  final period = (data['period'] ?? '').toString();
-  final count = (data['records_count'] as num?)?.toInt() ?? 0;
+  final rnc = formato.rnc;
   final inconsistencies = (data['inconsistencies_count'] as num?)?.toInt() ?? 0;
-  final rows = (data['rows'] as List?) ?? const [];
+  final claves = formato.claves;
+  final consumo = formato.resumenConsumo;
 
   final tableRows = <List<String>>[
-    for (final raw in rows.take(200))
-      if (raw is Map)
-        [
-          (raw['ncf'] ?? '').toString(),
-          (raw['fecha_comprobante'] ?? '').toString(),
-          (raw['rnc_proveedor'] ?? raw['rnc_cliente'] ?? '—').toString(),
-          money((raw['monto_facturado'] as num?)?.toDouble() ?? 0),
-          money((raw['itbis_facturado'] as num?)?.toDouble() ?? 0),
-        ],
+    for (final fila in formato.filas.take(200))
+      [
+        fila[claves.ncf] as String,
+        fila[claves.fecha] as String,
+        fila[claves.documento] as String,
+        money(fila[claves.monto]),
+        money(fila[claves.itbis]),
+      ],
   ];
 
   _publishExport(
     ref,
-    fileBaseName: '${fileBaseName}_$year${month.toString().padLeft(2, '0')}',
+    fileBaseName: '${fileBaseName}_${formato.periodo}',
+    buildXlsx: () => xlsxBuilder(data),
     build: () => ReportExportData(
       title: title,
-      subtitle: 'Período $period',
+      subtitle: 'Período ${formato.periodo}',
       sections: [
         ReportSection(
           title: 'Resumen',
@@ -4823,15 +4842,28 @@ void _publishDgiiExport(
               'RNC negocio',
               rnc.isEmpty ? 'no configurado' : rnc,
             ),
-            ReportKv('Período', period),
-            ReportKv('Registros válidos', '$count'),
+            ReportKv('Período', formato.periodo),
+            ReportKv('Registros', '${formato.filas.length}'),
             ReportKv('Inconsistencias', '$inconsistencies'),
           ],
         ),
+        if (consumo != null)
+          ReportSection(
+            title: 'Resumen General de Facturas de Consumo',
+            kv: [
+              ReportKv('Cantidad NCFs emitidos', '${consumo.cantidad}'),
+              ReportKv('Total monto facturado', money(consumo.montoFacturado)),
+              ReportKv('Total ITBIS facturado', money(consumo.itbis)),
+              ReportKv('Total propina legal', money(consumo.propina)),
+              for (var i = 0; i < dgiiFormasVenta.length; i++)
+                ReportKv(dgiiFormasVenta[i], money(consumo.formasVenta[i])),
+              ReportKv('Total', money(consumo.total), highlight: true),
+            ],
+          ),
         ReportSection(
           title: 'Vista previa (primeros 200 registros)',
           table: ReportTable(
-            columns: ['NCF', 'Fecha', 'RNC $proveedorOrCliente', 'Monto', 'ITBIS'],
+            columns: const ['NCF', 'Fecha', 'RNC/Cédula', 'Monto', 'ITBIS'],
             rows: tableRows,
             numericColumns: const {3, 4},
           ),
@@ -4905,12 +4937,16 @@ Future<void> _exportCurrentSnapshot(
   final settings = ref.read(appSettingsProvider).valueOrNull;
   final branchName = ref.read(shellCurrentBranchNameProvider).valueOrNull;
   try {
-    final bytes = await ReportExportService().renderBytes(
-      data: snap.buildData(),
-      format: format,
-      settings: settings,
-      branchName: branchName,
-    );
+    final customXlsx =
+        format == ReportExportFormat.xlsx ? snap.buildXlsx : null;
+    final bytes = customXlsx != null
+        ? customXlsx()
+        : await ReportExportService().renderBytes(
+            data: snap.buildData(),
+            format: format,
+            settings: settings,
+            branchName: branchName,
+          );
     if (!context.mounted) return;
     final ext = format == ReportExportFormat.pdf ? 'pdf' : 'xlsx';
     final saved = await FileIoHelper.saveBytes(

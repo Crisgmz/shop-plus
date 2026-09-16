@@ -70,6 +70,9 @@ final missingNcfCountProvider =
         .select('id')
         .eq('branch_id', branchId)
         .inFilter('status', const ['completed', 'credit'])
+        // Una venta SIN comprobante (nota de venta) no lleva NCF por diseño:
+        // contarla como faltante disparaba la alerta con cada venta 'none'.
+        .neq('receipt_type', 'none')
         .or('ncf.is.null');
     return (rows as List).length;
   } catch (_) {

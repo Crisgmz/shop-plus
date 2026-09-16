@@ -223,30 +223,6 @@ class TaxesRepository {
     );
   }
 
-  String build607Csv(List<TaxSaleRecord> rows) {
-    final buffer = StringBuffer();
-    buffer.writeln(
-      'fecha,cliente,tipo_comprobante,ncf,total,itbis,estado_dgii',
-    );
-    for (final row in rows) {
-      buffer.writeln(
-        '${_escapeCsv(_date(row.saleDate))},${_escapeCsv(row.clientName)},${_escapeCsv(row.receiptType)},${_escapeCsv(row.ncf ?? '')},${row.totalAmount.toStringAsFixed(2)},${row.taxAmount.toStringAsFixed(2)},${_escapeCsv(row.dgiiStatus)}',
-      );
-    }
-    return buffer.toString();
-  }
-
-  String build606Csv(List<TaxPurchaseRecord> rows) {
-    final buffer = StringBuffer();
-    buffer.writeln('fecha,suplidor,numero_factura,total,itbis,estado');
-    for (final row in rows) {
-      buffer.writeln(
-        '${_escapeCsv(_date(row.purchaseDate))},${_escapeCsv(row.supplierName)},${_escapeCsv(row.invoiceNumber ?? '')},${row.totalAmount.toStringAsFixed(2)},${row.taxAmount.toStringAsFixed(2)},${_escapeCsv(row.status)}',
-      );
-    }
-    return buffer.toString();
-  }
-
   Future<List<TaxSaleRecord>> _fetchSales(
     String branchId,
     TaxesDateRange range,
@@ -334,11 +310,6 @@ String _date(DateTime value) {
   final month = value.month.toString().padLeft(2, '0');
   final year = value.year.toString();
   return '$year-$month-$day';
-}
-
-String _escapeCsv(String value) {
-  final escaped = value.replaceAll('"', '""');
-  return '"$escaped"';
 }
 
 double _toDouble(dynamic value) {

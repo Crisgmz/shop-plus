@@ -109,7 +109,15 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// ITBIS. Espeja `v_line_tax_rate` del RPC de checkout, que es quien fija
   /// los totales guardados — si el POS mostrara impuesto acá, el cajero
   /// cobraría un total distinto al que registra la venta.
-  bool get _chargesTax => _receiptType != 'none';
+  bool get _chargesTax => _receiptType != 'none' && !_clientSkipsTax;
+
+  /// El cliente seleccionado no paga ITBIS ("Cobrar ITBIS" apagado o exento en
+  /// su ficha). El checkout aplica la misma regla (migración 91).
+  bool get _clientSkipsTax {
+    final id = _clientId;
+    if (id == null) return false;
+    return ref.read(salesClientsByIdProvider)[id]?.skipsTax ?? false;
+  }
 
   // Sin comprobante no se factura ITBIS: la base es el NETO completo
   // (bruto − descuento), no `lineSubtotal`, que con precio ITBIS-incluido ya
@@ -825,15 +833,21 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     // se vende normalmente. Si no alcanza el inventario para una completa,
     // entra suelto. Suelto también se elige desde la línea.
     final packaging = product.packaging;
-    var uom = packaging.hasPacks ? PackagingUom.pack : PackagingUom.unit;
     // `tracksStock` excluye servicios y productos con stock negativo
     // permitido: el RPC no los valida contra inventario y el POS tampoco debe
     // hacerlo, o un servicio (stock 0) sería imposible de vender.
     final checksStock = _stockEnforced && product.tracksStock;
-    if (uom == PackagingUom.pack &&
-        checksStock &&
-        _cartBaseFor(product.id) + packaging.factorFor(uom) > product.stock) {
-      uom = PackagingUom.unit;
+    // Entra por la presentación MAYOR que alcance el inventario: caja, y si no
+    // da para una caja completa, paquete, y si no, suelto. En un producto de
+    // tres niveles (caja de 20 paquetes de 50) esto evita que entre por
+    // paquete teniendo cajas disponibles.
+    final inCart = _cartBaseFor(product.id);
+    var uom = packaging.sellableUoms.first;
+    if (checksStock) {
+      for (final option in packaging.sellableUoms) {
+        uom = option;
+        if (inCart + packaging.factorFor(option) <= product.stock) break;
+      }
     }
     final index = _cart.indexWhere(
       (item) => item.product.id == product.id && item.uom == uom,
@@ -894,7 +908,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     final minUnits = item.product.packaging.minUnitQty ?? 0;
     final startQty =
         next == PackagingUom.unit && minUnits > 1 ? minUnits : 1.0;
-    final candidate = item.copyWith(uom: next, quantity: startQty);
+    final candidate = item.copyWith(
+      uom: next,
+      quantity: startQty,
+      clearPresentationPrice: true,
+    );
     if (_stockEnforced &&
         item.product.tracksStock &&
         _cartBaseFor(item.product.id, exceptIndex: index) +
@@ -1057,26 +1075,13 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   void _setUnitPrice(int index, double value) {
     if (value < 0) return;
     final item = _cart[index];
-    // En una línea por presentación el campo muestra el precio de la caja. El
-    // precio que manda es el unitario: si el de la caja no se reparte exacto
-    // entre sus unidades, se ajusta al centavo por unidad y se avisa.
-    final unitValue = item.isPresentation
+    // En una línea por presentación el campo ES el precio de la caja y se
+    // respeta tal cual: el checkout cobra la línea desde él (migración 92).
+    // Antes se repartía al centavo por unidad y la caja perdía centavos.
+    final unitEquivalent = item.isPresentation
         ? ProductPackaging.unitPriceFromPresentation(value, item.uomFactor)
         : value;
-    if (item.isPresentation) {
-      final adjusted = (unitValue * item.uomFactor * 100).roundToDouble() / 100;
-      if ((adjusted - value).abs() >= 0.005) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Precio por ${item.presentationLabel.toLowerCase()} ajustado a '
-              '${money(adjusted)} (${money(unitValue)} por unidad).',
-            ),
-          ),
-        );
-      }
-    }
-    if (_belowCostEnforced && unitValue < item.product.cost) {
+    if (_belowCostEnforced && unitEquivalent < item.product.cost) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -1085,7 +1090,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         ),
       );
     }
-    setState(() => _cart[index] = item.copyWith(unitPrice: unitValue));
+    setState(
+      () => _cart[index] = item.isPresentation
+          ? item.copyWith(presentationPriceOverride: value)
+          : item.copyWith(unitPrice: value),
+    );
     _persistDraft();
   }
 
@@ -1107,6 +1116,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       () => _cart[index] = item.copyWith(
         unitPrice: newPrice,
         priceTier: tierKey,
+        clearPresentationPrice: true,
       ),
     );
     _persistDraft();
@@ -1138,6 +1148,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         _cart[i] = item.copyWith(
           unitPrice: item.product.priceFor(tier),
           priceTier: tier,
+          clearPresentationPrice: true,
         );
       }
     });
@@ -1215,6 +1226,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           disallowNoStock: settings?.invDisallowNoStock ?? false,
           customerRequiredForSale: settings?.customerRequiredForSale ?? false,
           replaceHoldSaleId: _reopenedHeldSaleId,
+          clientSkipsTax: _clientSkipsTax,
         ),
       );
       ref.invalidate(salesProductsProvider);
@@ -1424,6 +1436,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           disallowNoStock: settings?.invDisallowNoStock ?? false,
           customerRequiredForSale: settings?.customerRequiredForSale ?? false,
           creditAllowSales: settings?.creditAllowSales ?? true,
+          clientSkipsTax: _clientSkipsTax,
           creditDueDays: creditDueDays,
           cashSessionId: ref.read(activeCashSessionIdProvider),
           // Si esta venta viene de una cuenta GUARDADA reabierta, el backend la
@@ -1502,6 +1515,17 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                 ),
             ],
           ),
+        );
+      }
+
+      // La venta se guardó aunque el recibo no se pudo armar. Decirlo claro:
+      // sin este aviso el cajero no sabe que ya está cobrada.
+      if (result.receiptError != null) {
+        if (!mounted) return;
+        AppSnackBar.info(
+          context,
+          'Venta #${result.saleNumber} registrada, pero el recibo no se pudo '
+          'preparar. Reimprímalo desde el historial.',
         );
       }
     } catch (e) {
@@ -2361,7 +2385,22 @@ class _ProductCard extends StatelessWidget {
     final initial = product.name.isNotEmpty
         ? product.name[0].toUpperCase()
         : '?';
-    final isLowStock = product.stock <= 5;
+    // Un servicio no tiene existencia que agotar, y un producto sin control
+    // de inventario tampoco. Como su stock es 0, el umbral fijo los marcaba
+    // "Bajo stock" SIEMPRE. El umbral de 5 se mantiene: el POS no trae
+    // `min_stock` entre las columnas que consulta.
+    final hasInventory = product.hasInventory;
+    // Con empaque la tarjeta habla en la presentación grande: el stock se
+    // guarda en la unidad base, y "1020" paquetes se leía como si no hubiera
+    // caja. Se muestran 51 cajas al precio de la caja.
+    final packaging = product.packaging;
+    final shownStock = packaging.hasPacks
+        ? packaging.wholeLargest(product.stock).toDouble()
+        : product.stock;
+    final shownPrice = packaging.hasPacks
+        ? packaging.priceFor(packaging.largestUom, product.price)
+        : product.price;
+    final isLowStock = hasInventory && shownStock <= 5;
 
     return InkWell(
       onTap: onTap,
@@ -2449,7 +2488,7 @@ class _ProductCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  money(product.price),
+                  money(shownPrice),
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 14,
@@ -2457,6 +2496,17 @@ class _ProductCard extends StatelessWidget {
                     color: Color(0xFF2563EB),
                   ),
                 ),
+                if (packaging.contentLabel != null)
+                  Text(
+                    packaging.contentLabel!,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: AppTokens.mutedForeground,
+                    ),
+                  ),
                 if (isLowStock) ...[
                   const SizedBox(height: 6),
                   Container(
@@ -2481,11 +2531,13 @@ class _ProductCard extends StatelessWidget {
               ],
             ),
           ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: _StockBadge(stock: product.stock),
-          ),
+          // Un "0" rojo sobre un servicio no informa nada: no hay existencia.
+          if (hasInventory)
+            Positioned(
+              top: 8,
+              right: 8,
+              child: _StockBadge(stock: shownStock),
+            ),
         ],
       ),
     );
@@ -2861,7 +2913,7 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
                   ),
                   const SizedBox(width: 12),
                   Text(
-                    money(item.unitPrice * packaging.factorFor(uom)),
+                    money(packaging.priceFor(uom, item.unitPrice)),
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,

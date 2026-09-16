@@ -352,11 +352,17 @@ class FlexTableColumn {
     required this.label,
     this.flex = 1,
     this.numeric = false,
+    this.width,
   });
 
   final String label;
   final int flex;
   final bool numeric;
+
+  /// Ancho fijo en píxeles (padding incluido). Para columnas de contenido
+  /// predecible —fechas, montos, NCF, acciones—: así no se quedan cortas ni le
+  /// roban espacio a las de texto libre. Null = reparte por [flex].
+  final double? width;
 }
 
 class FlexTable extends StatelessWidget {
@@ -364,20 +370,44 @@ class FlexTable extends StatelessWidget {
     super.key,
     required this.columns,
     required this.rows,
+    this.singleLine = false,
+    this.minWidth,
   });
 
   final List<FlexTableColumn> columns;
   final List<List<Widget>> rows;
 
-  static const _headerBg = Color(0xFFF8FAFC);
-  static const _divider = Color(0xFFE2E8F0);
-  static const _headerColor = Color(0xFF475569);
+  /// Cada celda en UNA línea: el texto que no cabe se corta con "…" en vez de
+  /// partirse a la mitad de una palabra ("Paga / da", "6,200.0 / 0").
+  final bool singleLine;
+
+  /// Ancho mínimo de la tabla. En una pantalla más angosta la tabla se
+  /// desplaza horizontalmente en vez de aplastar las columnas.
+  final double? minWidth;
 
   @override
   Widget build(BuildContext context) {
+    final min = minWidth;
+    if (min == null) return _table();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth.isFinite && constraints.maxWidth >= min) {
+          return _table();
+        }
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(width: min, child: _table()),
+        );
+      },
+    );
+  }
+
+  Widget _table() {
     final colWidths = <int, TableColumnWidth>{
       for (int i = 0; i < columns.length; i++)
-        i: FlexColumnWidth(columns[i].flex.toDouble()),
+        i: columns[i].width != null
+            ? FixedColumnWidth(columns[i].width!)
+            : FlexColumnWidth(columns[i].flex.toDouble()),
     };
 
     return Table(
@@ -385,15 +415,18 @@ class FlexTable extends StatelessWidget {
       defaultVerticalAlignment: TableCellVerticalAlignment.middle,
       children: [
         TableRow(
-          decoration: const BoxDecoration(color: _headerBg),
+          decoration: const BoxDecoration(color: AppTokens.background),
           children: columns
               .map((c) => _cell(
                     Text(
                       c.label,
+                      maxLines: singleLine ? 1 : null,
+                      overflow: singleLine ? TextOverflow.ellipsis : null,
+                      softWrap: singleLine ? false : null,
                       style: const TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 13,
-                        color: _headerColor,
+                        color: AppTokens.secondaryForeground,
                       ),
                       textAlign: c.numeric ? TextAlign.right : TextAlign.left,
                     ),
@@ -405,8 +438,8 @@ class FlexTable extends StatelessWidget {
         for (int r = 0; r < rows.length; r++)
           TableRow(
             decoration: BoxDecoration(
-              color: r.isOdd ? const Color(0xFFFAFAFA) : Colors.white,
-              border: const Border(top: BorderSide(color: _divider)),
+              color: r.isOdd ? AppTokens.background : AppTokens.card,
+              border: const Border(top: BorderSide(color: AppTokens.border)),
             ),
             children: rows[r]
                 .asMap()
@@ -414,7 +447,12 @@ class FlexTable extends StatelessWidget {
                 .map((e) => _cell(
                       DefaultTextStyle.merge(
                         style: const TextStyle(fontSize: 13),
-                        textAlign: columns[e.key].numeric ? TextAlign.right : TextAlign.left,
+                        textAlign: columns[e.key].numeric
+                            ? TextAlign.right
+                            : TextAlign.left,
+                        maxLines: singleLine ? 1 : null,
+                        overflow: singleLine ? TextOverflow.ellipsis : null,
+                        softWrap: singleLine ? false : null,
                         child: e.value,
                       ),
                       numeric: columns[e.key].numeric,
@@ -428,7 +466,9 @@ class FlexTable extends StatelessWidget {
   Widget _cell(Widget child, {bool isHeader = false, bool numeric = false}) {
     return Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: 16,
+        // Tabla densa de una línea: 12 por lado en vez de 16. Con diez
+        // columnas son 80 px que vuelven a los datos.
+        horizontal: singleLine ? 12 : 16,
         vertical: isHeader ? 12 : 14,
       ),
       child: Align(

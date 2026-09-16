@@ -236,18 +236,33 @@ class SalesHistoryRepository {
     bool clearClient = false,
     String? notes,
     bool clearNotes = false,
+    bool clientSkipsTax = false,
   }) async {
-    final result = await _client.rpc(
-      'edit_sale_transactional',
-      params: {
-        'p_sale_id': saleId,
-        'p_items': items,
-        'p_client_id': clientId,
-        'p_clear_client': clearClient,
-        'p_notes': notes,
-        'p_clear_notes': clearNotes,
-      },
-    );
+    final dynamic result;
+    try {
+      result = await _client.rpc(
+        'edit_sale_transactional',
+        params: {
+          'p_sale_id': saleId,
+          'p_items': items,
+          'p_client_id': clientId,
+          'p_clear_client': clearClient,
+          'p_notes': notes,
+          'p_clear_notes': clearNotes,
+          // Solo si el cliente con que queda la venta no paga ITBIS (migración
+          // 91). Mandarlo siempre rompería toda edición antes de la migración.
+          if (clientSkipsTax) 'p_honor_client_tax': true,
+        },
+      );
+    } on PostgrestException catch (error) {
+      if (clientSkipsTax && error.code == 'PGRST202') {
+        throw Exception(
+          'Para dejar esta venta sin ITBIS falta aplicar la migración 91 en la '
+          'base de datos.',
+        );
+      }
+      rethrow;
+    }
     final map = Map<String, dynamic>.from(result as Map);
     return SalesEditResult(
       saleId: (map['sale_id'] ?? saleId).toString(),

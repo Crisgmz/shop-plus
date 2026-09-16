@@ -161,10 +161,33 @@ Triggers actuales soportan:
   de `payments` cuadran. Por eso la regla vive en los RPC —donde se suman los
   totales— y no en un trigger.
 - `normalize_receipt_type` acepta `'none'`, `'sin comprobante'` y `'ninguno'`.
-- Queda fuera del 606/607: esos reportes filtran `ncf is not null`.
+- En el 607 SÍ aparece: `dgii_607_data` (migraciones 23 y 93) lista todas las ventas
+  del período y marca las que no tienen NCF como inconsistencia "NCF faltante".
+  Se dejó así a propósito: para la DGII una venta sin NCF es una inconsistencia,
+  y ocultarla del reporte es una decisión fiscal del negocio.
+- `bulk_assign_missing_ncfs` ("Asignar faltantes") y el aviso de ventas sin NCF
+  la excluyen desde la migración 90: no lleva NCF por diseño.
 - El comprobante con el que arranca cada venta en el POS sale de
   `branch_fiscal_settings.default_receipt_type` (Ajustes → Fiscal). Si ese tipo
   necesita NCF y no hay secuencia disponible, el POS cae a `'none'`.
+
+### ITBIS del cliente ("Cobrar ITBIS" / "Exento de impuestos")
+`clients.charge_itbis` (default true) y `clients.tax_exempt` (default false).
+Hasta la migración `20260915_91_honor_client_itbis.sql` ninguna función de cobro
+las leía.
+
+- Es OPT-IN por el parámetro `p_honor_client_tax boolean default false` en
+  `checkout_sale_transactional`, `hold_sale_transactional` y
+  `edit_sale_transactional`, porque las comparten shop-plus y flutter_shop+.
+  Quien no lo manda (hoy flutter_shop+) factura igual que antes.
+- Con el parámetro en `true`, si el cliente tiene `tax_exempt = true` o
+  `charge_itbis = false`, la tasa de cada línea es 0. Vive en la tasa por línea,
+  junto a la regla de `'none'` y del producto exento, para que totales, pagos y
+  saldo cuadren.
+- shop-plus manda el parámetro SOLO cuando el cliente no paga ITBIS: una venta
+  normal no depende de que la migración esté aplicada.
+- Las tres funciones cambiaron de firma (un parámetro más); la migración elimina
+  las versiones anteriores en la misma transacción para no dejar sobrecargas.
 
 ### Numeración de ventas
 `trg_sales_short_number` (BEFORE INSERT en `sales`, migración
@@ -187,10 +210,18 @@ SIEMPRE la unidad base; cajas y paquetes se derivan, nunca se guardan aparte.
 - Configuración por producto (86): `pack_label` = presentación (Empaque /
   Paquete / Caja), `units_per_pack` = unidades que trae, `min_unit_qty` = venta
   mínima al vender suelto. `units_per_pack` NULL = producto sin empaque.
-- El precio UNITARIO manda: una presentación vale unitario × unidades, así el
-  checkout calcula exacto al centavo sin conocer empaques.
-- `checkout_sale_transactional` NO se toca (lo comparte `flutter_shop+`): recibe
-  `quantity` en unidades base.
+- Precio (92): `pack_price` es lo que cuesta la presentación COMPLETA y se
+  cobra tal cual. Solo si está vacío se deriva como unitario × unidades. La
+  diferencia es real: una caja de 20 paquetes a 2,639.83 no es 131.99 × 20
+  (= 2,639.80). `unit_label` nombra la unidad base ("Paquete" en un negocio que
+  nunca vende sueltas).
+- `checkout_sale_transactional` lo comparte `flutter_shop+`, así que `quantity`
+  sigue viajando en unidades base. La 92 sí cambió el CUERPO de las tres RPC
+  (checkout / hold / edit), nunca la firma: si la línea trae `uom_price` y
+  `uom_factor`, el bruto sale de `uom_price × (quantity / uom_factor)`; si no
+  vienen — que es siempre el caso de la otra app — hace exactamente lo de antes,
+  `unit_price × quantity`. Guarda los cuatro campos en `sale_items`
+  (`uom`, `uom_factor`, `uom_price`, `unit_name`).
 - `tag_sale_item_presentations(sale_id, lines)` (89, función nueva) marca después
   del cobro `sale_items.uom`, `uom_factor` y `unit_name` para que la factura diga
   "1 Caja". Busca la fila por (venta, producto, cantidad, precio) entre las que
@@ -202,6 +233,29 @@ SIEMPRE la unidad base; cajas y paquetes se derivan, nunca se guardan aparte.
   para cuadrar con la factura del proveedor.
 - Límite conocido: `edit_sale_transactional` reinserta las líneas y pierde la
   marca. La venta editada se imprime en unidades (plata e inventario correctos).
+
+### Tiempo real
+Migración `20260916_93_realtime_todas_las_pantallas.sql`: fuente ÚNICA de las
+tablas publicadas en `supabase_realtime` (20). Reaplica las de las migraciones
+24/41/46 y agrega cotizaciones, compras, suplidores, gastos, pagos a
+suplidores, caja chica, secuencias NCF y cajas.
+
+- Toda tabla publicada lleva `branch_id`, política de SELECT y
+  `REPLICA IDENTITY FULL`. El cliente filtra por sucursal; sin FULL, un DELETE
+  no trae `branch_id` y el filtro lo descarta.
+- El cliente (`lib/core/realtime/realtime_invalidator.dart`) invalida providers
+  por tabla. Solo providers de DATOS: invalidar un `StateProvider` le reinicia
+  al usuario sus filtros (fechas de reportes, mes DGII) cada vez que alguien
+  vende.
+- Agrupa los eventos en ventanas de 400 ms —una venta dispara decenas— y, al
+  reconectar un canal, recarga lo de esa tabla: los eventos del corte se
+  pierden.
+- Poner una tabla nueva en tiempo real = publicarla por migración y agregarla
+  a `_tableToProviders`. Un test compara ambas listas.
+- Base compartida con `flutter_shop+`: publicar tablas es aditivo; la otra app
+  no se suscribe a las nuevas.
+- Fuera a propósito: `cash_register_users` (no tiene `branch_id`) y las tablas
+  de configuración (usuarios, sucursales, ajustes), que casi no cambian.
 
 ## 6) Vistas actuales de reportes
 

@@ -95,17 +95,24 @@ class _SalesHistoryPageState extends ConsumerState<SalesHistoryPage> {
                           ),
                         )
                       : FlexTable(
+                          // Cada venta en UNA fila. Lo de contenido
+                          // predecible va a ancho fijo; el espacio que sobra
+                          // es para lo que varía (cliente, caja, cobro).
+                          singleLine: true,
+                          minWidth: 1080,
                           columns: const [
-                            FlexTableColumn(label: 'Fecha'),
-                            FlexTableColumn(label: 'Número', flex: 2),
-                            FlexTableColumn(label: 'Cliente', flex: 2),
-                            FlexTableColumn(label: 'NCF'),
-                            FlexTableColumn(label: 'Estado'),
+                            FlexTableColumn(label: 'Fecha', width: 96),
+                            FlexTableColumn(label: 'Número', width: 96),
+                            FlexTableColumn(label: 'Cliente', flex: 3),
+                            FlexTableColumn(label: 'NCF', width: 120),
+                            FlexTableColumn(label: 'Estado', width: 100),
                             FlexTableColumn(label: 'Caja', flex: 2),
                             FlexTableColumn(label: 'Cobro', flex: 2),
-                            FlexTableColumn(label: 'Total', numeric: true),
-                            FlexTableColumn(label: 'Ganancia', numeric: true),
-                            FlexTableColumn(label: 'Acción', flex: 2),
+                            FlexTableColumn(
+                                label: 'Total', numeric: true, width: 116),
+                            FlexTableColumn(
+                                label: 'Ganancia', numeric: true, width: 116),
+                            FlexTableColumn(label: 'Acciones', width: 124),
                           ],
                           rows: page.rows
                               .map((row) => [
@@ -117,32 +124,31 @@ class _SalesHistoryPageState extends ConsumerState<SalesHistoryPage> {
                                         fontSize: 12,
                                       ),
                                     ),
-                                    Text(row.clientName ?? 'Cliente General'),
+                                    _TruncatedText(
+                                      row.clientName ?? 'Cliente General',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
                                     Text(
-                                      row.ncf ?? '-',
+                                      row.ncf ?? '—',
                                       style: const TextStyle(
                                         fontFamily: 'monospace',
                                         fontSize: 12,
                                       ),
                                     ),
                                     _StatusChip(status: row.status),
-                                    Text(row.cashRegisterName ?? '—'),
+                                    _TruncatedText(
+                                        row.cashRegisterName ?? '—'),
                                     _paymentMethodsCell(
                                         row.paymentMethod, row.status),
-                                    Text(
-                                      money(row.totalAmount),
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                    Text(
-                                      money(row.profit),
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        color: row.profit < 0
-                                            ? AppTokens.destructive
-                                            : AppTokens.success,
-                                      ),
+                                    _MoneyCell(row.totalAmount),
+                                    _MoneyCell(
+                                      row.profit,
+                                      weight: FontWeight.w600,
+                                      color: _ink(row.profit < 0
+                                          ? AppTokens.destructive
+                                          : AppTokens.success),
                                     ),
                                     _RowActions(row: row),
                                   ])
@@ -186,8 +192,9 @@ String _singleMethodLabel(String method) {
   }
 }
 
-/// Celda de cobro. Si hubo varios métodos (ej. "cash,transfer"), los muestra
-/// uno debajo del otro. Si no hay pagos pero la venta es a crédito, "Crédito".
+/// Celda de cobro en UNA línea: varios métodos van juntos ("Efectivo +
+/// Transferencia") y el tooltip muestra el texto completo si no cabe. Si no hay
+/// pagos pero la venta es a crédito, "Crédito".
 Widget _paymentMethodsCell(String? method, String status) {
   final raw = method?.trim() ?? '';
   final labels = raw.isEmpty
@@ -197,15 +204,58 @@ Widget _paymentMethodsCell(String? method, String status) {
           .where((m) => m.trim().isNotEmpty)
           .map((m) => _singleMethodLabel(m.trim()))
           .toList(growable: false);
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      for (final l in labels)
-        Text(l, style: const TextStyle(fontSize: 13)),
-    ],
-  );
+  return _TruncatedText(labels.join(' + '));
 }
+
+/// Texto de una línea que muestra el contenido completo al pasar el mouse.
+/// Para las columnas que pueden cortarse con "…" (cliente, caja, cobro).
+class _TruncatedText extends StatelessWidget {
+  const _TruncatedText(this.text, {this.style});
+
+  final String text;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: text,
+      waitDuration: const Duration(milliseconds: 500),
+      child: Text(text, style: style),
+    );
+  }
+}
+
+/// Monto alineado a la derecha con dígitos de ancho fijo, para que las cifras
+/// de una columna queden una debajo de la otra. Un monto que no cabe se
+/// ACHICA en vez de cortarse: con "…" un RD$ 1,250,000.00 se leería mal.
+class _MoneyCell extends StatelessWidget {
+  const _MoneyCell(this.amount, {this.weight = FontWeight.w700, this.color});
+
+  final double amount;
+  final FontWeight weight;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerRight,
+      child: Text(
+        money(amount),
+        style: TextStyle(
+          fontWeight: weight,
+          color: color,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
+      ),
+    );
+  }
+}
+
+/// Versión legible de un color de estado para usarlo como TEXTO. Los tokens
+/// de éxito y advertencia son claros para fondo; como letra sobre blanco no
+/// se leen bien. Se oscurecen hacia el color de texto, sin inventar un hex.
+Color _ink(Color color) => Color.lerp(color, AppTokens.foreground, 0.35)!;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Filtros: fechas + búsqueda + status
@@ -406,10 +456,10 @@ class _StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (status) {
-      'completed' => ('Pagada', const Color(0xFF16A34A)),
-      'credit' => ('Crédito', const Color(0xFFF59E0B)),
-      'pending' => ('Pendiente', const Color(0xFF6B7280)),
-      'voided' => ('Anulada', const Color(0xFFEF4444)),
+      'completed' => ('Pagada', AppTokens.success),
+      'credit' => ('Crédito', AppTokens.warning),
+      'pending' => ('Pendiente', AppTokens.mutedForeground),
+      'voided' => ('Anulada', AppTokens.destructive),
       _ => (status, AppTokens.mutedForeground),
     };
     return Container(
@@ -420,8 +470,11 @@ class _StatusChip extends StatelessWidget {
       ),
       child: Text(
         label,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
-          color: color,
+          color: _ink(color),
           fontWeight: FontWeight.w700,
           fontSize: 11,
         ),
@@ -444,77 +497,71 @@ class _RowActions extends ConsumerWidget {
     // Cuentas GUARDADAS (pendientes): acciones propias — reabrir para cobrar o
     // descartar (devuelve el stock reservado). No aplica reimprimir/editar/
     // anular porque todavía no es una venta real.
+    // Siempre tres espacios —dos acciones visibles y un menú— para que la
+    // columna mida lo mismo en todas las filas y nunca baje a una segunda
+    // línea. Lo destructivo va dentro del menú, lejos de un clic accidental.
+
+    // Cuentas GUARDADAS (pendientes): reabrir para cobrar o descartar (devuelve
+    // el stock reservado). No aplica reimprimir/editar/anular porque todavía no
+    // es una venta real.
     if (row.status == 'pending') {
-      return Wrap(
-        spacing: 4,
+      return Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
+          _ActionIcon(
             tooltip: 'Ver detalle',
-            icon: const Icon(Icons.visibility_outlined, size: 18),
-            visualDensity: VisualDensity.compact,
+            icon: Icons.visibility_outlined,
             onPressed: () => _showDetail(context, ref, row.id),
           ),
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF22C55E),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              visualDensity: VisualDensity.compact,
-            ),
-            icon: const Icon(Icons.play_arrow, size: 18),
-            label: const Text('Reabrir'),
+          _ActionIcon(
+            tooltip: 'Reabrir para cobrar',
+            icon: Icons.play_circle_outline,
+            color: _ink(AppTokens.success),
             onPressed: () => _reopenHeldSale(context, ref, row),
           ),
-          IconButton(
-            tooltip: 'Descartar cuenta (devuelve stock)',
-            icon: const Icon(
-              Icons.delete_outline,
-              size: 18,
-              color: AppTokens.error,
-            ),
-            visualDensity: VisualDensity.compact,
-            onPressed: () => _discardHeldSale(context, ref, row),
+          _MoreActions(
+            items: const [
+              _MenuAction('discard', 'Descartar cuenta (devuelve stock)',
+                  Icons.delete_outline,
+                  destructive: true),
+            ],
+            onSelected: (_) => _discardHeldSale(context, ref, row),
           ),
         ],
       );
     }
 
-    return Wrap(
-      spacing: 4,
+    return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        IconButton(
+        _ActionIcon(
           tooltip: 'Ver detalle',
-          icon: const Icon(Icons.visibility_outlined, size: 18),
-          visualDensity: VisualDensity.compact,
+          icon: Icons.visibility_outlined,
           onPressed: () => _showDetail(context, ref, row.id),
         ),
-        IconButton(
+        _ActionIcon(
           tooltip: 'Reimprimir',
-          icon: const Icon(Icons.print_outlined, size: 18),
-          visualDensity: VisualDensity.compact,
+          icon: Icons.print_outlined,
           onPressed: () => _reprint(context, ref, row.id),
         ),
-        IconButton(
-          tooltip: 'Editar notas / cliente',
-          icon: const Icon(Icons.edit_outlined, size: 18),
-          visualDensity: VisualDensity.compact,
-          onPressed: () => _editMetadata(context, ref, row),
-        ),
-        IconButton(
-          tooltip: 'Editar venta completa',
-          icon: const Icon(Icons.edit_note, size: 20),
-          visualDensity: VisualDensity.compact,
-          onPressed: () =>
-              context.go('/ventas/historial/${row.id}/editar'),
-        ),
-        IconButton(
-          tooltip: 'Eliminar (anular y devolver stock)',
-          icon: const Icon(
-            Icons.delete_outline,
-            size: 18,
-            color: AppTokens.error,
-          ),
-          visualDensity: VisualDensity.compact,
-          onPressed: () => _voidSale(context, ref, row),
+        _MoreActions(
+          items: const [
+            _MenuAction('notes', 'Editar notas / cliente', Icons.edit_outlined),
+            _MenuAction('edit', 'Editar venta completa', Icons.edit_note),
+            _MenuAction('void', 'Anular venta (devuelve stock)',
+                Icons.delete_outline,
+                destructive: true),
+          ],
+          onSelected: (action) {
+            switch (action) {
+              case 'notes':
+                _editMetadata(context, ref, row);
+              case 'edit':
+                context.go('/ventas/historial/${row.id}/editar');
+              case 'void':
+                _voidSale(context, ref, row);
+            }
+          },
         ),
       ],
     );
@@ -1016,6 +1063,92 @@ class _MetadataEditDialogState
           child: const Text('Guardar'),
         ),
       ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Piezas de la columna de acciones
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Botón de ícono compacto de 32 px: tres caben en la columna de acciones.
+class _ActionIcon extends StatelessWidget {
+  const _ActionIcon({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    this.color,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18, color: color),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+}
+
+class _MenuAction {
+  const _MenuAction(this.value, this.label, this.icon,
+      {this.destructive = false});
+
+  final String value;
+  final String label;
+  final IconData icon;
+  final bool destructive;
+}
+
+/// Menú "⋮" con el mismo estilo que el de Clientes. Lo destructivo va
+/// separado por una línea y en rojo.
+class _MoreActions extends StatelessWidget {
+  const _MoreActions({required this.items, required this.onSelected});
+
+  final List<_MenuAction> items;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      tooltip: 'Más acciones',
+      onSelected: onSelected,
+      itemBuilder: (_) => [
+        for (var i = 0; i < items.length; i++) ...[
+          if (items[i].destructive && i > 0) const PopupMenuDivider(),
+          PopupMenuItem<String>(
+            value: items[i].value,
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                items[i].icon,
+                size: 18,
+                color: items[i].destructive ? AppTokens.destructive : null,
+              ),
+              title: Text(
+                items[i].label,
+                style: items[i].destructive
+                    ? const TextStyle(color: AppTokens.destructive)
+                    : null,
+              ),
+            ),
+          ),
+        ],
+      ],
+      child: const SizedBox(
+        width: 32,
+        height: 32,
+        child: Icon(Icons.more_vert, size: 18),
+      ),
     );
   }
 }
