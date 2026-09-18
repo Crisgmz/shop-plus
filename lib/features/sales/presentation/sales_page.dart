@@ -2401,6 +2401,23 @@ class _ProductCard extends StatelessWidget {
         ? packaging.priceFor(packaging.largestUom, product.price)
         : product.price;
     final isLowStock = hasInventory && shownStock <= 5;
+    // Comparación para el cajero: dentro de la caja el paquete sale a 131.99;
+    // suelto, al precio que el negocio le puso (más caro).
+    final List<String> packagingLines;
+    if (packaging.hasPacks) {
+      final large = packaging.largestUom;
+      final units = packaging.factorFor(large);
+      final n = units == units.roundToDouble()
+          ? units.toInt().toString()
+          : units.toString();
+      packagingLines = [
+        '${packaging.labelFor(large)}: $n × '
+            '${money(packaging.pricePerBaseUnit(large, product.price))}',
+        '${packaging.effectiveUnitLabel}: ${money(product.price)}',
+      ];
+    } else {
+      packagingLines = const [];
+    }
 
     return InkWell(
       onTap: onTap,
@@ -2496,9 +2513,9 @@ class _ProductCard extends StatelessWidget {
                     color: Color(0xFF2563EB),
                   ),
                 ),
-                if (packaging.contentLabel != null)
+                for (final line in packagingLines)
                   Text(
-                    packaging.contentLabel!,
+                    line,
                     textAlign: TextAlign.center,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -2887,6 +2904,20 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
       return '$label · $n u';
     }
 
+    // Debajo de cada opción: cuánto sale el paquete dentro de la caja, o el
+    // mínimo al vender suelto. Así se ve que suelto es más caro.
+    String? detail(PackagingUom uom) {
+      final unit = packaging.effectiveUnitLabel.toLowerCase();
+      if (uom != PackagingUom.unit) {
+        return '${money(packaging.pricePerBaseUnit(uom, item.unitPrice))} '
+            'por $unit';
+      }
+      final min = packaging.minUnitQty ?? 0;
+      if (min <= 1) return null;
+      final n = min == min.roundToDouble() ? min.toInt() : min;
+      return 'Mínimo $n ${pluralLabel(unit, n)}';
+    }
+
     return Align(
       alignment: Alignment.centerLeft,
       widthFactor: 1,
@@ -2898,18 +2929,32 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
           for (final uom in packaging.sellableUoms)
             PopupMenuItem<PackagingUom>(
               value: uom,
-              height: 40,
+              height: 48,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    describe(uom),
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: uom == item.uom
-                          ? FontWeight.w700
-                          : FontWeight.w500,
-                    ),
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        describe(uom),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: uom == item.uom
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                        ),
+                      ),
+                      if (detail(uom) case final text?)
+                        Text(
+                          text,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppTokens.mutedForeground,
+                          ),
+                        ),
+                    ],
                   ),
                   const SizedBox(width: 12),
                   Text(

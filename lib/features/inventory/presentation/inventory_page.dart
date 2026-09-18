@@ -1849,6 +1849,8 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     _unitLabelController.addListener(_refreshPackagingLabels);
     _unitsPerPackController.addListener(_refreshPackagingLabels);
     _stockController.addListener(_refreshPackagingLabels);
+    _priceController.addListener(_refreshPackagingLabels);
+    _packPriceController.addListener(_refreshPackagingLabels);
   }
 
   void _refreshPackagingLabels() {
@@ -1865,6 +1867,38 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
 
   /// Unidad base en plural y minúscula: "paquetes", "unidades".
   String get _unitPlural => pluralLabel(_unitSingular, 2);
+
+  /// Cuánto sale cada unidad base dentro de la presentación: caja de 20 a
+  /// 2,639.83 → 131.99. `null` si falta el precio de la caja o las unidades.
+  double? get _unitPriceInsidePack {
+    if (!_packaged) return null;
+    final perPack = double.tryParse(_unitsPerPackController.text.trim());
+    final packPrice = double.tryParse(_packPriceController.text.trim());
+    if (perPack == null || perPack <= 0 || packPrice == null || packPrice <= 0) {
+      return null;
+    }
+    return ProductPackaging(unitsPerPack: perPack, packPrice: packPrice)
+        .pricePerBaseUnit(PackagingUom.pack, 0);
+  }
+
+  /// Bajo el precio: con cuánto se compara. El negocio vende suelto más caro
+  /// que dentro de la caja; si queda más barato, casi seguro es un error.
+  String? get _priceHelper {
+    final inside = _unitPriceInsidePack;
+    if (inside == null) return null;
+    final label = _presentation.toLowerCase();
+    final price = double.tryParse(_priceController.text.trim());
+    if (price != null && price > 0 && price < inside) {
+      return 'Más barato que dentro de la $label (${money(inside)})';
+    }
+    return 'Dentro de la $label sale a ${money(inside)}';
+  }
+
+  bool get _priceBelowPack {
+    final inside = _unitPriceInsidePack;
+    final price = double.tryParse(_priceController.text.trim());
+    return inside != null && price != null && price > 0 && price < inside;
+  }
 
   /// "= 51 Cajas" bajo el stock, con lo que hay escrito ahora mismo.
   String? get _stockEquivalence {
@@ -2082,8 +2116,12 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                     ),
                     decoration: InputDecoration(
                       labelText: _packaged
-                          ? 'Precio por $_unitSingular'
+                          ? 'Precio por $_unitSingular (venta suelta)'
                           : 'Precio',
+                      helperText: _priceHelper,
+                      helperStyle: _priceBelowPack
+                          ? const TextStyle(color: AppTokens.warning)
+                          : null,
                     ),
                     validator: (value) {
                       final parsed = double.tryParse(value ?? '');

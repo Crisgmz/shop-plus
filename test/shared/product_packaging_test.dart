@@ -203,6 +203,12 @@ void main() {
       expect(vasoAlto.priceFor(vasoAlto.largestUom, 168.64), 3372.88);
     });
 
+    test('dentro de la caja el paquete sale más barato que suelto', () {
+      // El negocio vende el paquete suelto a RD$175.00.
+      expect(vasoAlto.pricePerBaseUnit(PackagingUom.pack, 175), 168.64);
+      expect(vasoAlto.pricePerBaseUnit(PackagingUom.unit, 175), 175);
+    });
+
     test('con tres niveles la más grande es la caja', () {
       const tresNiveles = ProductPackaging(
         unitsPerPack: 50,

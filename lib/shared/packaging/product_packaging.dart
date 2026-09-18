@@ -231,6 +231,17 @@ class ProductPackaging {
     }
   }
 
+  /// Cuánto sale cada unidad base comprando en [uom]: caja de 20 paquetes a
+  /// RD$2,639.83 → RD$131.99 por paquete. Es lo que se compara con el precio
+  /// suelto, que el negocio pone más caro. Redondeado al centavo: solo se
+  /// muestra, nunca se cobra.
+  double pricePerBaseUnit(PackagingUom uom, double unitPrice) {
+    final factor = factorFor(uom);
+    return factor <= 0
+        ? unitPrice
+        : _round2(priceFor(uom, unitPrice) / factor);
+  }
+
   /// Si la venta suelta de [baseUnits] respeta el mínimo configurado.
   /// Paquetes y cajas completos nunca se bloquean.
   bool respectsMinimum(double baseUnits, PackagingUom uom) {
