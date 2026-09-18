@@ -2706,7 +2706,20 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
     // el selector si hay más de una opción configurada en Ajustes.
     final priceTypes =
         ref.watch(appSettingsProvider).valueOrNull?.salePriceTypes ?? const [];
-    final priceOptions = priceTypeOptionsFor(item.product, priceTypes);
+    final baseOptions = priceTypeOptionsFor(item.product, priceTypes);
+    // En una línea de caja, cada tipo de precio muestra lo que cobraría la
+    // caja con ese tipo, no el precio del paquete.
+    final priceOptions = item.isPresentation
+        ? [
+            for (final o in baseOptions)
+              PriceTypeOption(
+                key: o.key,
+                label: o.label,
+                price: item.product.packaging
+                    .priceFor(item.uom, o.price, tier: o.key),
+              ),
+          ]
+        : baseOptions;
     final currentPriceLabel = item.isCustomPrice
         ? 'Personalizado'
         : priceTierLabel(item.priceTier, priceTypes);
@@ -2909,8 +2922,12 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
     String? detail(PackagingUom uom) {
       final unit = packaging.effectiveUnitLabel.toLowerCase();
       if (uom != PackagingUom.unit) {
-        return '${money(packaging.pricePerBaseUnit(uom, item.unitPrice))} '
-            'por $unit';
+        final perUnit = packaging.pricePerBaseUnit(
+          uom,
+          item.unitPrice,
+          tier: item.priceTier,
+        );
+        return '${money(perUnit)} por $unit';
       }
       final min = packaging.minUnitQty ?? 0;
       if (min <= 1) return null;
@@ -2958,7 +2975,13 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
                   ),
                   const SizedBox(width: 12),
                   Text(
-                    money(packaging.priceFor(uom, item.unitPrice)),
+                    money(
+                      packaging.priceFor(
+                        uom,
+                        item.unitPrice,
+                        tier: item.priceTier,
+                      ),
+                    ),
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,

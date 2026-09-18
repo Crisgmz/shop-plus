@@ -64,6 +64,7 @@ class InventoryProduct {
     this.allowNegativeStock = false,
     this.packaging = ProductPackaging.none,
     this.imeis = const <String>[],
+    this.metadata = const <String, dynamic>{},
     this.priceTier1,
     this.priceTier2,
     this.priceTier3,
@@ -108,6 +109,10 @@ class InventoryProduct {
   /// Empaques del producto: caja → paquete → unidad. `ProductPackaging.none`
   /// cuando no está configurado — el producto se comporta como siempre.
   final ProductPackaging packaging;
+
+  /// `products.metadata` tal como está: al guardar se conserva todo y solo se
+  /// reemplazan los precios de caja por tipo.
+  final Map<String, dynamic> metadata;
 
   /// IMEIs registrados del producto (celulares/dispositivos serializados).
   final List<String> imeis;
@@ -180,6 +185,9 @@ class InventoryProduct {
       imageUrl: map['image_url']?.toString(),
       notes: map['notes']?.toString(),
       packaging: ProductPackaging.fromMap(map),
+      metadata: map['metadata'] is Map
+          ? Map<String, dynamic>.from(map['metadata'] as Map)
+          : const <String, dynamic>{},
       isService: map['is_service'] == true,
       isTaxExempt: map['is_tax_exempt'] == true,
       trackInventory: map['track_inventory'] != false,
@@ -239,6 +247,7 @@ class InventoryProductInput {
     this.allowNegativeStock = false,
     this.packaging = ProductPackaging.none,
     this.imeis = const <String>[],
+    this.metadata = const <String, dynamic>{},
     this.priceTier1,
     this.priceTier2,
     this.priceTier3,
@@ -281,6 +290,10 @@ class InventoryProductInput {
   /// Empaques del producto: caja → paquete → unidad. `ProductPackaging.none`
   /// cuando no está configurado — el producto se comporta como siempre.
   final ProductPackaging packaging;
+
+  /// `products.metadata` tal como está: al guardar se conserva todo y solo se
+  /// reemplazan los precios de caja por tipo.
+  final Map<String, dynamic> metadata;
 
   /// IMEIs del producto (celulares/dispositivos serializados).
   final List<String> imeis;
@@ -520,7 +533,9 @@ class InventoryRepository {
             'price_tier_9, price_tier_10, imeis, '
             // Empaques (migración 86). Nulos ⇒ producto sin empaque.
             'units_per_pack, packs_per_box, unit_label, pack_label, box_label, '
-            'pack_price, box_price, min_unit_qty',
+            'pack_price, box_price, min_unit_qty, '
+            // Precios de caja por tipo de precio (ProductPackaging).
+            'metadata',
           )
           .eq('branch_id', branchId)
           .order('name')
@@ -568,6 +583,17 @@ class InventoryRepository {
     }
 
     final payload = _buildProductPayload(input);
+    // Los precios de caja por tipo no son columna: van dentro de `metadata`,
+    // sin tocar lo demás que haya ahí. (La importación masiva los quita del
+    // payload junto con el resto del empaque y nunca escribe `metadata`.)
+    final tierPrices = payload.remove(ProductPackaging.packTierPricesKey);
+    final metadata = Map<String, dynamic>.from(input.metadata);
+    if (tierPrices is Map && tierPrices.isNotEmpty) {
+      metadata[ProductPackaging.packTierPricesKey] = tierPrices;
+    } else {
+      metadata.remove(ProductPackaging.packTierPricesKey);
+    }
+    payload['metadata'] = metadata;
 
     if (input.id == null) {
       payload['branch_id'] = branchId;

@@ -1781,6 +1781,10 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
   /// el `_PriceTierFields` no renderiza ese input.
   late final List<TextEditingController> _priceTierControllers;
 
+  /// Precio de la caja por tipo de precio (tier 1..10). Vacío = el de la caja
+  /// al Detalle.
+  late final List<TextEditingController> _packTierControllers;
+
   String? _categoryId;
   bool _isActive = true;
   bool _isService = false;
@@ -1835,6 +1839,12 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
       10,
       (i) => TextEditingController(
         text: product?.priceTier(i + 1)?.toString() ?? '0',
+      ),
+    );
+    _packTierControllers = List.generate(
+      10,
+      (i) => TextEditingController(
+        text: _fmtQty(packaging.packTierPrices['tier_${i + 1}']),
       ),
     );
 
@@ -1951,7 +1961,7 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     _notesController.dispose();
     _imageUrlController.dispose();
     _imeiController.dispose();
-    for (final ctrl in _priceTierControllers) {
+    for (final ctrl in [..._priceTierControllers, ..._packTierControllers]) {
       ctrl.dispose();
     }
     super.dispose();
@@ -2293,6 +2303,17 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
                       ),
                     ),
                   ]),
+                  const SizedBox(height: 10),
+                  // Un precio de caja por cada tipo de precio configurado: al
+                  // elegir "Precio 2" en el POS, la caja cobra el suyo.
+                  _PriceTierFields(
+                    isMobile: isMobile,
+                    controllers: _packTierControllers,
+                    labelFor: (name) =>
+                        'Precio de la ${_presentation.toLowerCase()} · $name',
+                    helperText:
+                        'Vacío = precio de la ${_presentation.toLowerCase()} al Detalle',
+                  ),
                 ],
                 const SizedBox(height: 10),
                 _ProductImagePicker(
@@ -2391,6 +2412,7 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
       trackInventory: _trackInventory,
       imeis: List<String>.from(_imeis),
       packaging: _buildPackaging(),
+      metadata: widget.initial?.metadata ?? const <String, dynamic>{},
       priceTier1: _parseTier(_priceTierControllers[0].text),
       priceTier2: _parseTier(_priceTierControllers[1].text),
       priceTier3: _parseTier(_priceTierControllers[2].text),
@@ -2450,6 +2472,12 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
       packPrice: (packPrice == null || packPrice <= 0) ? null : packPrice,
       boxPrice: previous.boxPrice,
       minUnitQty: (min == null || min <= 0) ? null : min,
+      packTierPrices: {
+        for (var i = 0; i < _packTierControllers.length; i++)
+          if (_parseTier(_packTierControllers[i].text) case final price?
+              when price > 0)
+            'tier_${i + 1}': price,
+      },
     );
   }
 
@@ -2592,9 +2620,16 @@ class _PriceTierFields extends ConsumerWidget {
   const _PriceTierFields({
     required this.isMobile,
     required this.controllers,
+    this.labelFor,
+    this.helperText,
   });
 
   final bool isMobile;
+
+  /// Etiqueta de cada campo a partir del nombre del tipo de precio. Sin esto,
+  /// el nombre tal cual ("Precio 2").
+  final String Function(String name)? labelFor;
+  final String? helperText;
 
   /// Lista de 10 controllers (uno por cada tier 1..10). Se renderiza solo
   /// el subconjunto que tiene nombre configurado en app_settings.sale_price_types.
@@ -2618,7 +2653,10 @@ class _PriceTierFields extends ConsumerWidget {
           child: TextFormField(
             controller: controllers[i],
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(labelText: label),
+            decoration: InputDecoration(
+              labelText: labelFor?.call(label) ?? label,
+              helperText: helperText,
+            ),
             validator: (value) {
               if (value == null || value.trim().isEmpty) return null;
               final parsed = double.tryParse(value);

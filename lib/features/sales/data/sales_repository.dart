@@ -343,8 +343,11 @@ class SaleCartItem {
   /// Es el precio que se cobra: el RPC calcula la línea desde él (migración
   /// 92), así que una caja de 20 paquetes a 2,639.83 se cobra exacta y no
   /// 2,639.80, que es lo que daría repartirla al centavo por paquete.
+  /// La caja cobra su precio para el tipo de precio de la línea (Detalle,
+  /// Precio 2…); si ese tipo no tiene uno propio, el del Detalle.
   double get presentationPrice =>
-      presentationPriceOverride ?? product.packaging.priceFor(uom, unitPrice);
+      presentationPriceOverride ??
+      product.packaging.priceFor(uom, unitPrice, tier: priceTier);
 
   /// Si la línea respeta la venta mínima del producto. Solo aplica suelto:
   /// una presentación completa nunca se bloquea.
@@ -600,7 +603,7 @@ class SalesRepository {
             'price_includes_tax, track_inventory, '
             // Empaques (migración 86).
             'units_per_pack, packs_per_box, unit_label, pack_label, box_label, '
-            'pack_price, box_price, min_unit_qty, '
+            'pack_price, box_price, min_unit_qty, metadata, '
             'price_tier_1, price_tier_2, price_tier_3, '
             'price_tier_4, price_tier_5, price_tier_6, price_tier_7, '
             'price_tier_8, price_tier_9, price_tier_10, image_url, imeis',

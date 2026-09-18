@@ -246,6 +246,77 @@ void main() {
     });
   });
 
+  group('precio de la caja por tipo de precio', () {
+    // Detalle: caja 2,639.83. "Precio 2" (tier_2): caja 2,400.00 y paquete
+    // suelto 150.00. "Precio 3" (tier_3) no tiene precio de caja propio.
+    SalesProduct vasoPet() => SalesProduct(
+          id: 'sp001',
+          name: 'VASO PET 9 OZ',
+          price: 175,
+          cost: 80,
+          taxRate: 18,
+          stock: 1300,
+          isActive: true,
+          priceTier2: 150,
+          packaging: const ProductPackaging(
+            unitsPerPack: 20,
+            unitLabel: 'Paquete',
+            packLabel: 'Caja',
+            packPrice: 2639.83,
+            packTierPrices: {'tier_2': 2400},
+          ),
+        );
+
+    SaleCartItem caja(String tier) => SaleCartItem(
+          product: vasoPet(),
+          quantity: 1,
+          uom: PackagingUom.pack,
+          unitPrice: vasoPet().priceFor(tier),
+          priceTier: tier,
+        );
+
+    test('con "Precio 2" la caja cobra su precio de ese tipo', () {
+      expect(caja('tier_2').presentationPrice, 2400);
+      expect(caja('tier_2').lineGross, 2400);
+    });
+
+    test('al Detalle la caja cobra el precio de la caja', () {
+      expect(caja('retail').presentationPrice, 2639.83);
+    });
+
+    test('un tipo sin precio de caja propio cobra el del Detalle', () {
+      expect(caja('tier_3').presentationPrice, 2639.83);
+    });
+
+    test('el paquete suelto sigue el precio del tipo', () {
+      final suelto = SaleCartItem(
+        product: vasoPet(),
+        quantity: 5,
+        unitPrice: vasoPet().priceFor('tier_2'),
+        priceTier: 'tier_2',
+      );
+      expect(suelto.presentationPrice, 150);
+      expect(suelto.lineGross, 750);
+    });
+
+    test('al checkout viaja el precio de la caja de ese tipo', () {
+      final item = checkout([caja('tier_2')]).toRpcItems().single;
+      expect(item['uom_price'], 2400);
+      expect(item['quantity'], 20);
+    });
+
+    test('el precio escrito a mano sigue mandando', () {
+      final line = SaleCartItem(
+        product: vasoPet(),
+        quantity: 1,
+        uom: PackagingUom.pack,
+        priceTier: 'tier_2',
+        presentationPriceOverride: 2300,
+      );
+      expect(line.lineGross, 2300);
+    });
+  });
+
   group('precio propio de la presentación · caso CIBAO FROZEN', () {
     // Caja de 20 paquetes a RD$2,639.83. El paquete a 131.99: repartir la caja
     // al centavo por paquete daría 2,639.80 — tres centavos menos por caja.

@@ -225,4 +225,46 @@ void main() {
       expect(ProductPackaging.none.wholeLargest(7.5), 7);
     });
   });
+
+  group('precio de la caja por tipo de precio', () {
+    const vaso = ProductPackaging(
+      unitsPerPack: 20,
+      unitLabel: 'Paquete',
+      packLabel: 'Caja',
+      packPrice: 2639.83,
+      packTierPrices: {'tier_2': 2400},
+    );
+
+    test('cada tipo cobra su caja; sin precio propio, la del Detalle', () {
+      expect(vaso.priceFor(PackagingUom.pack, 175, tier: 'tier_2'), 2400);
+      expect(vaso.priceFor(PackagingUom.pack, 175, tier: 'tier_3'), 2639.83);
+      expect(vaso.priceFor(PackagingUom.pack, 175), 2639.83);
+      expect(vaso.pricePerBaseUnit(PackagingUom.pack, 150, tier: 'tier_2'), 120);
+    });
+
+    test('se lee desde products.metadata', () {
+      final p = ProductPackaging.fromMap({
+        'units_per_pack': 20,
+        'pack_price': 2639.83,
+        'metadata': {
+          'otra_cosa': true,
+          'pack_tier_prices': {'tier_2': 2400, 'tier_4': '2300.5', 'tier_5': 0},
+        },
+      });
+      expect(p.packTierPrices, {'tier_2': 2400.0, 'tier_4': 2300.5});
+    });
+
+    test('sobrevive al borrador del carrito (toMap → fromMap)', () {
+      final restored = ProductPackaging.fromMap(vaso.toMap());
+      expect(restored.packTierPrices, {'tier_2': 2400.0});
+      expect(restored.priceFor(PackagingUom.pack, 175, tier: 'tier_2'), 2400);
+    });
+
+    test('la importación masiva descarta la clave junto con el empaque', () {
+      expect(
+        ProductPackaging.none.toMap().keys,
+        contains(ProductPackaging.packTierPricesKey),
+      );
+    });
+  });
 }

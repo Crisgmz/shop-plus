@@ -215,6 +215,13 @@ SIEMPRE la unidad base; cajas y paquetes se derivan, nunca se guardan aparte.
   diferencia es real: una caja de 20 paquetes a 2,639.83 no es 131.99 × 20
   (= 2,639.80). `unit_label` nombra la unidad base ("Paquete" en un negocio que
   nunca vende sueltas).
+- Precio de la caja por tipo de precio: `products.metadata.pack_tier_prices`
+  (`{"tier_2": 2400.00}`, claves `tier_1`…`tier_10` como `price_tier_n`). Al
+  elegir ese tipo en el POS, la caja cobra ese precio; un tipo sin entrada cobra
+  `pack_price`. Va en el jsonb y no en una columna para no depender de una
+  migración: la app guarda `metadata` completo conservando las demás claves, y
+  la importación por Excel nunca lo toca. El paquete suelto usa `price` /
+  `price_tier_n`, que el negocio pone más caro que su parte dentro de la caja.
 - `checkout_sale_transactional` lo comparte `flutter_shop+`, así que `quantity`
   sigue viajando en unidades base. La 92 sí cambió el CUERPO de las tres RPC
   (checkout / hold / edit), nunca la firma: si la línea trae `uom_price` y

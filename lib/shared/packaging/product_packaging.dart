@@ -54,7 +54,13 @@ class ProductPackaging {
     this.packPrice,
     this.boxPrice,
     this.minUnitQty,
+    this.packTierPrices = const {},
   });
+
+  /// Clave con que [packTierPrices] viaja en `products.metadata` (y en el
+  /// mapa de [toMap]). No es una columna: se guarda en el jsonb para no
+  /// depender de una migración.
+  static const String packTierPricesKey = 'pack_tier_prices';
 
   /// Producto sin empaque: se vende y se cuenta por unidad, como siempre.
   static const ProductPackaging none = ProductPackaging();
@@ -101,6 +107,11 @@ class ProductPackaging {
   /// Mínimo de unidades base al vender SUELTO. Configurable por producto.
   /// No aplica a paquete ni caja completos.
   final double? minUnitQty;
+
+  /// Precio del empaque completo (la caja, en este negocio) por tipo de
+  /// precio: `{'tier_1': 2400.00}`. Un tipo sin precio propio cobra
+  /// [packPrice], el del Detalle.
+  final Map<String, double> packTierPrices;
 
   bool get hasPacks => (unitsPerPack ?? 0) > 0;
   bool get hasBoxes => hasPacks && (packsPerBox ?? 0) > 0;
@@ -219,13 +230,16 @@ class ProductPackaging {
   }
 
   /// Precio de una presentación. La caja y el paquete usan su precio propio si
-  /// está configurado; si no, se deriva del precio unitario.
-  double priceFor(PackagingUom uom, double unitPrice) {
+  /// está configurado; si no, se deriva del precio unitario. Con [tier]
+  /// ('tier_1'…'tier_10'), el empaque usa su precio para ese tipo si lo tiene.
+  double priceFor(PackagingUom uom, double unitPrice, {String? tier}) {
     switch (uom) {
       case PackagingUom.box:
         return boxPrice ?? _round2(unitPrice * factorFor(uom));
       case PackagingUom.pack:
-        return packPrice ?? _round2(unitPrice * factorFor(uom));
+        return (tier == null ? null : packTierPrices[tier]) ??
+            packPrice ??
+            _round2(unitPrice * factorFor(uom));
       case PackagingUom.unit:
         return unitPrice;
     }
@@ -235,11 +249,15 @@ class ProductPackaging {
   /// RD$2,639.83 → RD$131.99 por paquete. Es lo que se compara con el precio
   /// suelto, que el negocio pone más caro. Redondeado al centavo: solo se
   /// muestra, nunca se cobra.
-  double pricePerBaseUnit(PackagingUom uom, double unitPrice) {
+  double pricePerBaseUnit(
+    PackagingUom uom,
+    double unitPrice, {
+    String? tier,
+  }) {
     final factor = factorFor(uom);
     return factor <= 0
         ? unitPrice
-        : _round2(priceFor(uom, unitPrice) / factor);
+        : _round2(priceFor(uom, unitPrice, tier: tier) / factor);
   }
 
   /// Si la venta suelta de [baseUnits] respeta el mínimo configurado.
@@ -266,6 +284,13 @@ class ProductPackaging {
       packPrice: _positive(map['pack_price']),
       boxPrice: _positive(map['box_price']),
       minUnitQty: _positive(map['min_unit_qty']),
+      // Del borrador del carrito viene suelto; de la base, dentro de metadata.
+      packTierPrices: _tierPrices(
+        map[packTierPricesKey] ??
+            (map['metadata'] is Map
+                ? (map['metadata'] as Map)[packTierPricesKey]
+                : null),
+      ),
     );
   }
 
@@ -278,6 +303,8 @@ class ProductPackaging {
         'pack_price': packPrice,
         'box_price': boxPrice,
         'min_unit_qty': minUnitQty,
+        // No es columna: el repositorio lo pasa a `metadata` al guardar.
+        packTierPricesKey: packTierPrices,
       };
 
   ProductPackaging copyWith({
@@ -289,6 +316,7 @@ class ProductPackaging {
     double? packPrice,
     double? boxPrice,
     double? minUnitQty,
+    Map<String, double>? packTierPrices,
   }) {
     return ProductPackaging(
       unitsPerPack: unitsPerPack ?? this.unitsPerPack,
@@ -299,6 +327,7 @@ class ProductPackaging {
       packPrice: packPrice ?? this.packPrice,
       boxPrice: boxPrice ?? this.boxPrice,
       minUnitQty: minUnitQty ?? this.minUnitQty,
+      packTierPrices: packTierPrices ?? this.packTierPrices,
     );
   }
 }
@@ -306,6 +335,19 @@ class ProductPackaging {
 String? _clean(String? value) {
   final trimmed = value?.trim();
   return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+}
+
+/// `{'tier_1': 2400}` desde jsonb; descarta claves vacías y precios no
+/// positivos.
+Map<String, double> _tierPrices(dynamic raw) {
+  if (raw is! Map) return const {};
+  final out = <String, double>{};
+  raw.forEach((key, value) {
+    final price = _positive(value);
+    final tier = key?.toString().trim() ?? '';
+    if (tier.isNotEmpty && price != null) out[tier] = price;
+  });
+  return out;
 }
 
 double? _positive(dynamic value) {
