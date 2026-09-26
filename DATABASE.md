@@ -229,6 +229,12 @@ SIEMPRE la unidad base; cajas y paquetes se derivan, nunca se guardan aparte.
   vienen — que es siempre el caso de la otra app — hace exactamente lo de antes,
   `unit_price × quantity`. Guarda los cuatro campos en `sale_items`
   (`uom`, `uom_factor`, `uom_price`, `unit_name`).
+- Cotizaciones (95): `quotation_items` tiene las mismas cuatro columnas
+  (`uom`, `uom_factor`, `uom_price`, `unit_name`) y `quantity` también va en
+  unidades base. `update_quotation_document` las guarda y
+  `convert_quotation_to_sale` las pasa a `sale_items`, así que una cotización
+  por caja se convierte en una factura que dice "1 Caja" y cobra `uom_price`.
+  Con `uom` nulo —toda cotización anterior— la línea entra como 'unit' × 1.
 - `tag_sale_item_presentations(sale_id, lines)` (89, función nueva) marca después
   del cobro `sale_items.uom`, `uom_factor` y `unit_name` para que la factura diga
   "1 Caja". Busca la fila por (venta, producto, cantidad, precio) entre las que

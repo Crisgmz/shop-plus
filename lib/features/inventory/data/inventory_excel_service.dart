@@ -10,16 +10,21 @@ const _productSheet = 'Productos';
 const _categorySheet = 'Categorias';
 const _instructionsSheet = 'Instrucciones';
 
-/// Cantidad de niveles de precio extra (tier 1..3) que lleva la plantilla,
-/// además del precio base de la columna "precio".
-const int _priceTierCount = 3;
+/// Niveles de precio extra que existen en la base (tier 1..10), además del
+/// precio base de la columna "precio".
+const int _maxPriceTiers = 10;
 
-/// Encabezados legados de los niveles de precio. Se siguen aceptando al
-/// importar para que las plantillas viejas no se rompan, pero la plantilla que
-/// se genera ahora usa los nombres configurados en `sale_price_types`.
-const List<String> _legacyTierHeaders = ['precio_2', 'precio_3', 'precio_4'];
+/// Encabezado legado del nivel [slot]: el precio base es "precio", así que el
+/// nivel 1 es "precio_2". Se siguen aceptando al importar para que las
+/// plantillas viejas no se rompan.
+String _legacyTierHeader(int slot) => 'precio_${slot + 1}';
 
-const List<String> _productHeaders = [
+/// Columnas fijas, antes y después de los niveles de precio.
+///
+/// `id` va primero y es la llave preferida: una plantilla descargada la trae
+/// llena, así que el producto se actualiza aunque le cambien el SKU o no tenga.
+const List<String> _headersBeforeTiers = [
+  'id',
   'sku',
   'nombre',
   'codigo_barras',
@@ -30,7 +35,9 @@ const List<String> _productHeaders = [
   'unidad',
   'costo',
   'precio',
-  ..._legacyTierHeaders,
+];
+
+const List<String> _headersAfterTiers = [
   'itbis_porcentaje',
   'exento_itbis',
   'stock',
@@ -47,50 +54,66 @@ const List<String> _productHeaders = [
   'notas',
 ];
 
-/// Nombre de columna para cada nivel de precio: el que el negocio configuró en
-/// Ajustes → Tipos de precios y, si ese slot no tiene nombre (o choca con otra
-/// columna de la plantilla), el encabezado legado `precio_2`…`precio_4`.
-List<String> _tierHeaders(List<dynamic> priceTypes) {
-  final reserved = _productHeaders.map((h) => h.toLowerCase()).toSet();
+/// Niveles de precio que lleva la plantilla: los que tienen nombre en
+/// Ajustes → Tipos de precios. Sin ninguno configurado, los tres de siempre.
+List<int> _tierSlotsFor(List<dynamic> priceTypes) {
+  final slots = <int>[
+    for (var i = 0; i < _maxPriceTiers && i < priceTypes.length; i++)
+      if (priceTypes[i].toString().trim().isNotEmpty) i + 1,
+  ];
+  return slots.isEmpty ? const [1, 2, 3] : slots;
+}
+
+/// Nombre de columna de cada nivel: el configurado en Ajustes y, si está vacío
+/// o choca con otra columna de la plantilla, el legado.
+Map<int, String> _tierHeadersFor(List<dynamic> priceTypes) {
+  final reserved = {..._headersBeforeTiers, ..._headersAfterTiers};
   final used = <String>{};
-  final out = <String>[];
-  for (var i = 0; i < _priceTierCount; i++) {
-    final name = i < priceTypes.length ? priceTypes[i].toString().trim() : '';
+  final out = <int, String>{};
+  for (final slot in _tierSlotsFor(priceTypes)) {
+    final name = slot - 1 < priceTypes.length
+        ? priceTypes[slot - 1].toString().trim()
+        : '';
     final key = name.toLowerCase();
     final usable = name.isNotEmpty && !reserved.contains(key) && used.add(key);
-    out.add(usable ? name : _legacyTierHeaders[i]);
+    out[slot] = usable ? name : _legacyTierHeader(slot);
   }
   return out;
 }
 
 /// Encabezados de la hoja "Productos" con los niveles de precio nombrados.
-List<String> _productHeadersFor(List<dynamic> priceTypes) {
-  final tiers = _tierHeaders(priceTypes);
-  return [
-    for (final header in _productHeaders)
-      _legacyTierHeaders.contains(header)
-          ? tiers[_legacyTierHeaders.indexOf(header)]
-          : header,
-  ];
-}
+List<String> _productHeadersFor(List<dynamic> priceTypes) => [
+  ..._headersBeforeTiers,
+  ..._tierHeadersFor(priceTypes).values,
+  ..._headersAfterTiers,
+];
 
-/// Para cada nivel de precio, la columna realmente presente en el archivo
-/// importado: primero el nombre configurado, luego el encabezado legado.
-/// `null` si el archivo no trae ninguno de los dos.
-List<String?> _resolveTierKeys(
+/// Los mismos encabezados con el nombre canónico de cada columna: el ancho se
+/// calcula sobre estos, porque un nivel puede llamarse "Mayorista".
+List<String> _canonicalHeadersFor(List<dynamic> priceTypes) => [
+  ..._headersBeforeTiers,
+  for (final slot in _tierHeadersFor(priceTypes).keys) _legacyTierHeader(slot),
+  ..._headersAfterTiers,
+];
+
+/// Para cada nivel, la columna realmente presente en el archivo: primero el
+/// nombre configurado, luego el legado. Un nivel que no esté en el archivo NO
+/// se toca al guardar (ver `InventoryProductInput.priceTiersPresent`).
+Map<int, String> _resolveTierKeys(
   Set<String> presentHeaders,
   List<dynamic> priceTypes,
 ) {
-  final configured = _tierHeaders(priceTypes);
-  return [
-    for (var i = 0; i < _priceTierCount; i++)
-      if (presentHeaders.contains(configured[i].toLowerCase()))
-        configured[i].toLowerCase()
-      else if (presentHeaders.contains(_legacyTierHeaders[i]))
-        _legacyTierHeaders[i]
-      else
-        null,
-  ];
+  final configured = _tierHeadersFor(priceTypes);
+  final out = <int, String>{};
+  for (var slot = 1; slot <= _maxPriceTiers; slot++) {
+    final name = configured[slot]?.toLowerCase();
+    if (name != null && presentHeaders.contains(name)) {
+      out[slot] = name;
+    } else if (presentHeaders.contains(_legacyTierHeader(slot))) {
+      out[slot] = _legacyTierHeader(slot);
+    }
+  }
+  return out;
 }
 
 List<String> _instructionsFor(List<String> tierHeaders) => [
@@ -98,7 +121,7 @@ List<String> _instructionsFor(List<String> tierHeaders) => [
   '',
   '1. La hoja "Productos" es la única que el sistema lee al importar.',
   '2. La columna "nombre", "precio" y "costo" son obligatorias.',
-  '3. La columna "sku" se usa como llave: si ya existe en tu sucursal, el producto se actualiza; si no existe (o está vacío), se crea uno nuevo.',
+  '3. La llave es la columna "id": en una plantilla descargada viene llena y el producto se actualiza aunque le cambies el SKU o el nombre. Sin "id" manda el "sku". Si no traes ninguno de los dos, la fila crea un producto nuevo.',
   '4. La columna "categoria" debe coincidir (sin distinguir mayúsculas) con un nombre de la hoja "Categorias". Si la categoría no existe, la fila se rechaza.',
   '5. Los campos sí/no aceptan: si, sí, no, true, false, 1, 0.',
   '6. Los números pueden usar punto o coma como separador decimal.',
@@ -107,7 +130,8 @@ List<String> _instructionsFor(List<String> tierHeaders) => [
   '9. No modifiques los nombres de columnas en la fila 1 — el sistema los usa para identificar cada campo.',
   '10. La hoja "Categorias" es solo informativa; los cambios en ella no se aplican.',
   '11. "precio" es el precio base (Detalle). Las columnas "${tierHeaders.join('", "')}" son los tipos de precio que configuraste en Ajustes → Tipos de precios; si les cambias el nombre allí, vuelve a descargar la plantilla.',
-  '12. Al importar también se aceptan los nombres antiguos "${_legacyTierHeaders.join('", "')}" para esas mismas columnas.',
+  '12. Al importar también se aceptan los nombres antiguos "precio_2", "precio_3"… para esas mismas columnas.',
+  '13. Un tipo de precio que no venga como columna se queda como está: la importación no lo borra.',
 ];
 
 class InventoryImportRowError {
@@ -139,7 +163,7 @@ class InventoryExcelService {
   }) {
     final excel = Excel.createExcel();
     _writeProductHeaders(excel, priceTypes);
-    _writeExampleRow(excel);
+    _writeExampleRow(excel, _tierSlotsFor(priceTypes));
     _writeCategorySheet(excel, categories);
     _writeInstructionsSheet(excel, priceTypes);
     excel.delete('Sheet1');
@@ -159,9 +183,10 @@ class InventoryExcelService {
     final excel = Excel.createExcel();
     _writeProductHeaders(excel, priceTypes);
     final sheet = excel[_productSheet];
+    final tierSlots = _tierSlotsFor(priceTypes);
     var row = 1;
     for (final product in products) {
-      _writeProductRow(sheet, row, product);
+      _writeProductRow(sheet, row, product, tierSlots);
       row++;
     }
     _writeCategorySheet(excel, categories);
@@ -314,12 +339,13 @@ class InventoryExcelService {
 
   /// Construye un [InventoryProductInput] a partir de un accesor de celdas por
   /// nombre de columna. Compartido por el lector de xlsx y el de CSV.
-  /// [tierKeys] trae, por nivel de precio, el encabezado que realmente existe
-  /// en el archivo (nombre configurado o legado), o `null` si no viene.
+  /// [tierKeys] trae, por nivel de precio presente en el archivo, el
+  /// encabezado con que viene (nombre configurado o legado). Un nivel que no
+  /// esté en el archivo no se toca al guardar.
   InventoryProductInput _rowToInput(
     String? Function(String key) raw,
     Map<String, InventoryCategory> categoryByName,
-    List<String?> tierKeys,
+    Map<int, String> tierKeys,
   ) {
     String? str(String key) {
       final value = raw(key)?.trim();
@@ -370,6 +396,8 @@ class InventoryExcelService {
     }
 
     return InventoryProductInput(
+      // El `id` de una plantilla descargada: llave preferida al actualizar.
+      id: str('id'),
       name: name,
       sku: str('sku'),
       barcode: str('codigo_barras'),
@@ -394,9 +422,18 @@ class InventoryExcelService {
       variantName: str('variante'),
       imageUrl: str('imagen_url'),
       notes: str('notas'),
-      priceTier1: tierKeys[0] == null ? null : dbl(tierKeys[0]!),
-      priceTier2: tierKeys[1] == null ? null : dbl(tierKeys[1]!),
-      priceTier3: tierKeys[2] == null ? null : dbl(tierKeys[2]!),
+      // Solo los niveles que el archivo trae: los demás quedan como están.
+      priceTiersPresent: tierKeys.keys.toSet(),
+      priceTier1: tierKeys[1] == null ? null : dbl(tierKeys[1]!),
+      priceTier2: tierKeys[2] == null ? null : dbl(tierKeys[2]!),
+      priceTier3: tierKeys[3] == null ? null : dbl(tierKeys[3]!),
+      priceTier4: tierKeys[4] == null ? null : dbl(tierKeys[4]!),
+      priceTier5: tierKeys[5] == null ? null : dbl(tierKeys[5]!),
+      priceTier6: tierKeys[6] == null ? null : dbl(tierKeys[6]!),
+      priceTier7: tierKeys[7] == null ? null : dbl(tierKeys[7]!),
+      priceTier8: tierKeys[8] == null ? null : dbl(tierKeys[8]!),
+      priceTier9: tierKeys[9] == null ? null : dbl(tierKeys[9]!),
+      priceTier10: tierKeys[10] == null ? null : dbl(tierKeys[10]!),
     );
   }
 
@@ -491,6 +528,7 @@ class InventoryExcelService {
   void _writeProductHeaders(Excel excel, List<dynamic> priceTypes) {
     final sheet = excel[_productSheet];
     final headers = _productHeadersFor(priceTypes);
+    final canonical = _canonicalHeadersFor(priceTypes);
     final headerStyle = CellStyle(
       bold: true,
       backgroundColorHex: ExcelColor.fromHexString('#0B5ED7'),
@@ -505,13 +543,15 @@ class InventoryExcelService {
       cell.cellStyle = headerStyle;
       // El ancho se calcula sobre el nombre canónico: los niveles de precio
       // pueden llamarse "Mayorista", "Distribuidor", etc.
-      sheet.setColumnWidth(i, _columnWidth(_productHeaders[i]));
+      sheet.setColumnWidth(i, _columnWidth(canonical[i]));
     }
   }
 
-  void _writeExampleRow(Excel excel) {
+  void _writeExampleRow(Excel excel, List<int> tierSlots) {
     final sheet = excel[_productSheet];
     final values = <dynamic>[
+      // `id` vacío: es un producto nuevo.
+      '',
       'SKU-001',
       'Coca Cola 600ml',
       '7501055330034',
@@ -522,9 +562,7 @@ class InventoryExcelService {
       'unidad',
       45.0,
       75.0,
-      72.0,
-      70.0,
-      68.0,
+      for (final _ in tierSlots) '',
       18.0,
       'no',
       100.0,
@@ -548,8 +586,14 @@ class InventoryExcelService {
     }
   }
 
-  void _writeProductRow(Sheet sheet, int rowIndex, InventoryProduct product) {
+  void _writeProductRow(
+    Sheet sheet,
+    int rowIndex,
+    InventoryProduct product,
+    List<int> tierSlots,
+  ) {
     final values = <dynamic>[
+      product.id,
       product.sku ?? '',
       product.name,
       product.barcode ?? '',
@@ -560,9 +604,7 @@ class InventoryExcelService {
       product.unit,
       product.cost,
       product.price,
-      product.priceTier1 ?? '',
-      product.priceTier2 ?? '',
-      product.priceTier3 ?? '',
+      for (final slot in tierSlots) product.priceTier(slot) ?? '',
       product.taxRate,
       product.isTaxExempt ? 'si' : 'no',
       product.stock,
@@ -626,7 +668,9 @@ class InventoryExcelService {
     final sheet = excel[_instructionsSheet];
     sheet.setColumnWidth(0, 110);
     final titleStyle = CellStyle(bold: true, fontSize: 14);
-    final instructions = _instructionsFor(_tierHeaders(priceTypes));
+    final instructions = _instructionsFor(
+      _tierHeadersFor(priceTypes).values.toList(growable: false),
+    );
     for (var i = 0; i < instructions.length; i++) {
       final cell = sheet.cell(
         CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: i),

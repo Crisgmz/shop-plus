@@ -1,3 +1,5 @@
+import '../../../shared/packaging/product_packaging.dart';
+
 class QuoteListItem {
   QuoteListItem({
     required this.id,
@@ -147,6 +149,7 @@ class QuoteCatalogProduct {
     this.sku,
     this.barcode,
     this.description,
+    this.packaging = ProductPackaging.none,
   });
 
   final String id;
@@ -159,6 +162,10 @@ class QuoteCatalogProduct {
   final double stock;
   final bool isActive;
 
+  /// Caja / paquete y sus precios, igual que en el POS. Sin empaque, la
+  /// línea se cotiza por unidad como siempre.
+  final ProductPackaging packaging;
+
   factory QuoteCatalogProduct.fromMap(Map<String, dynamic> map) {
     return QuoteCatalogProduct(
       id: (map['id'] ?? '').toString(),
@@ -170,6 +177,7 @@ class QuoteCatalogProduct {
       taxRate: _toDouble(map['tax_rate']),
       stock: _toDouble(map['stock']),
       isActive: map['is_active'] == true,
+      packaging: ProductPackaging.fromMap(map),
     );
   }
 }
@@ -212,19 +220,46 @@ class QuoteDraftLine {
     required this.quantity,
     double? unitPrice,
     this.discountPct = 0,
+    this.uom = PackagingUom.unit,
+    this.presentationPriceOverride,
   }) : unitPrice = unitPrice ?? product.price;
 
   final QuoteCatalogProduct product;
+
+  /// Cantidad EN LA PRESENTACIÓN de la línea: 2 cajas son `quantity` 2.
   final double quantity;
 
-  /// Precio unitario editable por línea (arranca en `product.price`).
+  /// Precio de la unidad base (arranca en `product.price`).
   final double unitPrice;
 
-  /// Descuento en porcentaje (0..100) aplicado al precio unitario.
+  /// Descuento en porcentaje (0..100) aplicado al precio de la presentación.
   final double discountPct;
 
+  /// Presentación cotizada: caja, paquete o suelto.
+  final PackagingUom uom;
+
+  /// Precio escrito a mano para la presentación. Manda sobre el configurado.
+  final double? presentationPriceOverride;
+
+  bool get isPresentation => uom != PackagingUom.unit;
+
+  /// Unidades base que representa UNA presentación (1 caja = 20 paquetes).
+  double get uomFactor => product.packaging.factorFor(uom);
+
+  /// Nombre de la presentación para la factura ("Caja").
+  String get unitName => product.packaging.labelFor(uom);
+
+  /// Precio de UNA presentación: el propio de la caja si está configurado.
+  double get presentationPrice =>
+      presentationPriceOverride ??
+      product.packaging.priceFor(uom, unitPrice);
+
+  /// Cantidad en unidades base: es la que viaja a la base y la que descuenta
+  /// inventario al convertir la cotización en venta.
+  double get baseQuantity => product.packaging.toBaseUnits(quantity, uom);
+
   double get netUnitPrice =>
-      QuotationsMath.round2(unitPrice * (1 - discountPct / 100));
+      QuotationsMath.round2(presentationPrice * (1 - discountPct / 100));
   double get lineSubtotal => QuotationsMath.round2(quantity * netUnitPrice);
   double get lineTax =>
       QuotationsMath.round2(lineSubtotal * (product.taxRate / 100));
@@ -232,19 +267,26 @@ class QuoteDraftLine {
 
   /// Monto absoluto del descuento (para persistir en `discount_amount`).
   double get discountAmount =>
-      QuotationsMath.round2(quantity * unitPrice - lineSubtotal);
+      QuotationsMath.round2(quantity * presentationPrice - lineSubtotal);
 
   QuoteDraftLine copyWith({
     QuoteCatalogProduct? product,
     double? quantity,
     double? unitPrice,
     double? discountPct,
+    PackagingUom? uom,
+    double? presentationPriceOverride,
+    bool clearPresentationPrice = false,
   }) {
     return QuoteDraftLine(
       product: product ?? this.product,
       quantity: quantity ?? this.quantity,
       unitPrice: unitPrice ?? this.unitPrice,
       discountPct: discountPct ?? this.discountPct,
+      uom: uom ?? this.uom,
+      presentationPriceOverride: clearPresentationPrice
+          ? null
+          : (presentationPriceOverride ?? this.presentationPriceOverride),
     );
   }
 }
@@ -282,6 +324,10 @@ class QuoteCreateItem {
     this.discountAmount = 0,
     this.productSku,
     this.productDescription,
+    this.uom = 'unit',
+    this.uomFactor = 1,
+    this.uomPrice,
+    this.unitName,
   });
 
   final String productId;
@@ -293,6 +339,22 @@ class QuoteCreateItem {
   final double taxRate;
   final double discountAmount;
 
+  /// Presentación cotizada: 'unit' | 'pack' | 'box'. `quantity` va SIEMPRE en
+  /// unidades base, igual que en las ventas, para que al convertir la
+  /// cotización el inventario descuente bien.
+  final String uom;
+
+  /// Unidades base que representa UNA presentación (1 caja = 20 paquetes).
+  final double uomFactor;
+
+  /// Precio de UNA presentación. NULL = la línea va por unidad base.
+  final double? uomPrice;
+
+  /// Cómo se llama la presentación en el documento ("Caja").
+  final String? unitName;
+
+  bool get isPresentation => uom != 'unit' && uomPrice != null && uomFactor > 0;
+
   factory QuoteCreateItem.fromMap(Map<String, dynamic> map) {
     return QuoteCreateItem(
       productId: (map['product_id'] ?? '').toString(),
@@ -303,11 +365,27 @@ class QuoteCreateItem {
       unitPrice: _toDouble(map['unit_price']),
       taxRate: _toDouble(map['tax_rate']),
       discountAmount: _toDouble(map['discount_amount']),
+      uom: (map['uom']?.toString().trim().isNotEmpty ?? false)
+          ? map['uom'].toString().trim().toLowerCase()
+          : 'unit',
+      uomFactor: map['uom_factor'] == null ? 1 : _toDouble(map['uom_factor']),
+      uomPrice: map['uom_price'] == null ? null : _toDouble(map['uom_price']),
+      unitName: map['unit_name']?.toString(),
     );
   }
 
-  double get lineSubtotal =>
-      QuotationsMath.round2(quantity * unitPrice - discountAmount);
+  /// Cantidad en la presentación: 40 paquetes en cajas de 20 son 2 cajas.
+  double get presentationQuantity =>
+      isPresentation ? quantity / uomFactor : quantity;
+
+  /// El bruto sale del precio de la presentación cuando la línea la trae, como
+  /// hace el checkout desde la migración 92: una caja a 2,639.83 no es
+  /// 131.99 × 20 (= 2,639.80).
+  double get lineSubtotal => isPresentation
+      ? QuotationsMath.round2(
+          uomPrice! * presentationQuantity - discountAmount,
+        )
+      : QuotationsMath.round2(quantity * unitPrice - discountAmount);
   double get lineTax => QuotationsMath.round2(lineSubtotal * (taxRate / 100));
   double get lineTotal => QuotationsMath.round2(lineSubtotal + lineTax);
 
@@ -324,6 +402,14 @@ class QuoteCreateItem {
       'line_subtotal': lineSubtotal,
       'line_tax': lineTax,
       'line_total': lineTotal,
+      // Solo cuando hay presentación: una línea suelta viaja como siempre y la
+      // función la guarda con `uom` nulo.
+      if (isPresentation) ...{
+        'uom': uom,
+        'uom_factor': uomFactor,
+        'uom_price': uomPrice,
+        'unit_name': unitName ?? '',
+      },
     };
   }
 }

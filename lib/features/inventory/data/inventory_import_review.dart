@@ -33,12 +33,35 @@ List<InventoryImportWarning> reviewImportAgainstCatalog({
     for (final product in catalog)
       if ((product.sku ?? '').trim().isNotEmpty) product.sku!.trim(): product,
   };
+  final byId = <String, InventoryProduct>{
+    for (final product in catalog) product.id: product,
+  };
+  final byName = <String, InventoryProduct>{
+    for (final product in catalog) product.name.trim().toLowerCase(): product,
+  };
 
   final warnings = <InventoryImportWarning>[];
   for (final input in inputs) {
     final sku = input.sku?.trim() ?? '';
-    final current = bySku[sku];
-    if (current == null) continue;
+    // Misma llave que usa la importación: primero el id, luego el SKU.
+    final current = byId[input.id?.trim() ?? ''] ?? bySku[sku];
+    if (current == null) {
+      // Sin llave, una fila de un producto que ya existe crea otro igual.
+      final gemelo = byName[input.name.trim().toLowerCase()];
+      if (gemelo != null) {
+        warnings.add(
+          InventoryImportWarning(
+            sku: sku,
+            name: input.name,
+            messages: [
+              'Ya existe "${gemelo.name}" (${gemelo.sku ?? 'sin SKU'}), pero '
+                  'esta fila no trae id ni SKU: creará un producto aparte.',
+            ],
+          ),
+        );
+      }
+      continue;
+    }
 
     final messages = <String>[];
 
@@ -86,3 +109,23 @@ List<InventoryImportWarning> reviewImportAgainstCatalog({
 
 String _describe(String Function(double) describe, double stock) =>
     stock < 0 ? '-${describe(-stock)}' : describe(stock);
+
+/// Cuántas filas del archivo van a CREAR un producto, con la misma llave que
+/// usa la importación: primero el `id`, luego el SKU.
+int countNewProducts({
+  required List<InventoryProductInput> inputs,
+  required List<InventoryProduct> catalog,
+}) {
+  final ids = {for (final p in catalog) p.id};
+  final skus = {
+    for (final p in catalog)
+      if ((p.sku ?? '').trim().isNotEmpty) p.sku!.trim(),
+  };
+  return inputs
+      .where(
+        (i) =>
+            !ids.contains(i.id?.trim() ?? '') &&
+            !skus.contains(i.sku?.trim() ?? ''),
+      )
+      .length;
+}

@@ -6,6 +6,7 @@ import '../../../core/web/kv_store.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../data/quotations_models.dart';
 import '../data/quotations_repository.dart';
+import '../../../shared/packaging/product_packaging.dart';
 
 final quotationsRepositoryProvider = Provider<QuotationsRepository>((ref) {
   final client = ref.watch(supabaseClientProvider);
@@ -74,6 +75,11 @@ String _encodeQuotationDraft(QuotationDraft d) => jsonEncode({
           {
             'product': _quoteProductToJson(it.product),
             'quantity': it.quantity,
+            // La presentación y su precio también sobreviven al borrador.
+            'uom': it.uom.dbValue,
+            'unitPrice': it.unitPrice,
+            'discountPct': it.discountPct,
+            'presentationPrice': it.presentationPriceOverride,
           },
       ],
     });
@@ -86,9 +92,15 @@ QuotationDraft? _decodeQuotationDraft(String? raw) {
       for (final e in (map['items'] as List? ?? const []))
         if (e is Map<String, dynamic>)
           QuoteDraftLine(
-            product:
-                QuoteCatalogProduct.fromMap(e['product'] as Map<String, dynamic>),
+            product: QuoteCatalogProduct.fromMap(
+              e['product'] as Map<String, dynamic>,
+            ),
             quantity: (e['quantity'] as num).toDouble(),
+            unitPrice: (e['unitPrice'] as num?)?.toDouble(),
+            discountPct: (e['discountPct'] as num?)?.toDouble() ?? 0,
+            uom: PackagingUom.fromDb(e['uom']?.toString()),
+            presentationPriceOverride:
+                (e['presentationPrice'] as num?)?.toDouble(),
           ),
     ];
     final statusName = map['status']?.toString();
@@ -122,6 +134,8 @@ Map<String, dynamic> _quoteProductToJson(QuoteCatalogProduct p) => {
       'tax_rate': p.taxRate,
       'stock': p.stock,
       'is_active': p.isActive,
+      // Empaque: sin esto, al volver del borrador la línea perdería la caja.
+      ...p.packaging.toMap(),
     };
 
 final quotationProductsProvider = FutureProvider<List<QuoteCatalogProduct>>((

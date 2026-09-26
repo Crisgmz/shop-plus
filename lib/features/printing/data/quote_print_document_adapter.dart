@@ -71,6 +71,7 @@ class QuotePrintItemSource {
     required this.lineTax,
     required this.lineTotal,
     this.sku,
+    this.presentationLabel,
   });
 
   final String description;
@@ -80,6 +81,9 @@ class QuotePrintItemSource {
   final double lineTax;
   final double lineTotal;
   final String? sku;
+
+  /// "Caja" cuando la línea se cotizó por presentación; `null` si va suelta.
+  final String? presentationLabel;
 }
 
 class QuotePrintDocumentAdapter {
@@ -127,6 +131,7 @@ class QuotePrintDocumentAdapter {
               lineTax: item.lineTax,
               lineTotal: item.lineTotal,
               sku: _nullIfBlank(item.sku),
+              presentationLabel: _nullIfBlank(item.presentationLabel),
             ),
           )
           .toList(growable: false),

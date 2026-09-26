@@ -217,6 +217,12 @@ class InventoryProduct {
   }
 }
 
+/// Un uuid tal como lo escribe Postgres.
+final RegExp _uuidPattern = RegExp(
+  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+  r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+);
+
 class InventoryProductInput {
   InventoryProductInput({
     required this.name,
@@ -258,6 +264,7 @@ class InventoryProductInput {
     this.priceTier8,
     this.priceTier9,
     this.priceTier10,
+    this.priceTiersPresent,
   });
 
   final String? id;
@@ -308,6 +315,11 @@ class InventoryProductInput {
   final double? priceTier8;
   final double? priceTier9;
   final double? priceTier10;
+
+  /// Niveles de precio que el archivo importado traía como columna. `null` =
+  /// todos (el formulario los edita todos). Un nivel ausente no se toca al
+  /// guardar; uno presente y vacío se borra.
+  final Set<int>? priceTiersPresent;
 
   /// Devuelve el precio del tier 1-10 (índice 1-based) o null.
   double? priceTier(int index) {
@@ -647,13 +659,34 @@ class InventoryRepository {
       throw Exception('No hay sucursal asignada para este usuario.');
     }
 
+    // La plantilla descargada trae `id`: es la llave preferida, porque
+    // sobrevive a que en el archivo le cambien el SKU o el producto no tenga.
+    // Sin `id` manda el SKU, como siempre.
     final skus = <String>{};
+    final ids = <String>{};
     for (final input in inputs) {
       final sku = input.sku?.trim();
       if (sku != null && sku.isNotEmpty) skus.add(sku);
+      final id = input.id?.trim();
+      // Solo uuids: un "1" escrito a mano en la columna haría fallar la
+      // consulta entera con "invalid input syntax for type uuid".
+      if (id != null && _uuidPattern.hasMatch(id)) ids.add(id);
     }
 
     final existingBySku = <String, String>{};
+    final existingIds = <String>{};
+    if (ids.isNotEmpty) {
+      // Los ids que no sean de esta sucursal no vuelven, y esas filas se crean.
+      final rows = await _client
+          .from('products')
+          .select('id')
+          .eq('branch_id', branchId)
+          .inFilter('id', ids.toList(growable: false));
+      for (final row in rows) {
+        final id = row['id']?.toString();
+        if (id != null) existingIds.add(id);
+      }
+    }
     if (skus.isNotEmpty) {
       final rows = await _client
           .from('products')
@@ -675,7 +708,10 @@ class InventoryRepository {
       final input = inputs[i];
       try {
         final sku = input.sku?.trim();
-        final existingId = (sku != null && sku.isNotEmpty)
+        final fileId = input.id?.trim();
+        final existingId = (fileId != null && existingIds.contains(fileId))
+            ? fileId
+            : (sku != null && sku.isNotEmpty)
             ? existingBySku[sku]
             : null;
         final payload = _buildProductPayload(input);
@@ -749,16 +785,14 @@ class InventoryRepository {
       ...input.packaging.toMap(),
       'track_inventory': input.trackInventory,
       'imeis': input.imeis,
-      'price_tier_1': input.priceTier1 ?? input.price,
-      'price_tier_2': input.priceTier2,
-      'price_tier_3': input.priceTier3,
-      'price_tier_4': input.priceTier4,
-      'price_tier_5': input.priceTier5,
-      'price_tier_6': input.priceTier6,
-      'price_tier_7': input.priceTier7,
-      'price_tier_8': input.priceTier8,
-      'price_tier_9': input.priceTier9,
-      'price_tier_10': input.priceTier10,
+      // Un nivel que la importación no trajo como columna se omite del
+      // payload y queda como está. El formulario manda `priceTiersPresent`
+      // nulo y los escribe todos.
+      for (var slot = 1; slot <= 10; slot++)
+        if (input.priceTiersPresent?.contains(slot) ?? true)
+          'price_tier_$slot': slot == 1
+              ? (input.priceTier1 ?? input.price)
+              : input.priceTier(slot),
     };
   }
 

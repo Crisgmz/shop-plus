@@ -53,8 +53,9 @@ void main() {
       // 'costo' ya es una columna de la plantilla → ese slot queda legado.
       expect(headers, contains('precio_2'));
       expect(headers, contains('Distribuidor'));
-      // Slot vacío → legado.
-      expect(headers, contains('precio_4'));
+      // Un nivel SIN nombre configurado ya no viaja: si llevara columna, al
+      // subir el archivo vacío borraría ese precio. Lo que no viene no se toca.
+      expect(headers, isNot(contains('precio_4')));
     });
 
     test('al importar se aceptan los nombres configurados', () {

@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../shared/formatters/formatters.dart' as fmt;
 import '../../../shared/io/storage_image_loader.dart';
+import '../../../shared/packaging/presentation_row.dart';
 import '../../printing/data/printing.dart';
 import 'quotations_models.dart';
 
@@ -49,7 +50,10 @@ class QuotationsRepository implements QuotationsRepositoryContract {
     final itemRows = await _client
         .from('quotation_items')
         .select(
-          'product_id, product_name, product_sku, description, quantity, unit_price, tax_rate',
+          'product_id, product_name, product_sku, description, quantity, '
+          'unit_price, tax_rate, discount_amount, '
+          // Presentación cotizada (migración 95).
+          'uom, uom_factor, uom_price, unit_name',
         )
         .eq('quotation_id', quoteId)
         .order('created_at');
@@ -68,7 +72,12 @@ class QuotationsRepository implements QuotationsRepositoryContract {
     final rows = await _client
         .from('products')
         .select(
-          'id, name, sku, barcode, description, price, tax_rate, stock, is_active',
+          'id, name, sku, barcode, description, price, tax_rate, stock, '
+          'is_active, '
+          // Empaques (migración 86) y precios de caja por tipo, para poder
+          // cotizar por caja igual que en el punto de venta.
+          'units_per_pack, packs_per_box, unit_label, pack_label, box_label, '
+          'pack_price, box_price, min_unit_qty, metadata',
         )
         .eq('branch_id', branchId)
         .eq('is_active', true)
@@ -445,11 +454,16 @@ class QuotationsRepository implements QuotationsRepositoryContract {
                 _nullIfEmpty(item.productDescription) ?? item.productName,
             'quantity': item.quantity,
             'unit_price': item.unitPrice,
-            'discount_amount': 0,
+            'discount_amount': item.discountAmount,
             'tax_rate': item.taxRate,
             'line_subtotal': item.lineSubtotal,
             'line_tax': item.lineTax,
             'line_total': item.lineTotal,
+            // Presentación cotizada (migración 95). Nulos = línea suelta.
+            'uom': item.isPresentation ? item.uom : null,
+            'uom_factor': item.isPresentation ? item.uomFactor : null,
+            'uom_price': item.isPresentation ? item.uomPrice : null,
+            'unit_name': item.isPresentation ? item.unitName : null,
           },
         )
         .toList(growable: false);
@@ -587,7 +601,8 @@ class QuotationsRepository implements QuotationsRepositoryContract {
         .from('quotation_items')
         .select(
           'product_name, product_sku, quantity, unit_price, '
-          'line_subtotal, line_tax, line_total',
+          'line_subtotal, line_tax, line_total, '
+          'uom, uom_factor, uom_price, unit_name',
         )
         .eq('quotation_id', quoteId)
         .order('created_at');
@@ -639,8 +654,10 @@ class QuotationsRepository implements QuotationsRepositoryContract {
           .map(
             (item) => QuotePrintItemSource(
               description: (item['product_name'] ?? '').toString(),
-              quantity: _toDouble(item['quantity']),
-              unitPrice: _toDouble(item['unit_price']),
+              // "2 Cajas a RD$2,639.83", no "40 a RD$131.99".
+              quantity: presentationQuantity(item),
+              unitPrice: presentationUnitPrice(item),
+              presentationLabel: presentationLabelOf(item),
               lineSubtotal: _toDouble(item['line_subtotal']),
               lineTax: _toDouble(item['line_tax']),
               lineTotal: _toDouble(item['line_total']),

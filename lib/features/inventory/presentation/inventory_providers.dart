@@ -5,6 +5,12 @@ import '../data/inventory_repository.dart';
 
 final inventorySearchProvider = StateProvider<String>((ref) => '');
 final inventoryLowStockOnlyProvider = StateProvider<bool>((ref) => false);
+
+/// Ver los productos archivados (desactivados). Apagado: no aparecen en la
+/// lista, igual que ya no aparecen en el punto de venta. Es lo que queda de
+/// "eliminar" un producto con ventas: la factura vieja lo necesita, así que
+/// no se borra, se esconde.
+final inventoryShowArchivedProvider = StateProvider<bool>((ref) => false);
 final inventorySelectedCategoryProvider = StateProvider<String?>((ref) => null);
 
 /// IDs de productos marcados para borrado masivo. Vive en un provider (no en
@@ -46,8 +52,10 @@ final inventoryFilteredProductsProvider =
   final query = ref.watch(inventorySearchProvider).trim().toLowerCase();
   final categoryId = ref.watch(inventorySelectedCategoryProvider);
   final lowStockOnly = ref.watch(inventoryLowStockOnlyProvider);
+  final showArchived = ref.watch(inventoryShowArchivedProvider);
 
   return products.where((p) {
+    if (!showArchived && !p.isActive) return false;
     if (lowStockOnly && !p.isLowStock) return false;
     if (categoryId != null && p.categoryId != categoryId) return false;
     if (query.isEmpty) return true;
@@ -61,6 +69,13 @@ final inventoryFilteredProductsProvider =
     if (cat != null && cat.contains(query)) return true;
     return false;
   }).toList(growable: false);
+});
+
+/// Cuántos productos archivados hay, para el chip del filtro.
+final inventoryArchivedCountProvider = Provider<int>((ref) {
+  final products = ref.watch(inventoryProductsProvider).valueOrNull;
+  if (products == null) return 0;
+  return products.where((p) => !p.isActive).length;
 });
 
 /// KPIs del listado filtrado (costo total, precio total, stock total).

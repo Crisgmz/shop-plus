@@ -9,6 +9,7 @@ import '../../cash_register/presentation/cash_register_providers.dart';
 import '../../cobros/presentation/cobros_providers.dart';
 import '../../settings/presentation/app_settings_providers.dart';
 import '../data/quotations_models.dart';
+import '../../../shared/packaging/product_packaging.dart';
 import 'convert_payment_dialog.dart';
 import 'quotations_providers.dart';
 
@@ -160,15 +161,22 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                     stock: 0,
                     isActive: true,
                   );
-              final gross = item.quantity * item.unitPrice;
+              // Lo guardado viene en unidades base; la pantalla trabaja en
+              // presentaciones ("2 Cajas").
+              final uom = PackagingUom.fromDb(item.uom);
+              final quantity = item.presentationQuantity;
+              final precio = item.uomPrice ?? item.unitPrice;
+              final gross = quantity * precio;
               final discountPct = gross > 0
                   ? QuotationsMath.round2(item.discountAmount / gross * 100)
                   : 0.0;
               return QuoteDraftLine(
                 product: product,
-                quantity: item.quantity,
+                quantity: quantity,
                 unitPrice: item.unitPrice,
                 discountPct: discountPct,
+                uom: uom,
+                presentationPriceOverride: item.uomPrice,
               );
             }),
           );
@@ -192,7 +200,14 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
         final current = _items[index];
         _items[index] = current.copyWith(quantity: current.quantity + 1);
       } else {
-        _items.add(QuoteDraftLine(product: product, quantity: 1));
+        _items.add(
+          QuoteDraftLine(
+            product: product,
+            quantity: 1,
+            // Igual que el POS: entra por la presentación mayor (la caja).
+            uom: product.packaging.sellableUoms.first,
+          ),
+        );
       }
     });
     _persistDraft();
@@ -214,8 +229,28 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
 
   void _updatePrice(int index, double value) {
     if (!_canEditDocument) return;
+    final precio = value < 0 ? 0.0 : value;
     setState(() {
-      _items[index] = _items[index].copyWith(unitPrice: value < 0 ? 0 : value);
+      final line = _items[index];
+      // En una línea con presentación, lo que se escribe es el precio de la
+      // caja; en una suelta, el de la unidad base.
+      _items[index] = line.isPresentation
+          ? line.copyWith(presentationPriceOverride: precio)
+          : line.copyWith(unitPrice: precio);
+    });
+    _persistDraft();
+  }
+
+  /// Cambia la presentación de una línea: vuelve a 1 y retoma el precio
+  /// configurado para esa presentación.
+  void _setLineUom(int index, PackagingUom uom) {
+    if (!_canEditDocument) return;
+    setState(() {
+      _items[index] = _items[index].copyWith(
+        uom: uom,
+        quantity: 1,
+        clearPresentationPrice: true,
+      );
     });
     _persistDraft();
   }
@@ -282,10 +317,16 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                 productName: item.product.name,
                 productSku: item.product.sku,
                 productDescription: item.product.description,
-                quantity: item.quantity,
+                // A la base va la cantidad en unidades base, igual que en las
+                // ventas: así el inventario descuenta bien al convertir.
+                quantity: item.baseQuantity,
                 unitPrice: item.unitPrice,
                 taxRate: item.product.taxRate,
                 discountAmount: item.discountAmount,
+                uom: item.uom.dbValue,
+                uomFactor: item.uomFactor,
+                uomPrice: item.isPresentation ? item.presentationPrice : null,
+                unitName: item.isPresentation ? item.unitName : null,
               ),
             )
             .toList(growable: false),
@@ -762,6 +803,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                       onRemove: () =>
                           _updateQuantity(index, -_items[index].quantity),
                       onPriceChanged: (value) => _updatePrice(index, value),
+                      onUomChanged: (uom) => _setLineUom(index, uom),
                       onDiscountChanged: (value) =>
                           _updateDiscount(index, value),
                     ),
@@ -979,6 +1021,109 @@ class _ProductCard extends StatelessWidget {
 /// Línea de cotización con el mismo estilo del carrito de facturación:
 /// tarjeta con nombre + campos Precio (editable) · Cantidad (+/-) ·
 /// Descuento % (editable) · Total (calculado).
+/// Selector de presentación de la línea: la caja (con lo que trae y su
+/// precio) o suelto. Mismo criterio que el chip del punto de venta.
+class _PresentationChip extends StatelessWidget {
+  const _PresentationChip({
+    required this.item,
+    required this.readOnly,
+    required this.onChanged,
+  });
+
+  final QuoteDraftLine item;
+  final bool readOnly;
+  final ValueChanged<PackagingUom> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final packaging = item.product.packaging;
+
+    String describe(PackagingUom uom) {
+      final label = packaging.labelFor(uom);
+      if (uom == PackagingUom.unit) return label;
+      final units = packaging.factorFor(uom);
+      final n = units == units.roundToDouble()
+          ? units.toInt().toString()
+          : units.toString();
+      return '$label · $n u';
+    }
+
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppTokens.card,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppTokens.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.inventory_2_outlined,
+            size: 13,
+            color: AppTokens.textSecondary,
+          ),
+          const SizedBox(width: 5),
+          Text(
+            describe(item.uom),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: AppTokens.textPrimary,
+            ),
+          ),
+          if (!readOnly)
+            const Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 14,
+              color: AppTokens.textSecondary,
+            ),
+        ],
+      ),
+    );
+
+    if (readOnly) return chip;
+
+    return PopupMenuButton<PackagingUom>(
+      tooltip: 'Presentación',
+      position: PopupMenuPosition.under,
+      constraints: const BoxConstraints(minWidth: 220),
+      itemBuilder: (_) => [
+        for (final uom in packaging.sellableUoms)
+          PopupMenuItem<PackagingUom>(
+            value: uom,
+            height: 40,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  describe(uom),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: uom == item.uom
+                        ? FontWeight.w700
+                        : FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  money(packaging.priceFor(uom, item.unitPrice)),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppTokens.primary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+      onSelected: onChanged,
+      child: chip,
+    );
+  }
+}
+
 class _QuoteLineTile extends StatefulWidget {
   const _QuoteLineTile({
     super.key,
@@ -988,6 +1133,7 @@ class _QuoteLineTile extends StatefulWidget {
     required this.onRemove,
     required this.onPriceChanged,
     required this.onDiscountChanged,
+    required this.onUomChanged,
     required this.readOnly,
   });
 
@@ -997,6 +1143,7 @@ class _QuoteLineTile extends StatefulWidget {
   final VoidCallback onRemove;
   final ValueChanged<double> onPriceChanged;
   final ValueChanged<double> onDiscountChanged;
+  final ValueChanged<PackagingUom> onUomChanged;
   final bool readOnly;
 
   @override
@@ -1010,15 +1157,17 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
   @override
   void initState() {
     super.initState();
-    _priceCtrl = TextEditingController(text: _fmt(widget.item.unitPrice));
+    _priceCtrl = TextEditingController(
+      text: _fmt(widget.item.presentationPrice),
+    );
     _discountCtrl = TextEditingController(text: _fmt(widget.item.discountPct));
   }
 
   @override
   void didUpdateWidget(covariant _QuoteLineTile old) {
     super.didUpdateWidget(old);
-    if (old.item.unitPrice != widget.item.unitPrice) {
-      _priceCtrl.text = _fmt(widget.item.unitPrice);
+    if (old.item.presentationPrice != widget.item.presentationPrice) {
+      _priceCtrl.text = _fmt(widget.item.presentationPrice);
     }
     if (old.item.discountPct != widget.item.discountPct) {
       _discountCtrl.text = _fmt(widget.item.discountPct);
@@ -1072,6 +1221,14 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
                         color: AppTokens.textSecondary,
                       ),
                     ),
+                    if (item.product.packaging.hasPacks) ...[
+                      const SizedBox(height: 4),
+                      _PresentationChip(
+                        item: item,
+                        readOnly: widget.readOnly,
+                        onChanged: widget.onUomChanged,
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1096,11 +1253,14 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
               Expanded(
                 flex: 3,
                 child: _MiniField(
-                  label: 'Precio',
+                  // "Precio Caja" cuando la línea va por presentación.
+                  label: item.isPresentation
+                      ? 'Precio ${item.unitName}'
+                      : 'Precio',
                   controller: _priceCtrl,
                   enabled: !widget.readOnly,
                   onCommit: (raw) => widget.onPriceChanged(
-                    double.tryParse(raw) ?? item.unitPrice,
+                    double.tryParse(raw) ?? item.presentationPrice,
                   ),
                 ),
               ),

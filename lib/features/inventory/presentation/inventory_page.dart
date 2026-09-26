@@ -94,6 +94,8 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     final productsAsync = ref.watch(inventoryProductsProvider);
     final categoriesAsync = ref.watch(inventoryCategoriesProvider);
     final lowStockOnly = ref.watch(inventoryLowStockOnlyProvider);
+    final showArchived = ref.watch(inventoryShowArchivedProvider);
+    final archivedCount = ref.watch(inventoryArchivedCountProvider);
     final selectedCategoryId = ref.watch(inventorySelectedCategoryProvider);
     final isMobile = ResponsiveLayout.isMobile(context);
 
@@ -135,6 +137,10 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                       _buildCategoryDropdown(categoriesAsync, selectedCategoryId),
                       const SizedBox(height: AppTokens.s12),
                       _buildLowStockToggle(lowStockOnly),
+                      if (archivedCount > 0) ...[
+                        const SizedBox(height: AppTokens.s12),
+                        _buildArchivedToggle(showArchived, archivedCount),
+                      ],
                     ],
                   )
                 : Row(
@@ -147,6 +153,10 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
                       ),
                       const SizedBox(width: AppTokens.s16),
                       _buildLowStockToggle(lowStockOnly),
+                      if (archivedCount > 0) ...[
+                        const SizedBox(width: AppTokens.s8),
+                        _buildArchivedToggle(showArchived, archivedCount),
+                      ],
                     ],
                   ),
           ),
@@ -350,6 +360,16 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     );
   }
 
+  /// Los archivados están fuera de la lista; este chip los trae de vuelta.
+  Widget _buildArchivedToggle(bool value, int count) {
+    return FilterChip(
+      selected: value,
+      label: Text('Archivados ($count)'),
+      onSelected: (v) =>
+          ref.read(inventoryShowArchivedProvider.notifier).state = v,
+    );
+  }
+
   Widget _buildLowStockToggle(bool value) {
     return FilterChip(
       selected: value,
@@ -446,7 +466,9 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            product.isActive ? 'Producto desactivado' : 'Producto activado',
+            product.isActive
+                ? 'Producto archivado: sale de la lista y del punto de venta'
+                : 'Producto restaurado',
           ),
         ),
       );
@@ -521,7 +543,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     ref.invalidate(inventoryProductsProvider);
     final parts = <String>[
       if (deleted > 0) '$deleted eliminado(s)',
-      if (deactivated > 0) '$deactivated desactivado(s)',
+      if (deactivated > 0) '$deactivated archivado(s) por tener ventas',
       if (failed > 0) '$failed con error',
     ];
     ScaffoldMessenger.of(context).showSnackBar(
@@ -581,7 +603,8 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                'Tenía ventas/compras vinculadas. Se desactivó en su lugar.',
+                'Tenía ventas o compras, así que no se puede borrar: se '
+                'archivó y ya no aparece en la lista.',
               ),
             ),
           );
@@ -1373,7 +1396,7 @@ class _ProductRow extends StatelessWidget {
             child: Align(
               alignment: Alignment.centerLeft,
               child: StatusBadge(
-                label: product.isActive ? 'Activo' : 'Inactivo',
+                label: product.isActive ? 'Activo' : 'Archivado',
                 status: product.isActive ? 'active' : 'inactive',
               ),
             ),
@@ -1457,7 +1480,7 @@ class _InventoryProductCard extends StatelessWidget {
                   ),
                 ),
                 StatusBadge(
-                  label: product.isActive ? 'Activo' : 'Inactivo',
+                  label: product.isActive ? 'Activo' : 'Archivado',
                   status: product.isActive ? 'active' : 'inactive',
                 ),
               ],
@@ -1484,8 +1507,11 @@ class _InventoryProductCard extends StatelessWidget {
                   onPressed: onEdit,
                 ),
                 IconButton(
+                  tooltip: product.isActive ? 'Archivar' : 'Restaurar',
                   icon: Icon(
-                    product.isActive ? Icons.block : Icons.check_circle_outline,
+                    product.isActive
+                        ? Icons.archive_outlined
+                        : Icons.unarchive_outlined,
                     size: 20,
                     color: product.isActive ? AppTokens.error : AppTokens.success,
                   ),
@@ -2873,6 +2899,10 @@ class _ImportInventoryDialogState
         builder: (_) => _ImportPreviewDialog(
           parseResult: parsed,
           warnings: warnings,
+          newProducts: countNewProducts(
+            inputs: parsed.inputs,
+            catalog: catalog,
+          ),
         ),
       );
       if (choice == null || !mounted) return;
@@ -3061,12 +3091,16 @@ class _ImportPreviewDialog extends StatelessWidget {
   const _ImportPreviewDialog({
     required this.parseResult,
     this.warnings = const [],
+    this.newProducts = 0,
   });
 
   final InventoryImportParseResult parseResult;
 
   /// Productos existentes que el archivo cambiaría de forma riesgosa.
   final List<InventoryImportWarning> warnings;
+
+  /// Filas que crearán un producto nuevo; el resto actualiza uno existente.
+  final int newProducts;
 
   @override
   Widget build(BuildContext context) {
@@ -3089,7 +3123,10 @@ class _ImportPreviewDialog extends StatelessWidget {
             Text(
               'Filas leídas: ${parseResult.totalRows}\n'
               'Filas válidas: ${parseResult.inputs.length}\n'
-              'Filas con error: ${parseResult.errors.length}',
+              'Filas con error: ${parseResult.errors.length}\n'
+              'Crean un producto nuevo: $newProducts\n'
+              'Actualizan uno existente: '
+              '${parseResult.inputs.length - newProducts}',
             ),
             const SizedBox(height: AppTokens.s12),
             if (hasErrors) ...[

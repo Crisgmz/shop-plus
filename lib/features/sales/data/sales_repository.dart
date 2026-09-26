@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../printing/data/printing.dart';
+import '../../../shared/packaging/presentation_row.dart';
 import '../../../shared/packaging/product_packaging.dart';
 import '../domain/sale_checkout_service.dart';
 
@@ -1195,9 +1196,9 @@ class SalesRepository {
                     ? base
                     : '$base\nIMEI: ${imeis.join(", ")}';
               }(),
-              quantity: _presentationQuantity(item),
-              unitPrice: _presentationUnitPrice(item),
-              presentationLabel: _presentationLabelOf(item),
+              quantity: presentationQuantity(item),
+              unitPrice: presentationUnitPrice(item),
+              presentationLabel: presentationLabelOf(item),
               lineSubtotal: _toDouble(item['line_subtotal']),
               lineTax: _toDouble(item['line_tax']),
               lineTotal: _toDouble(item['line_total']),
@@ -1693,37 +1694,6 @@ double _round2(double value) => (value * 100).roundToDouble() / 100;
 /// Factor de presentación de una fila de `sale_items`: mayor que 1 solo si la
 /// línea quedó marcada como caja/paquete (migración 89). Cualquier otro caso
 /// —sin marcar, factor inválido— da 1 y la línea se imprime en unidades.
-double _presentationFactor(Map<String, dynamic> row) {
-  if (PackagingUom.fromDb(row['uom']?.toString()) == PackagingUom.unit) {
-    return 1;
-  }
-  final factor = _toDouble(row['uom_factor']);
-  return factor > 0 ? factor : 1;
-}
-
-/// Cantidad a imprimir: 2 (cajas) en vez de 24 (unidades).
-double _presentationQuantity(Map<String, dynamic> row) {
-  final factor = _presentationFactor(row);
-  final quantity = _toDouble(row['quantity']);
-  return factor == 1 ? quantity : round3(quantity / factor);
-}
-
-/// Precio de UNA presentación. Sale de `uom_price` (migración 92), que guarda
-/// el precio con que se cobró la caja; solo si falta se deriva del unitario.
-double _presentationUnitPrice(Map<String, dynamic> row) {
-  final factor = _presentationFactor(row);
-  final price = _toDouble(row['unit_price']);
-  if (factor == 1) return price;
-  final stored = _toDouble(row['uom_price']);
-  return stored > 0 ? stored : round2(price * factor);
-}
-
-String? _presentationLabelOf(Map<String, dynamic> row) {
-  if (_presentationFactor(row) == 1) return null;
-  final name = row['unit_name']?.toString().trim();
-  return (name == null || name.isEmpty) ? 'Presentación' : name;
-}
-
 /// Si la base todavía no tiene la migración 91, PostgREST no encuentra la
 /// función con `p_honor_client_tax` (PGRST202). Solo puede pasar al vender a
 /// un cliente sin ITBIS —las demás ventas no mandan el parámetro—, así que se
