@@ -159,4 +159,18 @@ void main() {
       expect(leida.lineSubtotal, 350);
     });
   });
+
+  group('estado de la cotización en el desplegable', () {
+    test('las que se eligen a mano no incluyen "Convertida"', () {
+      final opciones = quoteStatusOptions(QuoteStatus.draft);
+      expect(opciones, isNot(contains(QuoteStatus.converted)));
+      expect(opciones, contains(QuoteStatus.draft));
+    });
+
+    test('una cotización ya convertida trae su propio estado', () {
+      // Sin esto el desplegable revienta: su valor no estaba entre los items.
+      final opciones = quoteStatusOptions(QuoteStatus.converted);
+      expect(opciones.where((s) => s == QuoteStatus.converted), hasLength(1));
+    });
+  });
 }

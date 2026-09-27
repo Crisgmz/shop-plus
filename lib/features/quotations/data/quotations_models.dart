@@ -138,6 +138,17 @@ extension QuoteStatusX on QuoteStatus {
   }
 }
 
+/// Opciones del desplegable "Estado" de la cotización.
+///
+/// "Convertida" no se elige a mano, pero una cotización YA convertida la tiene
+/// como estado actual, y `DropdownButtonFormField` exige que su valor esté
+/// entre los items: sin esto, abrir o convertir una cotización reventaba con
+/// "There should be exactly one item with [DropdownButton]'s value".
+List<QuoteStatus> quoteStatusOptions(QuoteStatus current) => [
+  ...QuoteStatus.values.where((status) => status.canBeSelectedOnForm),
+  if (!current.canBeSelectedOnForm) current,
+];
+
 class QuoteCatalogProduct {
   QuoteCatalogProduct({
     required this.id,

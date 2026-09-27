@@ -28,6 +28,10 @@ class QuotationCreatePage extends ConsumerStatefulWidget {
 class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
   final _searchController = TextEditingController();
   final _notesController = TextEditingController();
+
+  /// Las notas ocupan una sola línea hasta que se tocan: con el foco crecen a
+  /// cuatro, para no comerse el alto del panel mientras no se usan.
+  final _notesFocus = FocusNode();
   final List<QuoteDraftLine> _items = [];
 
   String? _clientId;
@@ -69,6 +73,10 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
   @override
   void initState() {
     super.initState();
+    // El alto del campo de notas depende del foco.
+    _notesFocus.addListener(() {
+      if (mounted) setState(() {});
+    });
     // Restaurar el borrador de una cotización nueva si el usuario lo dejó a
     // medias y navegó a otra sección. No aplica al editar una existente.
     if (!widget.isEditing) {
@@ -86,6 +94,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
   void dispose() {
     _searchController.dispose();
     _notesController.dispose();
+    _notesFocus.dispose();
     super.dispose();
   }
 
@@ -213,17 +222,22 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
     _persistDraft();
   }
 
-  void _updateQuantity(int index, double delta) {
+  /// Cantidad escrita a mano. En cero o menos, la línea se quita.
+  void _setQuantity(int index, double value) {
     if (!_canEditDocument) return;
     setState(() {
-      final current = _items[index];
-      final nextQuantity = current.quantity + delta;
-      if (nextQuantity <= 0) {
+      if (value <= 0) {
         _items.removeAt(index);
       } else {
-        _items[index] = current.copyWith(quantity: nextQuantity);
+        _items[index] = _items[index].copyWith(quantity: value);
       }
     });
+    _persistDraft();
+  }
+
+  void _removeLine(int index) {
+    if (!_canEditDocument) return;
+    setState(() => _items.removeAt(index));
     _persistDraft();
   }
 
@@ -734,37 +748,68 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                   error: (error, _) => Text('Error cargando clientes: $error'),
                 ),
                 const SizedBox(height: AppTokens.s12),
-                DropdownButtonFormField<QuoteStatus>(
-                  initialValue: _status,
-                  decoration: const InputDecoration(
-                    labelText: 'Estado',
-                    filled: true,
-                    fillColor: AppTokens.secondary,
-                    border: OutlineInputBorder(),
-                  ),
-                  items: QuoteStatus.values
-                      .where((status) => status.canBeSelectedOnForm)
-                      .map(
-                        (status) => DropdownMenuItem<QuoteStatus>(
-                          value: status,
-                          child: Text(status.label),
+                // Estado y vigencia en la misma fila: son los dos datos
+                // cortos de la cabecera y juntos ahorran una línea.
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<QuoteStatus>(
+                        initialValue: _status,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Estado',
+                          filled: true,
+                          fillColor: AppTokens.secondary,
+                          border: OutlineInputBorder(),
                         ),
-                      )
-                      .toList(growable: false),
-                  onChanged: _canEditDocument
-                      ? (value) {
-                          if (value != null) {
-                            setState(() => _status = value);
-                            _persistDraft();
-                          }
-                        }
-                      : null,
-                ),
-                const SizedBox(height: AppTokens.s12),
-                OutlinedButton.icon(
-                  onPressed: _pickValidUntil,
-                  icon: const Icon(Icons.event_available_outlined),
-                  label: Text('Vigencia: ${formatDate(_validUntil)}'),
+                        items: quoteStatusOptions(_status)
+                            .map(
+                              (status) => DropdownMenuItem<QuoteStatus>(
+                                value: status,
+                                child: Text(status.label),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onChanged: _canEditDocument
+                            ? (value) {
+                                if (value != null) {
+                                  setState(() => _status = value);
+                                  _persistDraft();
+                                }
+                              }
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(width: AppTokens.s12),
+                    Expanded(
+                      // Con la misma cara del campo de al lado, no un botón
+                      // suelto de otra altura.
+                      child: InkWell(
+                        onTap: _canEditDocument ? _pickValidUntil : null,
+                        borderRadius: BorderRadius.circular(AppTokens.radius),
+                        child: InputDecorator(
+                          decoration: InputDecoration(
+                            labelText: 'Vigencia',
+                            filled: true,
+                            fillColor: AppTokens.secondary,
+                            border: const OutlineInputBorder(),
+                            suffixIcon: Icon(
+                              Icons.event_available_outlined,
+                              size: 18,
+                              color: _canEditDocument
+                                  ? AppTokens.textSecondary
+                                  : AppTokens.textMuted,
+                            ),
+                          ),
+                          child: Text(
+                            formatDate(_validUntil),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 if (_validUntil.isBefore(DateTime.now())) ...[
                   const SizedBox(height: AppTokens.s10),
@@ -798,10 +843,9 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                       key: ValueKey(_items[index].product.id),
                       item: _items[index],
                       readOnly: !_canEditDocument,
-                      onDecrease: () => _updateQuantity(index, -1),
-                      onIncrease: () => _updateQuantity(index, 1),
-                      onRemove: () =>
-                          _updateQuantity(index, -_items[index].quantity),
+                      onQuantityChanged: (value) =>
+                          _setQuantity(index, value),
+                      onRemove: () => _removeLine(index),
                       onPriceChanged: (value) => _updatePrice(index, value),
                       onUomChanged: (uom) => _setLineUom(index, uom),
                       onDiscountChanged: (value) =>
@@ -813,14 +857,27 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
             padding: const EdgeInsets.all(AppTokens.s16),
             child: TextField(
               controller: _notesController,
+              focusNode: _notesFocus,
               enabled: _canEditDocument,
-              maxLines: 3,
+              // Una sola línea en reposo; al tocarla crece hasta cuatro.
+              minLines: 1,
+              maxLines: _notesFocus.hasFocus ? 4 : 1,
               onChanged: (_) => _persistDraft(),
-              decoration: const InputDecoration(
-                hintText: 'Notas comerciales, condiciones o alcance...',
+              decoration: InputDecoration(
+                hintText: _notesFocus.hasFocus
+                    ? 'Notas comerciales, condiciones o alcance...'
+                    : 'Notas…',
+                isDense: true,
                 filled: true,
                 fillColor: AppTokens.secondary,
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
+                suffixIcon: _notesFocus.hasFocus
+                    ? null
+                    : const Icon(
+                        Icons.notes_outlined,
+                        size: 18,
+                        color: AppTokens.textSecondary,
+                      ),
               ),
             ),
           ),
@@ -1128,8 +1185,7 @@ class _QuoteLineTile extends StatefulWidget {
   const _QuoteLineTile({
     super.key,
     required this.item,
-    required this.onDecrease,
-    required this.onIncrease,
+    required this.onQuantityChanged,
     required this.onRemove,
     required this.onPriceChanged,
     required this.onDiscountChanged,
@@ -1138,8 +1194,7 @@ class _QuoteLineTile extends StatefulWidget {
   });
 
   final QuoteDraftLine item;
-  final VoidCallback onDecrease;
-  final VoidCallback onIncrease;
+  final ValueChanged<double> onQuantityChanged;
   final VoidCallback onRemove;
   final ValueChanged<double> onPriceChanged;
   final ValueChanged<double> onDiscountChanged;
@@ -1150,8 +1205,12 @@ class _QuoteLineTile extends StatefulWidget {
   State<_QuoteLineTile> createState() => _QuoteLineTileState();
 }
 
+/// Misma cara que la línea del carrito del punto de venta: nombre, chip de
+/// presentación y cuatro campos (precio, cantidad, descuento y total). Antes
+/// la cantidad iba con botones −/+ que se salían de la fila.
 class _QuoteLineTileState extends State<_QuoteLineTile> {
   late final TextEditingController _priceCtrl;
+  late final TextEditingController _qtyCtrl;
   late final TextEditingController _discountCtrl;
 
   @override
@@ -1160,6 +1219,7 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
     _priceCtrl = TextEditingController(
       text: _fmt(widget.item.presentationPrice),
     );
+    _qtyCtrl = TextEditingController(text: _fmt(widget.item.quantity));
     _discountCtrl = TextEditingController(text: _fmt(widget.item.discountPct));
   }
 
@@ -1169,6 +1229,9 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
     if (old.item.presentationPrice != widget.item.presentationPrice) {
       _priceCtrl.text = _fmt(widget.item.presentationPrice);
     }
+    if (old.item.quantity != widget.item.quantity) {
+      _qtyCtrl.text = _fmt(widget.item.quantity);
+    }
     if (old.item.discountPct != widget.item.discountPct) {
       _discountCtrl.text = _fmt(widget.item.discountPct);
     }
@@ -1177,6 +1240,7 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
   @override
   void dispose() {
     _priceCtrl.dispose();
+    _qtyCtrl.dispose();
     _discountCtrl.dispose();
     super.dispose();
   }
@@ -1187,6 +1251,9 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
   @override
   Widget build(BuildContext context) {
     final item = widget.item;
+    final packaging = item.product.packaging;
+    final sku = item.product.sku;
+
     return Container(
       margin: const EdgeInsets.only(bottom: AppTokens.s8),
       padding: const EdgeInsets.all(AppTokens.s10),
@@ -1197,6 +1264,7 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Nombre y botón de quitar ──
           Row(
             children: [
               Expanded(
@@ -1205,7 +1273,7 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
                   children: [
                     Text(
                       item.product.name,
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontWeight: FontWeight.w600,
@@ -1214,21 +1282,20 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
                       ),
                     ),
                     Text(
-                      'ITBIS ${item.product.taxRate.toStringAsFixed(0)}%'
-                      '${item.discountPct > 0 ? '  ·  Desc. ${_fmt(item.discountPct)}%' : ''}',
+                      [
+                        // La existencia solo si el producto vino del catálogo.
+                        if (item.product.stock > 0)
+                          'Inventario: ${packaging.hasPacks ? packaging.describeStock(item.product.stock) : qty(item.product.stock)}',
+                        if (sku != null && sku.isNotEmpty) 'SKU: $sku',
+                        'ITBIS ${item.product.taxRate.toStringAsFixed(0)}%',
+                      ].join('  ·  '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 11,
+                        fontSize: 10,
                         color: AppTokens.textSecondary,
                       ),
                     ),
-                    if (item.product.packaging.hasPacks) ...[
-                      const SizedBox(height: 4),
-                      _PresentationChip(
-                        item: item,
-                        readOnly: widget.readOnly,
-                        onChanged: widget.onUomChanged,
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -1246,64 +1313,53 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
                 ),
             ],
           ),
+          if (packaging.hasPacks) ...[
+            const SizedBox(height: AppTokens.s8),
+            _PresentationChip(
+              item: item,
+              readOnly: widget.readOnly,
+              onChanged: widget.onUomChanged,
+            ),
+          ],
           const SizedBox(height: AppTokens.s8),
+          // ── Precio, cantidad, descuento y total ──
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Expanded(
-                flex: 3,
                 child: _MiniField(
-                  // "Precio Caja" cuando la línea va por presentación.
                   label: item.isPresentation
-                      ? 'Precio ${item.unitName}'
+                      ? 'Precio ${item.unitName.toLowerCase()}'
                       : 'Precio',
                   controller: _priceCtrl,
                   enabled: !widget.readOnly,
+                  suffix: r'$',
                   onCommit: (raw) => widget.onPriceChanged(
                     double.tryParse(raw) ?? item.presentationPrice,
                   ),
                 ),
               ),
               const SizedBox(width: 6),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const _MiniLabel('Cantidad'),
-                  const SizedBox(height: 4),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _QtySmallBtn(
-                        icon: Icons.remove,
-                        onTap: widget.readOnly ? () {} : widget.onDecrease,
-                      ),
-                      SizedBox(
-                        width: 30,
-                        child: Center(
-                          child: Text(
-                            qty(item.quantity),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ),
-                      _QtySmallBtn(
-                        icon: Icons.add,
-                        onTap: widget.readOnly ? () {} : widget.onIncrease,
-                      ),
-                    ],
+              Expanded(
+                child: _MiniField(
+                  // "Cajas" cuando la línea va por presentación.
+                  label: item.isPresentation
+                      ? pluralLabel(item.unitName, 2)
+                      : 'Cantidad',
+                  controller: _qtyCtrl,
+                  enabled: !widget.readOnly,
+                  onCommit: (raw) => widget.onQuantityChanged(
+                    double.tryParse(raw) ?? item.quantity,
                   ),
-                ],
+                ),
               ),
               const SizedBox(width: 6),
               Expanded(
-                flex: 3,
                 child: _MiniField(
-                  label: 'Desc. %',
+                  label: 'Descuento',
                   controller: _discountCtrl,
                   enabled: !widget.readOnly,
+                  suffix: '%',
                   onCommit: (raw) => widget.onDiscountChanged(
                     double.tryParse(raw) ?? item.discountPct,
                   ),
@@ -1311,7 +1367,6 @@ class _QuoteLineTileState extends State<_QuoteLineTile> {
               ),
               const SizedBox(width: 6),
               Expanded(
-                flex: 3,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1369,12 +1424,16 @@ class _MiniField extends StatefulWidget {
     required this.controller,
     required this.onCommit,
     this.enabled = true,
+    this.suffix,
   });
 
   final String label;
   final TextEditingController controller;
   final ValueChanged<String> onCommit;
   final bool enabled;
+
+  /// "$" o "%" al final del campo, igual que en el carrito.
+  final String? suffix;
 
   @override
   State<_MiniField> createState() => _MiniFieldState();
@@ -1416,14 +1475,21 @@ class _MiniFieldState extends State<_MiniField> {
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             textAlign: TextAlign.right,
             style: const TextStyle(fontSize: 13),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               isDense: true,
               filled: true,
               fillColor: Colors.white,
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              border: OutlineInputBorder(),
-              enabledBorder: OutlineInputBorder(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 8,
+              ),
+              suffixText: widget.suffix,
+              suffixStyle: const TextStyle(
+                fontSize: 11,
+                color: AppTokens.textSecondary,
+              ),
+              border: const OutlineInputBorder(),
+              enabledBorder: const OutlineInputBorder(
                 borderSide: BorderSide(color: AppTokens.cardBorder),
               ),
             ),
@@ -1435,30 +1501,6 @@ class _MiniFieldState extends State<_MiniField> {
   }
 }
 
-class _QtySmallBtn extends StatelessWidget {
-  const _QtySmallBtn({required this.icon, required this.onTap});
-
-  final IconData icon;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        width: 24,
-        height: 24,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: AppTokens.cardBorder),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Icon(icon, size: 14, color: AppTokens.textSecondary),
-      ),
-    );
-  }
-}
 
 class _QuoteClientPick {
   const _QuoteClientPick({required this.id, required this.label});
