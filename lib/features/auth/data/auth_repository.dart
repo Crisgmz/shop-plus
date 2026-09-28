@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../core/auth/session_refresher.dart';
+
 class AuthRepository {
   AuthRepository(this._client);
 
@@ -81,8 +83,24 @@ class AuthRepository {
     );
   }
 
+  /// Cierra sesión evitando que un refresh de token en vuelo "resucite" al
+  /// usuario anterior: gotrue 2.18 guarda la sesión refrescada aunque ya se
+  /// haya hecho signOut mientras esperaba la respuesta de red.
   Future<void> signOut() async {
-    await _client.auth.signOut();
+    final refresher = SessionRefresher.instance;
+    await refresher.suspend();
+    _client.auth.stopAutoRefresh();
+    try {
+      await _client.auth.signOut();
+      // Un refresh interno del SDK pudo terminar durante la llamada de red
+      // del logout y restaurar la sesión: cerrarla de nuevo.
+      if (_client.auth.currentSession != null) {
+        await _client.auth.signOut();
+      }
+    } finally {
+      _client.auth.startAutoRefresh();
+      refresher.resume();
+    }
   }
 }
 
