@@ -105,6 +105,34 @@ class _SalesPageState extends ConsumerState<SalesPage> {
 
   int get _cartLines => _cart.length;
 
+  static const _fiscalReceiptTypes = [
+    ('consumer_final', 'Consumidor Final'),
+    ('fiscal_credit', 'Crédito Fiscal'),
+    ('governmental', 'Gubernamental'),
+    ('special', 'Régimen Especial'),
+    ('export', 'Exportación'),
+  ];
+
+  static const _defaultNcfSeries = {
+    'consumer_final': 'B02',
+    'fiscal_credit': 'B01',
+    'governmental': 'B15',
+    'special': 'B14',
+    'export': 'B16',
+  };
+
+  /// Serie que se muestra al lado del tipo de comprobante: la de la secuencia
+  /// que el checkout va a consumir (B02, o E32 si esa es la activa). Mientras
+  /// carga se muestra la serie tradicional; sin secuencia disponible, se avisa.
+  String _ncfSeriesLabel(String receiptType) {
+    final prefixes = ref.watch(activeNcfPrefixesProvider);
+    return prefixes.when(
+      data: (map) => map[receiptType] ?? 'sin secuencia',
+      loading: () => _defaultNcfSeries[receiptType] ?? '',
+      error: (_, _) => _defaultNcfSeries[receiptType] ?? '',
+    );
+  }
+
   /// Una venta "sin comprobante" es una nota de venta no fiscal: no factura
   /// ITBIS. Espeja `v_line_tax_rate` del RPC de checkout, que es quien fija
   /// los totales guardados — si el POS mostrara impuesto acá, el cajero
@@ -485,31 +513,18 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                             fontWeight: FontWeight.w600,
                             color: Color(0xFF475569),
                           ),
-                          items: const [
-                            DropdownMenuItem(
+                          items: [
+                            const DropdownMenuItem(
                               value: 'none',
                               child: Text('Sin comprobante'),
                             ),
-                            DropdownMenuItem(
-                              value: 'consumer_final',
-                              child: Text('Consumidor Final (B02)'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'fiscal_credit',
-                              child: Text('Crédito Fiscal (B01)'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'governmental',
-                              child: Text('Gubernamental (B15)'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'special',
-                              child: Text('Régimen Especial (B14)'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'export',
-                              child: Text('Exportación (B16)'),
-                            ),
+                            for (final (type, label) in _fiscalReceiptTypes)
+                              DropdownMenuItem(
+                                value: type,
+                                child: Text(
+                                  '$label (${_ncfSeriesLabel(type)})',
+                                ),
+                              ),
                           ],
                           onChanged: (v) {
                             setState(() => _receiptType = v!);

@@ -33,6 +33,55 @@ final ncfSequenceAvailableProvider =
   }
 });
 
+/// Prefijo NCF que se va a usar por cada tipo de comprobante en la sucursal
+/// actual (ej. `consumer_final` → `B02`, o `E32` si esa es la activa).
+///
+/// Espeja la elección de `assign_next_ncf` (migración 56): secuencia activa,
+/// vigente, con capacidad y, si hay varias del mismo tipo, la de menor
+/// número siguiente. Así el POS muestra la serie con la que realmente sale la
+/// factura. Un tipo sin secuencia disponible no aparece en el mapa.
+final activeNcfPrefixesProvider =
+    FutureProvider.autoDispose<Map<String, String>>((ref) async {
+  final client = ref.watch(supabaseClientProvider);
+  try {
+    final branchId = await client.rpc('current_branch_id');
+    if (branchId == null) return const {};
+    final rows = await client
+        .from('vw_ncf_stock')
+        .select(
+          'receipt_type, prefix, next_number, current_number, '
+          'sequence_start, sequence_end, status, is_expired',
+        )
+        .eq('branch_id', branchId)
+        .eq('is_active', true)
+        .eq('is_expired', false);
+
+    int? asInt(dynamic v) => (v as num?)?.toInt();
+    final best = <String, ({String prefix, int next})>{};
+    for (final raw in rows as List) {
+      final row = Map<String, dynamic>.from(raw as Map);
+      if ((row['status'] ?? 'active').toString() != 'active') continue;
+      final prefix = (row['prefix'] ?? '').toString().trim();
+      if (prefix.isEmpty) continue;
+      // Siguiente número efectivo, igual que el RPC cuando next_number es NULL.
+      final start = asInt(row['sequence_start']) ?? 1;
+      final current = asInt(row['current_number']) ?? 0;
+      final next = asInt(row['next_number']) ??
+          (start > current + 1 ? start : current + 1);
+      final end = asInt(row['sequence_end']);
+      if (end != null && next > end) continue;
+      final type = (row['receipt_type'] ?? '').toString();
+      final previous = best[type];
+      if (previous == null || next < previous.next) {
+        best[type] = (prefix: prefix, next: next);
+      }
+    }
+    return {for (final e in best.entries) e.key: e.value.prefix};
+  } catch (_) {
+    return const {};
+  }
+});
+
 /// Comprobante con el que arranca cada venta nueva del POS.
 ///
 /// Sale de Ajustes → Fiscal ("Tipo de comprobante por defecto",

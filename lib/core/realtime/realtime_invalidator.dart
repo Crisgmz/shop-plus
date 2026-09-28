@@ -109,6 +109,7 @@ import '../../features/sales/presentation/sales_history_providers.dart'
     show salesHistoryDetailProvider, salesHistoryPageProvider;
 import '../../features/sales/presentation/sales_providers.dart'
     show
+        activeNcfPrefixesProvider,
         ncfSequenceAvailableProvider,
         posDefaultReceiptTypeProvider,
         salesCategoriesProvider,
@@ -536,6 +537,7 @@ class RealtimeInvalidator {
 
     // ── Comprobantes fiscales ─────────────────────────────────────────────
     'ncf_sequences': [
+      activeNcfPrefixesProvider,
       ncfSequenceAvailableProvider,
       posDefaultReceiptTypeProvider,
       ncfStockAlertsProvider,
