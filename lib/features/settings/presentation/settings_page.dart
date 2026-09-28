@@ -2367,6 +2367,9 @@ class _NcfDialogState extends State<_NcfDialog> {
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(
                           labelText: 'Número actual',
+                          helperText: 'Último NCF emitido. El siguiente sale '
+                              'de aquí +1, o del inicio del rango.',
+                          helperMaxLines: 2,
                         ),
                         validator: (value) {
                           final parsed = int.tryParse((value ?? '').trim());

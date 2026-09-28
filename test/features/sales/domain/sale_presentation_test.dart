@@ -1,4 +1,5 @@
 import 'package:flutter_app/features/printing/data/printing_models.dart';
+import 'package:flutter_app/features/printing/data/sale_print_document_adapter.dart';
 import 'package:flutter_app/features/sales/data/sales_repository.dart';
 import 'package:flutter_app/features/sales/domain/sale_checkout_service.dart';
 import 'package:flutter_app/shared/packaging/product_packaging.dart';
@@ -201,6 +202,60 @@ void main() {
     test('una línea por unidad no cambia', () {
       expect(item().quantityLabel, '2');
       expect(item().descriptionWithPresentation, 'Vasos 12oz');
+    });
+
+    group('documento que mezcla cajas y sueltas', () {
+      SalePrintItemSource line(
+        double quantity, {
+        String? presentation,
+        String? baseUnit,
+      }) =>
+          SalePrintItemSource(
+            description: 'Vasos',
+            quantity: quantity,
+            unitPrice: 100,
+            lineSubtotal: 100,
+            lineTax: 0,
+            lineTotal: 100,
+            presentationLabel: presentation,
+            baseUnitLabel: baseUnit,
+          );
+
+      List<String> labels(List<SalePrintItemSource> items) =>
+          const SalePrintDocumentAdapter()
+              .toDocumentData(
+                SalePrintSource(
+                  saleId: 's1',
+                  branchId: 'b1',
+                  saleNumber: 'NV-1',
+                  status: 'completed',
+                  saleDate: DateTime(2026, 9, 28),
+                  receiptType: 'none',
+                  branchName: 'Sucursal',
+                  items: items,
+                  subtotal: 0,
+                  taxAmount: 0,
+                  totalAmount: 0,
+                ),
+              )
+              .items
+              .map((i) => i.quantityLabel)
+              .toList();
+
+      test('las sueltas dicen su unidad al lado de "1 Caja"', () {
+        expect(
+          labels([
+            line(6, baseUnit: 'Paquete'),
+            line(1, presentation: 'Caja', baseUnit: 'Paquete'),
+            line(6),
+          ]),
+          ['6 Paquetes', '1 Caja', '6 Unidades'],
+        );
+      });
+
+      test('sin cajas en el documento, la cantidad sigue sola', () {
+        expect(labels([line(6, baseUnit: 'Paquete'), line(2)]), ['6', '2']);
+      });
     });
   });
 

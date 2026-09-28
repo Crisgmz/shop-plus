@@ -164,6 +164,7 @@ class PrintDocumentItem {
     this.unitLabel,
     this.notes,
     this.presentationLabel,
+    this.baseUnitLabel,
   });
 
   final String description;
@@ -181,15 +182,24 @@ class PrintDocumentItem {
   /// líneas por unidad.
   final String? presentationLabel;
 
+  /// Unidad de una línea suelta ("Paquete", "Unidad"). Los adaptadores solo la
+  /// llenan cuando el documento mezcla presentaciones: al lado de "1 Caja", un
+  /// "6" a secas no dice si son paquetes o unidades.
+  final String? baseUnitLabel;
+
   bool get _hasPresentation => (presentationLabel ?? '').trim().isNotEmpty;
 
-  /// Cantidad lista para imprimir: "2 Cajas" en una presentación, "2" suelto.
+  /// Cantidad lista para imprimir: "2 Cajas" en una presentación, "6 Paquetes"
+  /// en una suelta con [baseUnitLabel], "6" en las demás.
   String get quantityLabel {
     final number = quantity == quantity.roundToDouble()
         ? quantity.toStringAsFixed(0)
         : quantity.toStringAsFixed(2);
-    if (!_hasPresentation) return number;
-    return '$number ${pluralLabel(presentationLabel!.trim(), quantity)}';
+    final label = _hasPresentation
+        ? presentationLabel!.trim()
+        : (baseUnitLabel ?? '').trim();
+    if (label.isEmpty) return number;
+    return '$number ${pluralLabel(label, quantity)}';
   }
 
   /// Descripción con la presentación al lado, para columnas de cantidad

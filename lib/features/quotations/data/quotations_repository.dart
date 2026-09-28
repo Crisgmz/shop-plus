@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../shared/formatters/formatters.dart' as fmt;
 import '../../../shared/io/storage_image_loader.dart';
 import '../../../shared/packaging/presentation_row.dart';
+import '../../../shared/packaging/product_unit_labels.dart';
 import '../../printing/data/printing.dart';
 import 'quotations_models.dart';
 
@@ -600,12 +601,16 @@ class QuotationsRepository implements QuotationsRepositoryContract {
     final itemRows = await _client
         .from('quotation_items')
         .select(
-          'product_name, product_sku, quantity, unit_price, '
+          'product_id, product_name, product_sku, quantity, unit_price, '
           'line_subtotal, line_tax, line_total, '
           'uom, uom_factor, uom_price, unit_name',
         )
         .eq('quotation_id', quoteId)
         .order('created_at');
+    final unitLabels = await fetchProductUnitLabels(
+      _client,
+      itemRows.map((row) => (row as Map)['product_id']?.toString()),
+    );
 
     final quoteSource = QuotePrintSource(
       quoteId: quoteId,
@@ -662,6 +667,7 @@ class QuotationsRepository implements QuotationsRepositoryContract {
               lineTax: _toDouble(item['line_tax']),
               lineTotal: _toDouble(item['line_total']),
               sku: item['product_sku']?.toString(),
+              baseUnitLabel: unitLabels[item['product_id']?.toString()],
             ),
           )
           .toList(growable: false),

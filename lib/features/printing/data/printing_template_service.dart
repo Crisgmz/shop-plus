@@ -60,7 +60,8 @@ class PrintingTemplateService {
           ThermalTicketRow(left: 'DESCUENTO', right: money(-document.totals.discount)),
         if (document.totals.serviceCharge > 0)
           ThermalTicketRow(left: 'LEY/SERVICIO', right: money(document.totals.serviceCharge)),
-        ThermalTicketRow(left: 'ITBIS', right: money(document.totals.tax)),
+        if (document.totals.tax > 0)
+          ThermalTicketRow(left: 'ITBIS', right: money(document.totals.tax)),
         ThermalTicketRow(
           left: 'TOTAL',
           right: money(document.totals.total),
@@ -150,7 +151,8 @@ class PrintingTemplateService {
           A4KeyValueRow(label: 'Descuento', value: money(-document.totals.discount)),
         if (document.totals.serviceCharge > 0)
           A4KeyValueRow(label: 'Ley/servicio', value: money(document.totals.serviceCharge)),
-        A4KeyValueRow(label: 'ITBIS', value: money(document.totals.tax)),
+        if (document.totals.tax > 0)
+          A4KeyValueRow(label: 'ITBIS', value: money(document.totals.tax)),
         A4KeyValueRow(
           label: 'Total',
           value: money(document.totals.total),

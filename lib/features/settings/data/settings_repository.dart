@@ -476,6 +476,21 @@ class BranchUpdateInput {
   final String timezoneName;
 }
 
+/// Próximo NCF que debe emitir una secuencia, con lo que el usuario dejó en
+/// el formulario: el que sigue al último emitido, sin bajar del inicio del
+/// rango autorizado.
+///
+/// `assign_next_ncf` lee `next_number` antes que nada (migración 56). Al
+/// guardar hay que reescribirlo: si no, la secuencia sigue en el número viejo
+/// y cambiar "Número actual" en Ajustes no hace nada.
+int nextNcfNumber({required int currentNumber, int? sequenceStart}) {
+  final siguiente = currentNumber + 1;
+  final inicio = (sequenceStart == null || sequenceStart <= 0)
+      ? 1
+      : sequenceStart;
+  return siguiente > inicio ? siguiente : inicio;
+}
+
 class NcfSequenceInput {
   NcfSequenceInput({
     required this.receiptType,
@@ -672,6 +687,12 @@ class SettingsRepository {
       'document_code': _nullIfEmpty(input.documentCode),
       'sequence_start': input.sequenceStart,
       'sequence_end': input.sequenceEnd,
+      // El que realmente se emite. Sin esto, la secuencia se queda pegada en
+      // el número que tenía y "Número actual" no surte efecto.
+      'next_number': nextNcfNumber(
+        currentNumber: input.currentNumber,
+        sequenceStart: input.sequenceStart,
+      ),
       'warning_threshold': input.warningThreshold,
       'status': input.status,
       'notes': _nullIfEmpty(input.notes),

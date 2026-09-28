@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../printing/data/printing.dart';
 import '../../../shared/packaging/presentation_row.dart';
 import '../../../shared/packaging/product_packaging.dart';
+import '../../../shared/packaging/product_unit_labels.dart';
 import '../domain/sale_checkout_service.dart';
 
 class SalesProduct {
@@ -189,9 +190,9 @@ class SalesProduct {
       trackInventory: map['track_inventory'] != false,
       imeis: map['imeis'] is List
           ? (map['imeis'] as List)
-              .map((e) => e.toString())
-              .where((e) => e.trim().isNotEmpty)
-              .toList(growable: false)
+                .map((e) => e.toString())
+                .where((e) => e.trim().isNotEmpty)
+                .toList(growable: false)
           : const <String>[],
     );
   }
@@ -620,9 +621,7 @@ class SalesRepository {
     }
 
     return rows
-        .map(
-          (item) => SalesProduct.fromMap(item, categoryNames),
-        )
+        .map((item) => SalesProduct.fromMap(item, categoryNames))
         .toList(growable: false);
   }
 
@@ -728,8 +727,9 @@ class SalesRepository {
     // único (no rompe si el app se despliega antes que la migración).
     final hasOverpay = input.changeAmount > 0.005;
     if (!input.asCredit && (input.payments.length >= 2 || hasOverpay)) {
-      params['p_payments'] =
-          input.payments.map((p) => p.toJson()).toList(growable: false);
+      params['p_payments'] = input.payments
+          .map((p) => p.toJson())
+          .toList(growable: false);
     }
 
     final dynamic rpcResult;
@@ -902,7 +902,9 @@ class SalesRepository {
         params: <String, dynamic>{'p_sale_id': saleId, 'p_lines': tags},
       );
     } catch (error) {
-      debugPrint('No se pudo marcar la presentación de la venta $saleId: $error');
+      debugPrint(
+        'No se pudo marcar la presentación de la venta $saleId: $error',
+      );
     }
   }
 
@@ -965,23 +967,26 @@ class SalesRepository {
       // empaque cambió desde entonces, se reabre suelta (mismo total).
       final storedUom = PackagingUom.fromDb(row['uom']?.toString());
       final storedFactor = _toDouble(row['uom_factor']);
-      final keepsPresentation = storedUom != PackagingUom.unit &&
+      final keepsPresentation =
+          storedUom != PackagingUom.unit &&
           storedFactor > 0 &&
           (product.packaging.factorFor(storedUom) - storedFactor).abs() <
               0.0005;
-      items.add(SaleCartItem(
-        product: product,
-        quantity: keepsPresentation ? round3(qty / storedFactor) : qty,
-        uom: keepsPresentation ? storedUom : PackagingUom.unit,
-        unitPrice: unitPrice,
-        discountPct: discountPct,
-        imeis: row['imeis'] is List
-            ? (row['imeis'] as List)
-                .map((e) => e.toString())
-                .where((e) => e.trim().isNotEmpty)
-                .toList(growable: false)
-            : const <String>[],
-      ));
+      items.add(
+        SaleCartItem(
+          product: product,
+          quantity: keepsPresentation ? round3(qty / storedFactor) : qty,
+          uom: keepsPresentation ? storedUom : PackagingUom.unit,
+          unitPrice: unitPrice,
+          discountPct: discountPct,
+          imeis: row['imeis'] is List
+              ? (row['imeis'] as List)
+                    .map((e) => e.toString())
+                    .where((e) => e.trim().isNotEmpty)
+                    .toList(growable: false)
+              : const <String>[],
+        ),
+      );
     }
 
     return HeldSaleDraftData(
@@ -1047,7 +1052,9 @@ class SalesRepository {
 
     // QR del pie: descarga en runtime (como el logo) para no depender del
     // asset bundleado ni del caché del service worker en web.
-    final qrBytes = await _downloadBytes(settings['company_qr_url']?.toString());
+    final qrBytes = await _downloadBytes(
+      settings['company_qr_url']?.toString(),
+    );
 
     // Cash session → nombre legible para "Caja registradora".
     final cashSessionId = sale['cash_session_id']?.toString();
@@ -1060,8 +1067,9 @@ class SalesRepository {
           .limit(1);
       if (csRows.isNotEmpty) {
         final csMap = Map<String, dynamic>.from(csRows.first as Map);
-        final openedAt =
-            DateTime.tryParse((csMap['opened_at'] ?? '').toString());
+        final openedAt = DateTime.tryParse(
+          (csMap['opened_at'] ?? '').toString(),
+        );
         if (openedAt != null) {
           final local = openedAt.isUtc ? openedAt.toLocal() : openedAt;
           final mm = local.month.toString().padLeft(2, '0');
@@ -1107,8 +1115,8 @@ class SalesRepository {
     // la caja del unitario (ver `_presentationUnitPrice`). Solo se atrapa ESE
     // caso; cualquier otra columna que falte sigue subiendo como error.
     const itemColumns =
-        'description, quantity, unit_price, line_subtotal, line_tax, line_total, '
-        'sku_snapshot, unit_name, imeis, uom, uom_factor';
+        'description, quantity, unit_price, discount_amount, line_subtotal, '
+        'line_tax, line_total, sku_snapshot, unit_name, imeis, uom, uom_factor';
     PostgrestList itemRows;
     try {
       itemRows = await _client
@@ -1126,6 +1134,11 @@ class SalesRepository {
           .eq('sale_id', saleId)
           .order('created_at');
     }
+
+    final unitLabels = await fetchProductUnitLabels(
+      _client,
+      itemRows.map((row) => (row as Map)['product_id']?.toString()),
+    );
 
     final paymentRows = await _client
         .from('payments')
@@ -1147,10 +1160,7 @@ class SalesRepository {
         settings['company_address'],
         branch['address'],
       ]),
-      branchPhone: _firstNonEmpty([
-        settings['company_phone'],
-        branch['phone'],
-      ]),
+      branchPhone: _firstNonEmpty([settings['company_phone'], branch['phone']]),
       branchEmail: _firstNonEmpty([settings['company_email']]),
       branchTaxId: settings['company_tax_id']?.toString(),
       branchLogoBytes: logoBytes,
@@ -1188,9 +1198,9 @@ class SalesRepository {
                 final base = (item['description'] ?? '').toString();
                 final imeis = item['imeis'] is List
                     ? (item['imeis'] as List)
-                        .map((e) => e.toString())
-                        .where((e) => e.trim().isNotEmpty)
-                        .toList()
+                          .map((e) => e.toString())
+                          .where((e) => e.trim().isNotEmpty)
+                          .toList()
                     : const <String>[];
                 return imeis.isEmpty
                     ? base
@@ -1199,11 +1209,13 @@ class SalesRepository {
               quantity: presentationQuantity(item),
               unitPrice: presentationUnitPrice(item),
               presentationLabel: presentationLabelOf(item),
+              lineDiscount: _toDouble(item['discount_amount']),
               lineSubtotal: _toDouble(item['line_subtotal']),
               lineTax: _toDouble(item['line_tax']),
               lineTotal: _toDouble(item['line_total']),
               sku: item['sku_snapshot']?.toString(),
               unitLabel: item['unit_name']?.toString(),
+              baseUnitLabel: unitLabels[item['product_id']?.toString()],
             ),
           )
           .toList(growable: false),
@@ -1323,9 +1335,10 @@ class SalesRepository {
         .limit(limit);
 
     return rows
-        .map((item) => ReturnSummary.fromMap(
-              Map<String, dynamic>.from(item as Map),
-            ))
+        .map(
+          (item) =>
+              ReturnSummary.fromMap(Map<String, dynamic>.from(item as Map)),
+        )
         .toList(growable: false);
   }
 
@@ -1356,16 +1369,18 @@ class SalesRepository {
       if (input.cashSessionId != null && input.cashSessionId!.isNotEmpty)
         'p_cash_session_id': input.cashSessionId,
       'p_items': input.items
-          .map((item) => {
-                'product_id': item.product.id,
-                // En unidades base: devolver "1 Caja" son 12 unidades al inventario.
-                'quantity': item.baseQuantity,
-                // El precio de la LÍNEA, no el del catálogo: si el producto
-                // cambió de precio, se vendió con tier o con descuento, el
-                // catálogo devuelve un monto distinto al que se cobró.
-                'unit_price': item.unitPrice,
-                'tax_rate': item.product.effectiveTaxRate,
-              })
+          .map(
+            (item) => {
+              'product_id': item.product.id,
+              // En unidades base: devolver "1 Caja" son 12 unidades al inventario.
+              'quantity': item.baseQuantity,
+              // El precio de la LÍNEA, no el del catálogo: si el producto
+              // cambió de precio, se vendió con tier o con descuento, el
+              // catálogo devuelve un monto distinto al que se cobró.
+              'unit_price': item.unitPrice,
+              'tax_rate': item.product.effectiveTaxRate,
+            },
+          )
           .toList(growable: false),
     };
 
@@ -1373,9 +1388,7 @@ class SalesRepository {
     if (result is! Map) {
       throw Exception('No se pudo procesar la devolución.');
     }
-    return ReturnProcessedResult.fromMap(
-      Map<String, dynamic>.from(result),
-    );
+    return ReturnProcessedResult.fromMap(Map<String, dynamic>.from(result));
   }
 
   Future<String?> _currentBranchId() async {
@@ -1584,7 +1597,8 @@ class ReturnSummary {
     return ReturnSummary(
       id: (map['id'] ?? '').toString(),
       returnNumber: (map['return_number'] ?? '').toString(),
-      returnDate: DateTime.tryParse(map['return_date']?.toString() ?? '') ??
+      returnDate:
+          DateTime.tryParse(map['return_date']?.toString() ?? '') ??
           DateTime.now(),
       totalAmount: _toDoubleResult(map['total_amount']),
       taxAmount: _toDoubleResult(map['tax_amount']),

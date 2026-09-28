@@ -111,6 +111,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// cobraría un total distinto al que registra la venta.
   bool get _chargesTax => _receiptType != 'none' && !_clientSkipsTax;
 
+  /// Consumidor Final (B02): el ITBIS se cobra igual, pero la caja no lo
+  /// desglosa — los precios y el total se muestran con el impuesto adentro.
+  bool get _hideTaxBreakdown => _chargesTax && _receiptType == 'consumer_final';
+
   /// El cliente seleccionado no paga ITBIS ("Cobrar ITBIS" apagado o exento en
   /// su ficha). El checkout aplica la misma regla (migración 91).
   bool get _clientSkipsTax {
@@ -148,7 +152,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     // Comprobante por defecto de una venta fresca: el configurado en
     // Ajustes → Fiscal. Ver [posDefaultReceiptTypeProvider] — si ese tipo
     // necesita NCF y no hay secuencia disponible, cae a "Sin comprobante".
-    if (_cart.isEmpty && _receiptType == 'none' && _reopenedHeldSaleId == null) {
+    if (_cart.isEmpty &&
+        _receiptType == 'none' &&
+        _reopenedHeldSaleId == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         final byDefault = await ref.read(posDefaultReceiptTypeProvider.future);
@@ -424,6 +430,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
               itemBuilder: (context, index) => _ProductCard(
                 key: ValueKey(filtered[index].id),
                 product: filtered[index],
+                pricesIncludeTax: _hideTaxBreakdown,
                 onTap: () => _addProductToCart(filtered[index]),
               ),
             );
@@ -566,6 +573,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                       key: ValueKey(_cart[i].product.id),
                       item: _cart[i],
                       chargesTax: _chargesTax,
+                      pricesIncludeTax: _hideTaxBreakdown,
                       onRemove: () => _removeItem(i),
                       onPriceChanged: (value) => _setUnitPrice(i, value),
                       onQuantityChanged: (value) => _setQty(i, value),
@@ -610,13 +618,15 @@ class _SalesPageState extends ConsumerState<SalesPage> {
             ),
             child: Column(
               children: [
-                _totalLine('Subtotal', money(_cartSubtotal)),
-                const SizedBox(height: 2),
-                _totalLine(
-                  _chargesTax ? 'ITBIS (18%)' : 'ITBIS',
-                  money(_cartTax),
-                ),
-                const SizedBox(height: 8),
+                if (!_hideTaxBreakdown) ...[
+                  _totalLine('Subtotal', money(_cartSubtotal)),
+                  const SizedBox(height: 2),
+                  _totalLine(
+                    _chargesTax ? 'ITBIS (18%)' : 'ITBIS',
+                    money(_cartTax),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 Builder(
                   builder: (context) {
                     final isReturn =
@@ -854,10 +864,8 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     );
     // Una línea suelta nueva arranca en la venta mínima del producto.
     final minUnits = packaging.minUnitQty ?? 0;
-    final startQty =
-        uom == PackagingUom.unit && minUnits > 1 ? minUnits : 1.0;
-    final addedBase =
-        (index == -1 ? startQty : 1) * packaging.factorFor(uom);
+    final startQty = uom == PackagingUom.unit && minUnits > 1 ? minUnits : 1.0;
+    final addedBase = (index == -1 ? startQty : 1) * packaging.factorFor(uom);
     if (checksStock && _cartBaseFor(product.id) + addedBase > product.stock) {
       ScaffoldMessenger.of(
         context,
@@ -906,8 +914,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     final item = _cart[index];
     if (item.uom == next) return;
     final minUnits = item.product.packaging.minUnitQty ?? 0;
-    final startQty =
-        next == PackagingUom.unit && minUnits > 1 ? minUnits : 1.0;
+    final startQty = next == PackagingUom.unit && minUnits > 1 ? minUnits : 1.0;
     final candidate = item.copyWith(
       uom: next,
       quantity: startQty,
@@ -1126,9 +1133,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   void _setDiscountPct(int index, double value) {
     final clamped = value.clamp(0, 100).toDouble();
     final item = _cart[index];
-    setState(
-      () => _cart[index] = item.copyWith(discountPct: clamped),
-    );
+    setState(() => _cart[index] = item.copyWith(discountPct: clamped));
     _persistDraft();
   }
 
@@ -1139,7 +1144,8 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     setState(() {
       _clientId = newId;
       if (_cart.isEmpty) return;
-      final tier = (newId == null
+      final tier =
+          (newId == null
               ? null
               : ref.read(salesClientsByIdProvider)[newId]?.priceTier) ??
           'retail';
@@ -2376,9 +2382,26 @@ class _ModePill extends StatelessWidget {
 }
 
 class _ProductCard extends StatelessWidget {
-  const _ProductCard({super.key, required this.product, required this.onTap});
+  const _ProductCard({
+    super.key,
+    required this.product,
+    required this.onTap,
+    this.pricesIncludeTax = false,
+  });
   final SalesProduct product;
   final VoidCallback onTap;
+
+  /// Consumidor Final: la tarjeta muestra el precio final, ITBIS incluido,
+  /// igual que la línea del carrito.
+  final bool pricesIncludeTax;
+
+  double _shown(double base) {
+    final rate = product.effectiveTaxRate;
+    if (!pricesIncludeTax || product.priceIncludesTax || rate <= 0) {
+      return base;
+    }
+    return (base * (1 + rate / 100) * 100).roundToDouble() / 100;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2397,9 +2420,11 @@ class _ProductCard extends StatelessWidget {
     final shownStock = packaging.hasPacks
         ? packaging.wholeLargest(product.stock).toDouble()
         : product.stock;
-    final shownPrice = packaging.hasPacks
-        ? packaging.priceFor(packaging.largestUom, product.price)
-        : product.price;
+    final shownPrice = _shown(
+      packaging.hasPacks
+          ? packaging.priceFor(packaging.largestUom, product.price)
+          : product.price,
+    );
     final isLowStock = hasInventory && shownStock <= 5;
     // Comparación para el cajero: dentro de la caja el paquete sale a 131.99;
     // suelto, al precio que el negocio le puso (más caro).
@@ -2412,8 +2437,8 @@ class _ProductCard extends StatelessWidget {
           : units.toString();
       packagingLines = [
         '${packaging.labelFor(large)}: $n × '
-            '${money(packaging.pricePerBaseUnit(large, product.price))}',
-        '${packaging.effectiveUnitLabel}: ${money(product.price)}',
+            '${money(_shown(packaging.pricePerBaseUnit(large, product.price)))}',
+        '${packaging.effectiveUnitLabel}: ${money(_shown(product.price))}',
       ];
     } else {
       packagingLines = const [];
@@ -2550,11 +2575,7 @@ class _ProductCard extends StatelessWidget {
           ),
           // Un "0" rojo sobre un servicio no informa nada: no hay existencia.
           if (hasInventory)
-            Positioned(
-              top: 8,
-              right: 8,
-              child: _StockBadge(stock: shownStock),
-            ),
+            Positioned(top: 8, right: 8, child: _StockBadge(stock: shownStock)),
         ],
       ),
     );
@@ -2620,6 +2641,7 @@ class _CartLineTile extends ConsumerStatefulWidget {
     super.key,
     required this.item,
     required this.chargesTax,
+    this.pricesIncludeTax = false,
     required this.onRemove,
     required this.onPriceChanged,
     required this.onQuantityChanged,
@@ -2633,6 +2655,11 @@ class _CartLineTile extends ConsumerStatefulWidget {
   /// False en ventas sin comprobante: la línea muestra el subtotal, no el
   /// total con ITBIS, para que cuadre con el total del carrito.
   final bool chargesTax;
+
+  /// Consumidor Final: el precio de la línea se muestra y se edita con el
+  /// ITBIS adentro, para no desglosar el impuesto frente al cliente. Lo que se
+  /// guarda sigue siendo el precio base del producto.
+  final bool pricesIncludeTax;
 
   final VoidCallback onRemove;
   final ValueChanged<double> onPriceChanged;
@@ -2654,9 +2681,7 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
   void initState() {
     super.initState();
     // Precio de la presentación de la línea (la caja completa, o la unidad).
-    _priceCtrl = TextEditingController(
-      text: _fmtNum(widget.item.presentationPrice),
-    );
+    _priceCtrl = TextEditingController(text: _fmtNum(_displayPrice));
     _qtyCtrl = TextEditingController(text: _fmtNum(widget.item.quantity));
     _discountCtrl = TextEditingController(
       text: _fmtNum(widget.item.discountPct),
@@ -2670,8 +2695,9 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
     // afuera (ej. tier-change re-pricia, suma de cantidad por re-add, etc.).
     final uomChanged = oldWidget.item.uom != widget.item.uom;
     if (uomChanged ||
+        oldWidget.pricesIncludeTax != widget.pricesIncludeTax ||
         oldWidget.item.presentationPrice != widget.item.presentationPrice) {
-      _priceCtrl.text = _fmtNum(widget.item.presentationPrice);
+      _priceCtrl.text = _fmtNum(_displayPrice);
     }
     if (uomChanged || oldWidget.item.quantity != widget.item.quantity) {
       _qtyCtrl.text = _fmtNum(widget.item.quantity);
@@ -2688,6 +2714,24 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
     _discountCtrl.dispose();
     super.dispose();
   }
+
+  /// Factor para pasar del precio base al que ve el cliente. 1 si la línea no
+  /// esconde el impuesto o si el precio del producto ya lo trae adentro.
+  double get _taxFactor {
+    final item = widget.item;
+    if (!widget.pricesIncludeTax ||
+        item.product.priceIncludesTax ||
+        item.taxRate <= 0) {
+      return 1;
+    }
+    return 1 + item.taxRate / 100;
+  }
+
+  static double _round2(double v) => (v * 100).roundToDouble() / 100;
+
+  double _withTax(double base) => _round2(base * _taxFactor);
+
+  double get _displayPrice => _withTax(widget.item.presentationPrice);
 
   static String _fmtNum(double v) {
     if (v == v.roundToDouble()) return v.toInt().toString();
@@ -2715,11 +2759,23 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
               PriceTypeOption(
                 key: o.key,
                 label: o.label,
-                price: item.product.packaging
-                    .priceFor(item.uom, o.price, tier: o.key),
+                price: _withTax(
+                  item.product.packaging.priceFor(
+                    item.uom,
+                    o.price,
+                    tier: o.key,
+                  ),
+                ),
               ),
           ]
-        : baseOptions;
+        : [
+            for (final o in baseOptions)
+              PriceTypeOption(
+                key: o.key,
+                label: o.label,
+                price: _withTax(o.price),
+              ),
+          ];
     final currentPriceLabel = item.isCustomPrice
         ? 'Personalizado'
         : priceTierLabel(item.priceTier, priceTypes);
@@ -2832,8 +2888,12 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
                   controller: _priceCtrl,
                   suffix: r'$',
                   onSubmit: (raw) {
-                    final v = double.tryParse(raw) ?? item.presentationPrice;
-                    widget.onPriceChanged(v);
+                    final v = double.tryParse(raw);
+                    // El campo se "envía" en cada blur: sin cambio no se toca
+                    // el precio base, que al revertir el ITBIS podría moverse
+                    // un centavo.
+                    if (v == null || v == _displayPrice) return;
+                    widget.onPriceChanged(_round2(v / _taxFactor));
                   },
                 ),
               ),
@@ -2880,9 +2940,7 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
                       padding: const EdgeInsets.symmetric(vertical: 6),
                       child: Text(
                         money(
-                          widget.chargesTax
-                              ? item.lineTotal
-                              : item.lineNet,
+                          widget.chargesTax ? item.lineTotal : item.lineNet,
                         ),
                         style: TextStyle(
                           fontSize: 12,
@@ -2927,7 +2985,7 @@ class _CartLineTileState extends ConsumerState<_CartLineTile> {
           item.unitPrice,
           tier: item.priceTier,
         );
-        return '${money(perUnit)} por $unit';
+        return '${money(_withTax(perUnit))} por $unit';
       }
       final min = packaging.minUnitQty ?? 0;
       if (min <= 1) return null;
@@ -3364,7 +3422,11 @@ class _ClientPickerField extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                   child: const Padding(
                     padding: EdgeInsets.all(2),
-                    child: Icon(Icons.close, size: 16, color: Color(0xFF94A3B8)),
+                    child: Icon(
+                      Icons.close,
+                      size: 16,
+                      color: Color(0xFF94A3B8),
+                    ),
                   ),
                 )
               else
@@ -3511,8 +3573,7 @@ class _ClientPickerSheetState extends State<_ClientPickerSheet> {
                               icon: Icons.person_outline,
                             );
                           }
-                          final c =
-                              filtered[index - (showGeneral ? 1 : 0)];
+                          final c = filtered[index - (showGeneral ? 1 : 0)];
                           return _tile(
                             context,
                             id: c.id,

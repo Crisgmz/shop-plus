@@ -109,6 +109,8 @@ class SalePrintItemSource {
     this.unitLabel,
     this.notes,
     this.presentationLabel,
+    this.lineDiscount = 0,
+    this.baseUnitLabel,
   });
 
   final String description;
@@ -123,6 +125,14 @@ class SalePrintItemSource {
 
   /// Ver [PrintDocumentItem.presentationLabel].
   final String? presentationLabel;
+
+  /// Monto de descuento de la línea (`sale_items.discount_amount`). Sirve para
+  /// saber si [unitPrice] ya traía el ITBIS adentro.
+  final double lineDiscount;
+
+  /// Unidad base del producto (`products.unit_label`). Ver
+  /// [PrintDocumentItem.baseUnitLabel].
+  final String? baseUnitLabel;
 }
 
 class SalePrintPaymentSource {
@@ -141,6 +151,15 @@ class SalePrintDocumentAdapter {
   const SalePrintDocumentAdapter();
 
   PrintDocumentData toDocumentData(SalePrintSource source) {
+    // Si alguna línea va por presentación ("1 Caja"), las sueltas dicen en qué
+    // unidad van ("6 Paquetes"); si ninguna, siguen saliendo "6" como siempre.
+    final mixesPresentations = source.items.any(
+      (i) => (i.presentationLabel ?? '').trim().isNotEmpty,
+    );
+    // Consumidor Final: el ITBIS se cobra y queda registrado en la venta (607,
+    // reportes), pero el documento no lo desglosa — precios, subtotal y total
+    // salen con el impuesto adentro, igual que en la caja.
+    final taxIncluded = source.receiptType == 'consumer_final';
     return PrintDocumentData(
       documentType: _documentTypeForSale(source),
       documentNumber: source.saleNumber,
@@ -166,8 +185,10 @@ class SalePrintDocumentAdapter {
       paymentTermsLabel: source.balanceDue > 0.0049 ? 'CRÉDITO' : 'CONTADO',
       // ITBIS solo si: el toggle de config está activo, NO es venta sin
       // comprobante, y al menos un ítem realmente lleva impuesto.
-      showTax: source.showItbis &&
+      showTax:
+          source.showItbis &&
           source.receiptType != 'none' &&
+          !taxIncluded &&
           source.items.any((i) => i.lineTax > 0.0049),
       qrBytes: source.qrBytes,
       observation: _nullIfBlank(source.observation),
@@ -179,14 +200,17 @@ class SalePrintDocumentAdapter {
             (item) => PrintDocumentItem(
               description: item.description,
               quantity: item.quantity,
-              unitPrice: item.unitPrice,
-              lineSubtotal: item.lineSubtotal,
-              lineTax: item.lineTax,
+              unitPrice: taxIncluded ? _unitPriceWithTax(item) : item.unitPrice,
+              lineSubtotal: taxIncluded ? item.lineTotal : item.lineSubtotal,
+              lineTax: taxIncluded ? 0 : item.lineTax,
               lineTotal: item.lineTotal,
               sku: _nullIfBlank(item.sku),
               unitLabel: _nullIfBlank(item.unitLabel),
               notes: _nullIfBlank(item.notes),
               presentationLabel: _nullIfBlank(item.presentationLabel),
+              baseUnitLabel: mixesPresentations
+                  ? _nullIfBlank(item.baseUnitLabel) ?? 'Unidad'
+                  : null,
             ),
           )
           .toList(growable: false),
@@ -200,10 +224,12 @@ class SalePrintDocumentAdapter {
           )
           .toList(growable: false),
       totals: PrintTotals(
-        subtotal: source.subtotal,
+        subtotal: taxIncluded
+            ? _round2(source.subtotal + source.taxAmount)
+            : source.subtotal,
         discount: source.discountAmount,
         serviceCharge: source.serviceChargeAmount,
-        tax: source.taxAmount,
+        tax: taxIncluded ? 0 : source.taxAmount,
         total: source.totalAmount,
         paid: source.paidAmount,
         balance: source.balanceDue,
@@ -218,6 +244,21 @@ class SalePrintDocumentAdapter {
     );
   }
 }
+
+/// Precio unitario con el ITBIS adentro. Si el producto ya tenía el precio
+/// ITBIS-incluido, el neto (bruto − descuento) coincide con el total de la
+/// línea y el precio se deja tal cual; si no, coincide con el subtotal y se le
+/// suma la misma proporción de impuesto que lleva la línea.
+double _unitPriceWithTax(SalePrintItemSource item) {
+  if (item.lineTax <= 0.0049 || item.lineSubtotal <= 0) return item.unitPrice;
+  final net = item.unitPrice * item.quantity - item.lineDiscount;
+  final alreadyIncluded =
+      (net - item.lineTotal).abs() < (net - item.lineSubtotal).abs();
+  if (alreadyIncluded) return item.unitPrice;
+  return _round2(item.unitPrice * item.lineTotal / item.lineSubtotal);
+}
+
+double _round2(double value) => (value * 100).roundToDouble() / 100;
 
 PrintDocumentType _documentTypeForSale(SalePrintSource source) {
   if (_hasText(source.ncf)) {

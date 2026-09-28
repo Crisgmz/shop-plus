@@ -72,6 +72,7 @@ class QuotePrintItemSource {
     required this.lineTotal,
     this.sku,
     this.presentationLabel,
+    this.baseUnitLabel,
   });
 
   final String description;
@@ -84,12 +85,20 @@ class QuotePrintItemSource {
 
   /// "Caja" cuando la línea se cotizó por presentación; `null` si va suelta.
   final String? presentationLabel;
+
+  /// Unidad base del producto (`products.unit_label`). Ver
+  /// [PrintDocumentItem.baseUnitLabel].
+  final String? baseUnitLabel;
 }
 
 class QuotePrintDocumentAdapter {
   const QuotePrintDocumentAdapter();
 
   PrintDocumentData toDocumentData(QuotePrintSource source) {
+    // Si alguna línea va por presentación ("1 Caja"), las sueltas dicen en qué
+    // unidad van ("6 Paquetes"); si ninguna, siguen saliendo "6" como siempre.
+    final mixesPresentations = source.items
+        .any((i) => (i.presentationLabel ?? '').trim().isNotEmpty);
     return PrintDocumentData(
       documentType: PrintDocumentType.quote,
       documentNumber: source.quoteCode,
@@ -132,6 +141,9 @@ class QuotePrintDocumentAdapter {
               lineTotal: item.lineTotal,
               sku: _nullIfBlank(item.sku),
               presentationLabel: _nullIfBlank(item.presentationLabel),
+              baseUnitLabel: mixesPresentations
+                  ? _nullIfBlank(item.baseUnitLabel) ?? 'Unidad'
+                  : null,
             ),
           )
           .toList(growable: false),
