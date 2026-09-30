@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../shared/packaging/product_packaging.dart';
+
 class SalesHistoryRow {
   SalesHistoryRow({
     required this.id,
@@ -335,14 +337,31 @@ class SalesHistoryRepository {
     if (saleRows.isEmpty) return null;
     final sale = Map<String, dynamic>.from(saleRows.first as Map);
 
-    final itemRows = await _client
-        .from('sale_items')
-        .select(
-          'id, product_id, description, quantity, unit_price, '
-          'discount_amount, tax_rate, line_subtotal, line_tax, line_total',
-        )
-        .eq('sale_id', saleId)
-        .order('created_at');
+    // Con la presentación de cada línea: sin ella "4 Cajas" se leían como 80
+    // unidades al unitario y la edición recalculaba otro total. `uom_price`
+    // llega con la migración 92; si falta, se relee sin esa columna, igual
+    // que el recibo.
+    const itemColumns =
+        'id, product_id, description, quantity, unit_price, '
+        'discount_amount, tax_rate, line_subtotal, line_tax, line_total, '
+        'uom, uom_factor, unit_name, imeis';
+    PostgrestList itemRows;
+    try {
+      itemRows = await _client
+          .from('sale_items')
+          .select('$itemColumns, uom_price')
+          .eq('sale_id', saleId)
+          .order('created_at');
+    } on PostgrestException catch (error) {
+      final missingUomPrice =
+          error.code == '42703' && error.message.contains('uom_price');
+      if (!missingUomPrice) rethrow;
+      itemRows = await _client
+          .from('sale_items')
+          .select(itemColumns)
+          .eq('sale_id', saleId)
+          .order('created_at');
+    }
 
     final clientId = sale['client_id']?.toString();
     // Sin ficha puede haber un nombre escrito a mano (venta que vino de una
@@ -603,14 +622,57 @@ class SalesHistoryItem {
     required this.lineSubtotal,
     required this.lineTax,
     required this.lineTotal,
+    this.uom = PackagingUom.unit,
+    this.uomFactor = 1,
+    this.uomPrice,
+    this.unitName,
+    this.imeis = const <String>[],
   });
 
   final String id;
   final String? productId;
   final String description;
+
+  /// SIEMPRE en unidades base (4 cajas de 20 = 80). Ver [presentationQuantity].
   final double quantity;
+
+  /// Unitario base. En una línea por presentación NO es lo que se cobró: el
+  /// RPC cobra desde [uomPrice] (migración 92).
   final double unitPrice;
   final double taxRate;
+
+  /// Presentación con que se vendió la línea y cuántas unidades base trae una.
+  final PackagingUom uom;
+  final double uomFactor;
+
+  /// Precio de UNA presentación (la caja). Null en líneas sueltas y en ventas
+  /// anteriores a la migración 92.
+  final double? uomPrice;
+
+  /// Cómo se llamó la presentación en la factura ("Caja").
+  final String? unitName;
+
+  /// Equipos vendidos en la línea. La edición tiene que reenviarlos: el RPC
+  /// devuelve al inventario los de las líneas viejas y solo vuelve a sacar
+  /// los que le llegan.
+  final List<String> imeis;
+
+  bool get isPresentation => uom != PackagingUom.unit && uomFactor > 0;
+
+  /// Cantidad como se vendió: 80 unidades en cajas de 20 son 4 cajas.
+  double get presentationQuantity => isPresentation
+      ? (quantity / uomFactor * 1000).roundToDouble() / 1000
+      : quantity;
+
+  /// Precio de UNA presentación. Sin `uom_price` guardado se deriva del
+  /// unitario, igual que el recibo.
+  double get presentationPrice => isPresentation
+      ? uomPrice ?? (unitPrice * uomFactor * 100).roundToDouble() / 100
+      : unitPrice;
+
+  /// "Caja". Si la venta no guardó el nombre, el genérico de la presentación.
+  String get presentationLabel =>
+      unitName ?? ProductPackaging.none.labelFor(uom);
 
   /// Descuento de la línea en pesos. Es el dato bueno para reconstruir el
   /// porcentaje al editar: con precio ITBIS-incluido, `lineSubtotal` ya viene
@@ -632,6 +694,16 @@ class SalesHistoryItem {
       lineSubtotal: _d(map['line_subtotal']),
       lineTax: _d(map['line_tax']),
       lineTotal: _d(map['line_total']),
+      uom: PackagingUom.fromDb(map['uom']?.toString()),
+      uomFactor: _d(map['uom_factor']) > 0 ? _d(map['uom_factor']) : 1,
+      uomPrice: map['uom_price'] == null ? null : _d(map['uom_price']),
+      unitName: _s(map['unit_name']),
+      imeis: map['imeis'] is List
+          ? (map['imeis'] as List)
+              .map((e) => e.toString().trim())
+              .where((e) => e.isNotEmpty)
+              .toList(growable: false)
+          : const <String>[],
     );
   }
 }

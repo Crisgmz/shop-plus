@@ -16,6 +16,7 @@ import '../../cash_register/presentation/cash_register_providers.dart';
 import '../../clients/presentation/clients_providers.dart';
 import '../../settings/presentation/app_settings_providers.dart';
 import '../data/sales_repository.dart';
+import 'imei_picker_dialog.dart';
 import 'sales_providers.dart';
 
 /// Un tipo de precio disponible para una línea del carrito: su clave de tier,
@@ -1029,7 +1030,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     final selected = await showDialog<List<String>>(
       context: context,
       builder: (_) =>
-          _ImeiPickerDialog(productName: product.name, imeis: available),
+          ImeiPickerDialog(productName: product.name, imeis: available),
     );
     if (selected == null || selected.isEmpty || !mounted) return;
     _addImeiToCart(product, selected);
@@ -1856,85 +1857,6 @@ class _QuickClientDialogState extends State<_QuickClientDialog> {
             );
           },
           child: const Text('Crear'),
-        ),
-      ],
-    );
-  }
-}
-
-/// Selector de IMEIs al vender un producto serializado. Devuelve la lista de
-/// IMEIs marcados, o null si se cancela.
-class _ImeiPickerDialog extends StatefulWidget {
-  const _ImeiPickerDialog({required this.productName, required this.imeis});
-
-  final String productName;
-  final List<String> imeis;
-
-  @override
-  State<_ImeiPickerDialog> createState() => _ImeiPickerDialogState();
-}
-
-class _ImeiPickerDialogState extends State<_ImeiPickerDialog> {
-  final Set<String> _selected = {};
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text('IMEI · ${widget.productName}'),
-      content: SizedBox(
-        width: 380,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Selecciona los equipos que salen a la venta:',
-              style: TextStyle(fontSize: 13, color: Color(0xFF64748B)),
-            ),
-            const SizedBox(height: 8),
-            Flexible(
-              child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    for (final imei in widget.imeis)
-                      CheckboxListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        value: _selected.contains(imei),
-                        title: Text(
-                          'IMEI  $imei',
-                          style: const TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 14,
-                          ),
-                        ),
-                        onChanged: (v) => setState(() {
-                          if (v == true) {
-                            _selected.add(imei);
-                          } else {
-                            _selected.remove(imei);
-                          }
-                        }),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancelar'),
-        ),
-        FilledButton.icon(
-          onPressed: _selected.isEmpty
-              ? null
-              : () => Navigator.of(context).pop(_selected.toList()),
-          icon: const Icon(Icons.check_circle_outline, size: 18),
-          label: Text('Confirmar (${_selected.length})'),
         ),
       ],
     );

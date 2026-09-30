@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
 import '../../../shared/formatters/formatters.dart';
+import '../../../shared/packaging/product_packaging.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/print_receipt_dialog.dart';
@@ -827,8 +828,15 @@ class _SaleDetailDialog extends ConsumerWidget {
                     rows: detail.items
                         .map((it) => [
                               Text(it.description),
-                              Text(_qty(it.quantity)),
-                              Text(money(it.unitPrice)),
+                              // "4 Cajas" al precio de la caja, como la
+                              // factura; no 80 unidades al unitario.
+                              Text(
+                                it.isPresentation
+                                    ? '${_qty(it.presentationQuantity)} '
+                                        '${pluralLabel(it.presentationLabel, it.presentationQuantity)}'
+                                    : _qty(it.quantity),
+                              ),
+                              Text(money(it.presentationPrice)),
                               Text(money(it.lineSubtotal)),
                               Text(money(it.lineTax)),
                               Text(

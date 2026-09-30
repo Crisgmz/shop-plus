@@ -1,6 +1,7 @@
 import 'dart:io' show HttpClient;
 
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../printing/data/printing.dart';
@@ -908,6 +909,32 @@ class SalesRepository {
     }
   }
 
+  /// Líneas de una venta con [columns] + `uom_price`. `uom_price` llega con la
+  /// migración 92: si la base todavía no la tiene, se relee sin esa columna en
+  /// vez de fallar. Solo se atrapa ESE caso; cualquier otra columna que falte
+  /// sigue subiendo como error.
+  Future<PostgrestList> _fetchSaleItemsWithUomPrice(
+    String saleId,
+    String columns,
+  ) async {
+    try {
+      return await _client
+          .from('sale_items')
+          .select('$columns, uom_price')
+          .eq('sale_id', saleId)
+          .order('created_at');
+    } on PostgrestException catch (error) {
+      final missingUomPrice =
+          error.code == '42703' && error.message.contains('uom_price');
+      if (!missingUomPrice) rethrow;
+      return _client
+          .from('sale_items')
+          .select(columns)
+          .eq('sale_id', saleId)
+          .order('created_at');
+    }
+  }
+
   /// Descarta una cuenta GUARDADA (estado `pending`): devuelve el stock
   /// reservado y borra la fila. Solo opera sobre ventas pendientes.
   Future<void> discardHeldSale(String saleId) async {
@@ -932,15 +959,12 @@ class SalesRepository {
     final sale = Map<String, dynamic>.from(saleRows.first as Map);
     if ((sale['status'] ?? '').toString() != 'pending') return null;
 
-    final itemRows = await _client
-        .from('sale_items')
-        .select(
-          'product_id, quantity, unit_price, discount_amount, imeis, '
-          'uom, uom_factor',
-        )
-        .eq('branch_id', branchId)
-        .eq('sale_id', saleId)
-        .order('created_at');
+    // La venta ya se validó contra la sucursal arriba.
+    final itemRows = await _fetchSaleItemsWithUomPrice(
+      saleId,
+      'product_id, quantity, unit_price, discount_amount, imeis, '
+      'uom, uom_factor',
+    );
 
     final products = await fetchProducts();
     final productsById = {for (final p in products) p.id: p};
@@ -952,41 +976,8 @@ class SalesRepository {
       if (productId == null) continue;
       final product = productsById[productId];
       if (product == null) continue;
-      final qty = _toDouble(row['quantity']);
-      if (qty <= 0) continue;
-      // El descuento se guarda en monto; el carrito trabaja en porcentaje.
-      // Misma reconstrucción que hace la pantalla de editar venta.
-      final unitPrice = _toDouble(row['unit_price']);
-      final gross = qty * unitPrice;
-      final discountAmount = _toDouble(row['discount_amount']);
-      final discountPct = gross > 0
-          ? (discountAmount / gross * 100).clamp(0, 100).toDouble()
-          : 0.0;
-      // `quantity` está en unidades base. Si la línea se guardó como caja y el
-      // producto conserva ese mismo empaque, se reabre como "2 Cajas"; si el
-      // empaque cambió desde entonces, se reabre suelta (mismo total).
-      final storedUom = PackagingUom.fromDb(row['uom']?.toString());
-      final storedFactor = _toDouble(row['uom_factor']);
-      final keepsPresentation =
-          storedUom != PackagingUom.unit &&
-          storedFactor > 0 &&
-          (product.packaging.factorFor(storedUom) - storedFactor).abs() <
-              0.0005;
-      items.add(
-        SaleCartItem(
-          product: product,
-          quantity: keepsPresentation ? round3(qty / storedFactor) : qty,
-          uom: keepsPresentation ? storedUom : PackagingUom.unit,
-          unitPrice: unitPrice,
-          discountPct: discountPct,
-          imeis: row['imeis'] is List
-              ? (row['imeis'] as List)
-                    .map((e) => e.toString())
-                    .where((e) => e.trim().isNotEmpty)
-                    .toList(growable: false)
-              : const <String>[],
-        ),
-      );
+      final item = cartItemFromHeldSaleRow(row, product);
+      if (item != null) items.add(item);
     }
 
     return HeldSaleDraftData(
@@ -1110,30 +1101,13 @@ class SalesRepository {
       }
     }
 
-    // `uom_price` llega con la migración 92. Si la base todavía no la tiene,
-    // se relee sin esa columna en vez de fallar: el recibo deriva el precio de
-    // la caja del unitario (ver `_presentationUnitPrice`). Solo se atrapa ESE
-    // caso; cualquier otra columna que falte sigue subiendo como error.
-    const itemColumns =
-        'description, quantity, unit_price, discount_amount, line_subtotal, '
-        'line_tax, line_total, sku_snapshot, unit_name, imeis, uom, uom_factor';
-    PostgrestList itemRows;
-    try {
-      itemRows = await _client
-          .from('sale_items')
-          .select('$itemColumns, uom_price')
-          .eq('sale_id', saleId)
-          .order('created_at');
-    } on PostgrestException catch (error) {
-      final missingUomPrice =
-          error.code == '42703' && error.message.contains('uom_price');
-      if (!missingUomPrice) rethrow;
-      itemRows = await _client
-          .from('sale_items')
-          .select(itemColumns)
-          .eq('sale_id', saleId)
-          .order('created_at');
-    }
+    // Sin `uom_price` (base sin la migración 92) el recibo deriva el precio
+    // de la caja del unitario (ver `_presentationUnitPrice`).
+    final itemRows = await _fetchSaleItemsWithUomPrice(
+      saleId,
+      'description, quantity, unit_price, discount_amount, line_subtotal, '
+      'line_tax, line_total, sku_snapshot, unit_name, imeis, uom, uom_factor',
+    );
 
     final unitLabels = await fetchProductUnitLabels(
       _client,
@@ -1687,6 +1661,99 @@ String? _buildClientDocumentLabel({
   if (normalizedType == null) return normalizedNumber;
 
   return '${normalizedType.toUpperCase()}: $normalizedNumber';
+}
+
+/// Línea de una cuenta guardada (`sale_items`) lista para el carrito del POS.
+/// `null` si la cantidad no es válida.
+///
+/// Reabre la línea como se guardó: "2 Cajas" al precio de la caja con que se
+/// cobró (`uom_price`), con su tipo de precio y su descuento.
+@visibleForTesting
+SaleCartItem? cartItemFromHeldSaleRow(
+  Map<String, dynamic> row,
+  SalesProduct product,
+) {
+  final qty = _toDouble(row['quantity']);
+  if (qty <= 0) return null;
+  final unitPrice = _toDouble(row['unit_price']);
+  // `quantity` está en unidades base. Si la línea se guardó como caja y el
+  // producto conserva ese mismo empaque, se reabre como "2 Cajas"; si el
+  // empaque cambió desde entonces, se reabre suelta (mismo total).
+  final storedUom = PackagingUom.fromDb(row['uom']?.toString());
+  final storedFactor = _toDouble(row['uom_factor']);
+  final soldAsPresentation =
+      storedUom != PackagingUom.unit && storedFactor > 0;
+  final keepsPresentation = soldAsPresentation &&
+      (product.packaging.factorFor(storedUom) - storedFactor).abs() <
+          0.0005;
+  // Precio de la caja con que se guardó (migración 92). Es lo que se
+  // cobró: el unitario de la fila es el de detalle y no lo reproduce.
+  final storedUomPrice = soldAsPresentation && row['uom_price'] != null
+      ? _toDouble(row['uom_price'])
+      : null;
+  // El tipo de precio no se guarda: se deduce del unitario. Sin esto una
+  // línea a Precio 2 volvía como Detalle y la caja se cobraba a otro
+  // precio.
+  final priceTier = _priceTierMatching(product, unitPrice);
+  final quantity = keepsPresentation ? round3(qty / storedFactor) : qty;
+  // Solo si difiere del configurado: así una caja a su precio normal no
+  // se marca como escrita a mano y sigue al tipo de precio si lo cambian.
+  final configuredPresentationPrice = keepsPresentation
+      ? product.packaging.priceFor(storedUom, unitPrice, tier: priceTier)
+      : null;
+  final presentationPriceOverride = keepsPresentation &&
+          storedUomPrice != null &&
+          (storedUomPrice - configuredPresentationPrice!).abs() >= 0.005
+      ? storedUomPrice
+      : null;
+  // Suelta por cambio de empaque: el unitario sale de la caja, para que el
+  // total no pase a ser el de detalle.
+  final lineUnitPrice = !keepsPresentation && storedUomPrice != null
+      ? ProductPackaging.unitPriceFromPresentation(
+          storedUomPrice,
+          storedFactor,
+        )
+      : unitPrice;
+  // El descuento se guarda en monto; el carrito trabaja en porcentaje,
+  // sobre el mismo bruto con que lo calculó el RPC.
+  final gross = keepsPresentation
+      ? quantity *
+          (presentationPriceOverride ?? configuredPresentationPrice!)
+      : qty * lineUnitPrice;
+  final discountAmount = _toDouble(row['discount_amount']);
+  final discountPct = gross > 0
+      ? (discountAmount / gross * 100).clamp(0, 100).toDouble()
+      : 0.0;
+  return SaleCartItem(
+    product: product,
+    quantity: quantity,
+    uom: keepsPresentation ? storedUom : PackagingUom.unit,
+    unitPrice: lineUnitPrice,
+    priceTier: priceTier,
+    presentationPriceOverride: presentationPriceOverride,
+    discountPct: discountPct,
+    imeis: row['imeis'] is List
+        ? (row['imeis'] as List)
+              .map((e) => e.toString())
+              .where((e) => e.trim().isNotEmpty)
+              .toList(growable: false)
+        : const <String>[],
+  );
+}
+
+/// Tipo de precio del producto que da [unitPrice]: Detalle primero, luego
+/// 'tier_1'..'tier_10'. Si ninguno coincide (precio escrito a mano), Detalle:
+/// la línea se ve como "Personalizado", igual que al venderla.
+String _priceTierMatching(SalesProduct product, double unitPrice) {
+  const tiers = [
+    'retail',
+    'tier_1', 'tier_2', 'tier_3', 'tier_4', 'tier_5',
+    'tier_6', 'tier_7', 'tier_8', 'tier_9', 'tier_10',
+  ];
+  for (final tier in tiers) {
+    if ((product.priceFor(tier) - unitPrice).abs() < 0.005) return tier;
+  }
+  return 'retail';
 }
 
 double _toDouble(dynamic value) {

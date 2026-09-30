@@ -5,12 +5,15 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
 import '../../../shared/formatters/formatters.dart';
+import '../../../shared/packaging/product_packaging.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
+import '../../settings/presentation/app_settings_providers.dart';
 import '../data/sales_history_repository.dart';
 import '../data/sales_repository.dart';
 import '../domain/sale_checkout_service.dart'
-    show fromCents, grossCents, taxCents;
+    show fromCents, grossCents, round3, taxCents;
+import 'imei_picker_dialog.dart';
 import 'sales_history_providers.dart';
 import 'sales_providers.dart';
 
@@ -19,15 +22,50 @@ class _EditCartItem {
   _EditCartItem({
     required this.product,
     required this.quantity,
-    required this.unitPrice,
+    required this.price,
     required this.discountPct,
     this.chargesTax = true,
-  });
+    this.uom = PackagingUom.unit,
+    this.uomFactor = 1,
+    this.unitName,
+    double? baseUnitPrice,
+    List<String>? imeis,
+  })  : baseUnitPrice = baseUnitPrice ?? price,
+        imeis = [...?imeis];
 
   final SalesProduct product;
+
+  /// Cantidad en la presentación de la línea: 4 (cajas), no 80 (unidades).
+  /// Al RPC viaja en unidades base ([baseQuantity]).
   double quantity;
-  double unitPrice;
+
+  /// Precio de UNA presentación: el de la caja en una línea por caja, el
+  /// unitario en una suelta. Es el que se edita y el que se cobra.
+  double price;
   double discountPct;
+
+  /// Presentación y factor tal como quedaron en la venta, no el empaque
+  /// actual del producto: editar no cambia qué era "1 Caja".
+  final PackagingUom uom;
+  final double uomFactor;
+  final String? unitName;
+
+  /// Unitario base guardado en la línea. En una línea por presentación no se
+  /// cobra (manda `uom_price`), solo se reenvía.
+  final double baseUnitPrice;
+
+  /// Equipos de la línea. Con IMEIs la cantidad es cuántos hay, como en el
+  /// POS: se cambia quitando o agregando equipos, no escribiéndola.
+  final List<String> imeis;
+
+  bool get hasImeis => imeis.isNotEmpty;
+
+  bool get isPresentation => uom != PackagingUom.unit;
+
+  /// "Caja". Si la venta no guardó el nombre, el del empaque del producto.
+  String get presentationLabel => unitName ?? product.packaging.labelFor(uom);
+
+  double get baseQuantity => round3(quantity * uomFactor);
 
   /// La venta factura ITBIS. En `false` (venta sin comprobante o cliente que
   /// no paga ITBIS) la tasa va a 0, igual que en `edit_sale_transactional`.
@@ -39,8 +77,9 @@ class _EditCartItem {
 
   bool get _taxIncluded => product.priceIncludesTax && _rate > 0;
 
-  // En centavos enteros, igual que el POS y que el `numeric` de Postgres.
-  double get _grossCents => grossCents(quantity, unitPrice);
+  // En centavos enteros, igual que el POS y que el `numeric` de Postgres. En
+  // una caja es precio de caja × cajas, como calcula el RPC desde `uom_price`.
+  double get _grossCents => grossCents(quantity, price);
   double get _discountCents => (_grossCents * (discountPct / 100))
       .roundToDouble()
       .clamp(0, _grossCents)
@@ -59,9 +98,20 @@ class _EditCartItem {
   Map<String, dynamic> toRpcItem() => {
         'product_id': product.id,
         'description': product.name,
-        'quantity': quantity,
-        'unit_price': unitPrice,
+        'quantity': baseQuantity,
+        'unit_price': isPresentation ? baseUnitPrice : price,
         'discount_pct': discountPct,
+        // Sin esto el RPC devolvería los equipos al inventario y la venta
+        // quedaría sin IMEIs.
+        if (hasImeis) 'imeis': imeis,
+        // Sin esto el RPC cobraría unitario × unidades base y la caja
+        // perdería su precio (migración 92).
+        if (isPresentation) ...{
+          'uom': uom.dbValue,
+          'uom_factor': uomFactor,
+          'uom_price': price,
+          'unit_name': presentationLabel,
+        },
       };
 }
 
@@ -82,6 +132,11 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
   String _originalPaymentMethod = 'cash';
   bool _initialized = false;
   bool _submitting = false;
+
+  /// IMEIs que la venta tenía al abrirla, por producto. Se pueden volver a
+  /// agregar si se quitaron: al guardar, el RPC los devuelve al inventario
+  /// antes de sacar los elegidos.
+  final Map<String, Set<String>> _originalImeis = {};
 
   @override
   void dispose() {
@@ -126,20 +181,33 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
       if (pid == null) continue;
       final product = byId[pid];
       if (product == null) continue;
+      // Una línea por caja se edita en cajas y al precio de la caja. Leerla
+      // en unidades base al unitario daba otro total (80 × 508.47 en vez de
+      // 4 × 6,182.20) y guardar sobrescribía la venta con ese monto.
+      final quantity = si.presentationQuantity;
+      final price = si.presentationPrice;
       // El porcentaje se reconstruye desde el MONTO guardado. Antes se
       // deducía de `lineSubtotal`, pero con precio ITBIS-incluido ese subtotal
       // ya trae el impuesto extraído y salía un descuento inventado.
-      final gross = si.quantity * si.unitPrice;
+      final gross = quantity * price;
       final discPct = gross > 0
           ? (si.discountAmount / gross * 100).clamp(0, 100).toDouble()
           : 0.0;
       _items.add(_EditCartItem(
         product: product,
-        quantity: si.quantity,
-        unitPrice: si.unitPrice,
+        quantity: quantity,
+        price: price,
         discountPct: discPct,
         chargesTax: chargesTax,
+        uom: si.isPresentation ? si.uom : PackagingUom.unit,
+        uomFactor: si.isPresentation ? si.uomFactor : 1,
+        unitName: si.isPresentation ? si.unitName : null,
+        baseUnitPrice: si.unitPrice,
+        imeis: si.imeis,
       ));
+      if (si.imeis.isNotEmpty) {
+        _originalImeis.putIfAbsent(pid, () => <String>{}).addAll(si.imeis);
+      }
     }
     _notesCtrl.text = detail.sale.notes ?? '';
     _paymentMethod = detail.paymentMethod ?? 'cash';
@@ -156,6 +224,21 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     }
   }
 
+  bool get _imeiModeEnabled =>
+      ref.read(appSettingsProvider).valueOrNull?.invImeiMode ?? false;
+
+  /// IMEIs que se pueden agregar para [product]: los del inventario más los
+  /// que ya tenía la venta, menos los que están en alguna línea.
+  List<String> _availableImeis(SalesProduct product) {
+    final used = {
+      for (final it in _items)
+        if (it.product.id == product.id) ...it.imeis,
+    };
+    return {...product.imeis, ...?_originalImeis[product.id]}
+        .where((imei) => !used.contains(imei))
+        .toList(growable: false);
+  }
+
   Future<void> _addProduct() async {
     final productsAsync = ref.read(salesProductsProvider);
     final products = productsAsync.valueOrNull ?? const [];
@@ -163,9 +246,21 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
       context: context,
       builder: (_) => _ProductPickerDialog(products: products),
     );
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
 
-    final existing = _items.indexWhere((it) => it.product.id == picked.id);
+    // Mismo criterio que el POS: con el modo IMEI activo, un producto
+    // serializado se agrega eligiendo qué equipos salen.
+    if (_imeiModeEnabled &&
+        (picked.hasImeis || _originalImeis.containsKey(picked.id))) {
+      await _pickImeisAndAdd(picked);
+      return;
+    }
+
+    // Una línea con IMEIs no suma unidades sueltas: su cantidad son sus
+    // equipos.
+    final existing = _items.indexWhere(
+      (it) => it.product.id == picked.id && !it.hasImeis,
+    );
     setState(() {
       if (existing >= 0) {
         _items[existing].quantity += 1;
@@ -173,9 +268,50 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
         _items.add(_EditCartItem(
           product: picked,
           quantity: 1,
-          unitPrice: picked.price,
+          price: picked.price,
           discountPct: 0,
           chargesTax: _chargesTax,
+        ));
+      }
+    });
+  }
+
+  /// Elige equipos de [product] y los suma a su línea con IMEIs, o crea una.
+  Future<void> _pickImeisAndAdd(SalesProduct product) async {
+    final available = _availableImeis(product);
+    if (available.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Todos los IMEIs de este producto ya están en la venta.',
+          ),
+        ),
+      );
+      return;
+    }
+    final selected = await showDialog<List<String>>(
+      context: context,
+      builder: (_) =>
+          ImeiPickerDialog(productName: product.name, imeis: available),
+    );
+    if (selected == null || selected.isEmpty || !mounted) return;
+
+    setState(() {
+      final existing = _items.indexWhere(
+        (it) => it.product.id == product.id && it.hasImeis,
+      );
+      if (existing >= 0) {
+        final line = _items[existing];
+        line.imeis.addAll(selected);
+        line.quantity = line.imeis.length.toDouble();
+      } else {
+        _items.add(_EditCartItem(
+          product: product,
+          quantity: selected.length.toDouble(),
+          price: product.price,
+          discountPct: 0,
+          chargesTax: _chargesTax,
+          imeis: selected,
         ));
       }
     });
@@ -623,12 +759,31 @@ class _EditableLineTileState extends State<_EditableLineTile> {
   late final TextEditingController _priceCtrl;
   late final TextEditingController _discCtrl;
 
+  /// Cantidad que muestra el campo. Si la línea cambia desde afuera (volver a
+  /// agregar el producto, quitar o sumar IMEIs), el campo se actualiza.
+  late double _shownQty;
+
   @override
   void initState() {
     super.initState();
+    _shownQty = widget.item.quantity;
     _qtyCtrl = TextEditingController(text: _fmt(widget.item.quantity));
-    _priceCtrl = TextEditingController(text: _fmt(widget.item.unitPrice));
+    _priceCtrl = TextEditingController(text: _fmt(widget.item.price));
     _discCtrl = TextEditingController(text: _fmt(widget.item.discountPct));
+  }
+
+  @override
+  void didUpdateWidget(covariant _EditableLineTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Mientras se escribe la cantidad el modelo no cambia (se aplica al salir
+    // del campo), así que esto no pisa lo que se está tecleando.
+    _syncQty();
+  }
+
+  void _syncQty() {
+    if (_shownQty == widget.item.quantity) return;
+    _shownQty = widget.item.quantity;
+    _qtyCtrl.text = _fmt(_shownQty);
   }
 
   @override
@@ -648,9 +803,20 @@ class _EditableLineTileState extends State<_EditableLineTile> {
     widget.onChanged();
   }
 
+  /// Quita un equipo de la línea: vuelve al inventario al guardar. El último
+  /// no se quita aquí; para eso se elimina la línea.
+  void _removeImei(String imei) {
+    final item = widget.item;
+    if (item.imeis.length <= 1) return;
+    item.imeis.remove(imei);
+    item.quantity = item.imeis.length.toDouble();
+    _syncQty();
+    widget.onChanged();
+  }
+
   void _commitPrice(String v) {
-    final n = double.tryParse(v) ?? widget.item.unitPrice;
-    widget.item.unitPrice = n.clamp(0, 9999999).toDouble();
+    final n = double.tryParse(v) ?? widget.item.price;
+    widget.item.price = n.clamp(0, 9999999).toDouble();
     widget.onChanged();
   }
 
@@ -660,8 +826,23 @@ class _EditableLineTileState extends State<_EditableLineTile> {
     widget.onChanged();
   }
 
+  /// "Caja de 20 Unidades · Stock: 29 Cajas" en una línea por caja; el stock
+  /// suelto si el producto no tiene empaque.
+  String get _subtitle {
+    final item = widget.item;
+    final packaging = item.product.packaging;
+    final stock = packaging.hasPacks
+        ? packaging.describeStock(item.product.stock)
+        : _fmt(item.product.stock);
+    if (!item.isPresentation) return 'Stock: $stock';
+    final units = pluralLabel(packaging.effectiveUnitLabel, item.uomFactor);
+    return '${item.presentationLabel} de ${_fmt(item.uomFactor)} $units '
+        '· Stock: $stock';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final item = widget.item;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
@@ -688,27 +869,49 @@ class _EditableLineTileState extends State<_EditableLineTile> {
                   ),
                 ),
                 Text(
-                  'Stock: ${_fmt(widget.item.product.stock)}',
+                  _subtitle,
                   style: const TextStyle(
                     fontSize: 10,
                     color: AppTokens.mutedForeground,
                   ),
                 ),
+                if (item.hasImeis)
+                  Padding(
+                    padding: const EdgeInsets.only(top: AppTokens.s4),
+                    child: Wrap(
+                      spacing: AppTokens.s4,
+                      runSpacing: AppTokens.s4,
+                      children: [
+                        for (final imei in item.imeis)
+                          _ImeiChip(
+                            imei: imei,
+                            onRemove: item.imeis.length > 1
+                                ? () => _removeImei(imei)
+                                : null,
+                          ),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: _MiniField(
-              label: 'Cant.',
+              label: item.isPresentation
+                  ? pluralLabel(item.presentationLabel, 2)
+                  : 'Cant.',
               controller: _qtyCtrl,
+              readOnly: item.hasImeis,
               onSubmit: _commitQty,
             ),
           ),
           const SizedBox(width: 6),
           Expanded(
             child: _MiniField(
-              label: 'Precio',
+              label: item.isPresentation
+                  ? 'Precio ${item.presentationLabel}'
+                  : 'Precio',
               controller: _priceCtrl,
               suffix: r'$',
               onSubmit: _commitPrice,
@@ -774,12 +977,16 @@ class _MiniField extends StatefulWidget {
     required this.controller,
     required this.onSubmit,
     this.suffix,
+    this.readOnly = false,
   });
 
   final String label;
   final TextEditingController controller;
   final ValueChanged<String> onSubmit;
   final String? suffix;
+
+  /// Solo muestra el valor (la cantidad de una línea con IMEIs).
+  final bool readOnly;
 
   @override
   State<_MiniField> createState() => _MiniFieldState();
@@ -823,6 +1030,7 @@ class _MiniFieldState extends State<_MiniField> {
         TextField(
           controller: widget.controller,
           focusNode: _focus,
+          readOnly: widget.readOnly,
           keyboardType:
               const TextInputType.numberWithOptions(decimal: true),
           style: const TextStyle(
@@ -843,10 +1051,63 @@ class _MiniFieldState extends State<_MiniField> {
               borderRadius: BorderRadius.circular(6),
             ),
             filled: true,
-            fillColor: Colors.white,
+            fillColor: widget.readOnly ? AppTokens.muted : Colors.white,
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Un equipo de la línea, con botón para quitarlo si [onRemove] no es null.
+class _ImeiChip extends StatelessWidget {
+  const _ImeiChip({required this.imei, this.onRemove});
+
+  final String imei;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+        AppTokens.s6,
+        AppTokens.s2,
+        onRemove == null ? AppTokens.s6 : AppTokens.s2,
+        AppTokens.s2,
+      ),
+      decoration: BoxDecoration(
+        color: AppTokens.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'IMEI $imei',
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 10,
+              color: AppTokens.primary,
+            ),
+          ),
+          if (onRemove != null)
+            InkWell(
+              onTap: onRemove,
+              borderRadius: BorderRadius.circular(8),
+              child: const Padding(
+                padding: EdgeInsets.only(left: AppTokens.s2),
+                child: Tooltip(
+                  message: 'Quitar de la venta',
+                  child: Icon(
+                    Icons.close_rounded,
+                    size: 12,
+                    color: AppTokens.primary,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
