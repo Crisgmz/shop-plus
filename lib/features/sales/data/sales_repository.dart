@@ -1664,23 +1664,53 @@ String? _buildClientDocumentLabel({
 }
 
 /// Línea de una cuenta guardada (`sale_items`) lista para el carrito del POS.
-/// `null` si la cantidad no es válida.
-///
-/// Reabre la línea como se guardó: "2 Cajas" al precio de la caja con que se
-/// cobró (`uom_price`), con su tipo de precio y su descuento.
+/// `null` si la cantidad no es válida. Ver [cartItemFromSaleLine].
 @visibleForTesting
 SaleCartItem? cartItemFromHeldSaleRow(
   Map<String, dynamic> row,
   SalesProduct product,
 ) {
-  final qty = _toDouble(row['quantity']);
+  return cartItemFromSaleLine(
+    product: product,
+    baseQuantity: _toDouble(row['quantity']),
+    unitPrice: _toDouble(row['unit_price']),
+    discountAmount: _toDouble(row['discount_amount']),
+    uom: PackagingUom.fromDb(row['uom']?.toString()),
+    uomFactor: _toDouble(row['uom_factor']),
+    uomPrice: row['uom_price'] == null ? null : _toDouble(row['uom_price']),
+    imeis: row['imeis'] is List
+        ? (row['imeis'] as List)
+              .map((e) => e.toString())
+              .where((e) => e.trim().isNotEmpty)
+              .toList(growable: false)
+        : const <String>[],
+  );
+}
+
+/// Una línea ya guardada en `sale_items` como línea del carrito del POS.
+/// `null` si la cantidad no es válida.
+///
+/// La reabre como se vendió: "2 Cajas" al precio de la caja con que se cobró
+/// (`uom_price`), con su tipo de precio y su descuento. La usan "reabrir
+/// cuenta guardada" y la edición de ventas, para que las dos se comporten
+/// como el POS.
+SaleCartItem? cartItemFromSaleLine({
+  required SalesProduct product,
+  required double baseQuantity,
+  required double unitPrice,
+  double discountAmount = 0,
+  PackagingUom uom = PackagingUom.unit,
+  double uomFactor = 1,
+  double? uomPrice,
+  List<String> imeis = const <String>[],
+}) {
+  final qty = baseQuantity;
   if (qty <= 0) return null;
-  final unitPrice = _toDouble(row['unit_price']);
   // `quantity` está en unidades base. Si la línea se guardó como caja y el
   // producto conserva ese mismo empaque, se reabre como "2 Cajas"; si el
   // empaque cambió desde entonces, se reabre suelta (mismo total).
-  final storedUom = PackagingUom.fromDb(row['uom']?.toString());
-  final storedFactor = _toDouble(row['uom_factor']);
+  final storedUom = uom;
+  final storedFactor = uomFactor;
   final soldAsPresentation =
       storedUom != PackagingUom.unit && storedFactor > 0;
   final keepsPresentation = soldAsPresentation &&
@@ -1688,9 +1718,7 @@ SaleCartItem? cartItemFromHeldSaleRow(
           0.0005;
   // Precio de la caja con que se guardó (migración 92). Es lo que se
   // cobró: el unitario de la fila es el de detalle y no lo reproduce.
-  final storedUomPrice = soldAsPresentation && row['uom_price'] != null
-      ? _toDouble(row['uom_price'])
-      : null;
+  final storedUomPrice = soldAsPresentation ? uomPrice : null;
   // El tipo de precio no se guarda: se deduce del unitario. Sin esto una
   // línea a Precio 2 volvía como Detalle y la caja se cobraba a otro
   // precio.
@@ -1720,7 +1748,6 @@ SaleCartItem? cartItemFromHeldSaleRow(
       ? quantity *
           (presentationPriceOverride ?? configuredPresentationPrice!)
       : qty * lineUnitPrice;
-  final discountAmount = _toDouble(row['discount_amount']);
   final discountPct = gross > 0
       ? (discountAmount / gross * 100).clamp(0, 100).toDouble()
       : 0.0;
@@ -1732,12 +1759,7 @@ SaleCartItem? cartItemFromHeldSaleRow(
     priceTier: priceTier,
     presentationPriceOverride: presentationPriceOverride,
     discountPct: discountPct,
-    imeis: row['imeis'] is List
-        ? (row['imeis'] as List)
-              .map((e) => e.toString())
-              .where((e) => e.trim().isNotEmpty)
-              .toList(growable: false)
-        : const <String>[],
+    imeis: imeis,
   );
 }
 
