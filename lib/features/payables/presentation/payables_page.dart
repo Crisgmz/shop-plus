@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../../shared/widgets/empty_state.dart';
@@ -133,7 +134,7 @@ class _PayablesPageState extends ConsumerState<PayablesPage> {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar cuentas por pagar: $error',
+              message: 'No se pudieron cargar cuentas por pagar: ${friendlyErrorMessage(error)}',
               onRetry: _refreshData,
             ),
           ),
@@ -179,7 +180,7 @@ class _PayablesPageState extends ConsumerState<PayablesPage> {
             },
             loading: () => const SizedBox.shrink(),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar pagos: $error',
+              message: 'No se pudieron cargar pagos: ${friendlyErrorMessage(error)}',
               onRetry: _refreshData,
             ),
           ),
@@ -217,7 +218,7 @@ class _PayablesPageState extends ConsumerState<PayablesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo registrar pago: $error')),
+        SnackBar(content: Text('No se pudo registrar pago: ${friendlyErrorMessage(error)}')),
       );
     }
   }

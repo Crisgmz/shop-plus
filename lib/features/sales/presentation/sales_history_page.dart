@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/packaging/product_packaging.dart';
 import '../../../shared/widgets/empty_state.dart';
@@ -76,7 +77,7 @@ class _SalesHistoryPageState extends ConsumerState<SalesHistoryPage> {
               child: Center(child: CircularProgressIndicator()),
             ),
             error: (e, _) => ErrorCard(
-              message: 'No se pudo cargar el historial: $e',
+              message: 'No se pudo cargar el historial: ${friendlyErrorMessage(e)}',
               onRetry: () => ref.invalidate(salesHistoryPageProvider),
             ),
             data: (page) => Column(
@@ -601,7 +602,7 @@ class _RowActions extends ConsumerWidget {
       context.go('/ventas');
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(content: Text('No se pudo reabrir la cuenta: $error')),
+        SnackBar(content: Text('No se pudo reabrir la cuenta: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -647,7 +648,7 @@ class _RowActions extends ConsumerWidget {
       );
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(content: Text('No se pudo descartar: $error')),
+        SnackBar(content: Text('No se pudo descartar: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -698,7 +699,7 @@ class _RowActions extends ConsumerWidget {
       );
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(content: Text('No se pudo anular: $error')),
+        SnackBar(content: Text('No se pudo anular: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -740,7 +741,7 @@ class _RowActions extends ConsumerWidget {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al preparar impresión: $e')),
+        SnackBar(content: Text('Error al preparar impresión: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -771,7 +772,7 @@ class _RowActions extends ConsumerWidget {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar: $e')),
+        SnackBar(content: Text('No se pudo actualizar: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -798,7 +799,7 @@ class _SaleDetailDialog extends ConsumerWidget {
             height: 200,
             child: Center(child: CircularProgressIndicator()),
           ),
-          error: (e, _) => Text('Error: $e'),
+          error: (e, _) => Text(friendlyErrorMessage(e)),
           data: (detail) {
             if (detail == null) return const Text('Venta no encontrada.');
             return SingleChildScrollView(
@@ -1008,7 +1009,7 @@ class _MetadataEditDialogState
             const SizedBox(height: 4),
             clientsAsync.when(
               loading: () => const LinearProgressIndicator(),
-              error: (e, _) => Text('Error al cargar: $e'),
+              error: (e, _) => Text('Error al cargar: ${friendlyErrorMessage(e)}'),
               data: (clients) => DropdownButtonFormField<String?>(
                 initialValue: _clientId,
                 isExpanded: true,

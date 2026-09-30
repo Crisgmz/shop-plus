@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
@@ -94,7 +95,7 @@ class FiscalDocumentsPage extends ConsumerWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('No se pudieron cargar los comprobantes: $error'),
+                Text('No se pudieron cargar los comprobantes: ${friendlyErrorMessage(error)}'),
                 const SizedBox(height: AppTokens.s12),
                 FilledButton.icon(
                   onPressed: () => ref.invalidate(fiscalDocumentsProvider),
@@ -403,7 +404,7 @@ class _FiscalDocDetailDialogState
       if (!mounted) return;
       setState(() => _voiding = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo anular: $error')),
+        SnackBar(content: Text('No se pudo anular: ${friendlyErrorMessage(error)}')),
       );
     }
   }

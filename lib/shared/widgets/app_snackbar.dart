@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
+
+import '../errors/friendly_error.dart';
+
+export '../errors/friendly_error.dart' show friendlyErrorMessage;
 
 /// Helpers para SnackBars consistentes en toda la app.
 ///
@@ -7,8 +10,9 @@ import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 /// `e` formateado como `PostgrestException(message: ..., code: ..., hint:
 /// null)`. Quedaba feo y filtraba detalles internos.
 ///
-/// Ahora: `AppSnackBar.error(...)` extrae solo el mensaje legible y aplica
-/// estilos (color por severidad, ícono, esquinas redondeadas, flotante).
+/// Ahora: `AppSnackBar.error(...)` traduce el error con
+/// [friendlyErrorMessage] y aplica estilos (color por severidad, ícono,
+/// esquinas redondeadas, flotante).
 class AppSnackBar {
   AppSnackBar._();
 
@@ -32,8 +36,8 @@ class AppSnackBar {
     );
   }
 
-  /// Operación fallida (rojo). Acepta cualquier `Object?` y extrae el
-  /// mensaje limpio si es un `PostgrestException` o `Exception`.
+  /// Operación fallida (rojo). Acepta cualquier `Object?` y lo traduce a un
+  /// mensaje para el usuario (sin links, códigos ni texto técnico).
   static void error(BuildContext context, String title, [Object? error]) {
     final detail = friendlyErrorMessage(error);
     final message = detail.isEmpty ? title : '$title\n$detail';
@@ -79,24 +83,4 @@ class AppSnackBar {
       ),
     );
   }
-}
-
-/// Convierte cualquier error en un mensaje legible para el usuario.
-///
-/// - `PostgrestException` → solo el `message` (sin code/hint/details).
-/// - `Exception` (normalmente lanzados con `throw Exception('Texto.')`) →
-///   solo el texto, sin el prefijo "Exception: ".
-/// - Cualquier otra cosa → su `toString`.
-String friendlyErrorMessage(Object? error) {
-  if (error == null) return '';
-  if (error is PostgrestException) {
-    return error.message;
-  }
-  if (error is Exception) {
-    final raw = error.toString();
-    const prefix = 'Exception: ';
-    if (raw.startsWith(prefix)) return raw.substring(prefix.length);
-    return raw;
-  }
-  return error.toString();
 }

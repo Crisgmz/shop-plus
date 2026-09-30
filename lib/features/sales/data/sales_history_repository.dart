@@ -257,10 +257,11 @@ class SalesHistoryRepository {
         },
       );
     } on PostgrestException catch (error) {
+      // Falta la migración 91 en la base.
       if (clientSkipsTax && error.code == 'PGRST202') {
         throw Exception(
-          'Para dejar esta venta sin ITBIS falta aplicar la migración 91 en la '
-          'base de datos.',
+          'Dejar esta venta sin ITBIS necesita una actualización del sistema. '
+          'Contacta a soporte.',
         );
       }
       rethrow;

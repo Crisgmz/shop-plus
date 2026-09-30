@@ -1,3 +1,4 @@
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/packaging/product_packaging.dart';
 import 'dart:typed_data';
 
@@ -141,7 +142,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar compras: $error',
+              message: 'No se pudieron cargar compras: ${friendlyErrorMessage(error)}',
               onRetry: () => ref.invalidate(purchasesListProvider),
             ),
           ),
@@ -160,7 +161,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo abrir formulario: $error')),
+        SnackBar(content: Text('No se pudo abrir formulario: ${friendlyErrorMessage(error)}')),
       );
       return;
     }
@@ -190,7 +191,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo registrar compra: $error')),
+        SnackBar(content: Text('No se pudo registrar compra: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -216,7 +217,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo abrir la compra: $error')),
+        SnackBar(content: Text('No se pudo abrir la compra: ${friendlyErrorMessage(error)}')),
       );
       return;
     }
@@ -243,7 +244,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar la compra: $error')),
+        SnackBar(content: Text('No se pudo actualizar la compra: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -265,7 +266,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo imprimir: $error')),
+        SnackBar(content: Text('No se pudo imprimir: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -306,7 +307,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo eliminar la compra: $error')),
+        SnackBar(content: Text('No se pudo eliminar la compra: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -319,7 +320,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo cargar la compra: $error')),
+          SnackBar(content: Text('No se pudo cargar la compra: ${friendlyErrorMessage(error)}')),
         );
       }
       return null;
@@ -376,7 +377,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar compras: $e')),
+        SnackBar(content: Text('No se pudieron cargar compras: ${friendlyErrorMessage(e)}')),
       );
       return;
     }
@@ -407,7 +408,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a Excel: $error')),
+        SnackBar(content: Text('No se pudo exportar a Excel: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -419,7 +420,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar compras: $e')),
+        SnackBar(content: Text('No se pudieron cargar compras: ${friendlyErrorMessage(e)}')),
       );
       return;
     }
@@ -450,7 +451,7 @@ class _PurchasesPageState extends ConsumerState<PurchasesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a PDF: $error')),
+        SnackBar(content: Text('No se pudo exportar a PDF: ${friendlyErrorMessage(error)}')),
       );
     }
   }

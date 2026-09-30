@@ -155,7 +155,7 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar proveedores: $error',
+              message: 'No se pudieron cargar proveedores: ${friendlyErrorMessage(error)}',
               onRetry: () => ref.invalidate(suppliersListProvider),
             ),
           ),
@@ -237,7 +237,7 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar proveedor: $error')),
+        SnackBar(content: Text('No se pudo guardar proveedor: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -263,7 +263,7 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar proveedor: $error')),
+        SnackBar(content: Text('No se pudo actualizar proveedor: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -319,7 +319,7 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar proveedores: $e')),
+        SnackBar(content: Text('No se pudieron cargar proveedores: ${friendlyErrorMessage(e)}')),
       );
       return;
     }
@@ -350,7 +350,7 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a Excel: $error')),
+        SnackBar(content: Text('No se pudo exportar a Excel: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -362,7 +362,7 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar proveedores: $e')),
+        SnackBar(content: Text('No se pudieron cargar proveedores: ${friendlyErrorMessage(e)}')),
       );
       return;
     }
@@ -393,7 +393,7 @@ class _SuppliersPageState extends ConsumerState<SuppliersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a PDF: $error')),
+        SnackBar(content: Text('No se pudo exportar a PDF: ${friendlyErrorMessage(error)}')),
       );
     }
   }

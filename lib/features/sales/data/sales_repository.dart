@@ -1784,8 +1784,9 @@ Exception? _missingClientTaxMigration(
   bool clientSkipsTax,
 ) {
   if (!clientSkipsTax || error.code != 'PGRST202') return null;
+  // Falta la migración 91 en la base.
   return Exception(
-    'Para vender sin ITBIS a este cliente falta aplicar la migración 91 en '
-    'la base de datos. Las ventas a los demás clientes siguen funcionando.',
+    'Vender sin ITBIS a este cliente necesita una actualización del sistema. '
+    'Contacta a soporte. Las ventas a los demás clientes siguen funcionando.',
   );
 }

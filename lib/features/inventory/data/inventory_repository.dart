@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/packaging/product_packaging.dart';
 
 class InventoryCategory {
@@ -739,7 +740,7 @@ class InventoryRepository {
           InventoryBulkUpsertError(
             inputIndex: i,
             productName: input.name,
-            message: error.toString(),
+            message: friendlyErrorMessage(error),
           ),
         );
       }

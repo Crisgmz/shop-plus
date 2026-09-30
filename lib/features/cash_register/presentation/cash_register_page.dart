@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:printing/printing.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../../shared/widgets/empty_state.dart';
@@ -210,7 +211,7 @@ class _CashRegisterPageState extends ConsumerState<CashRegisterPage> {
         },
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => ErrorCard(
-          message: 'No se pudo cargar caja: $error',
+          message: 'No se pudo cargar caja: ${friendlyErrorMessage(error)}',
           onRetry: () => ref.invalidate(cashRegisterDataProvider),
         ),
       ),
@@ -417,7 +418,7 @@ class _CashRegisterPageState extends ConsumerState<CashRegisterPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('No se pudo abrir caja: $error')));
+      ).showSnackBar(SnackBar(content: Text('No se pudo abrir caja: ${friendlyErrorMessage(error)}')));
     }
   }
 
@@ -449,7 +450,7 @@ class _CashRegisterPageState extends ConsumerState<CashRegisterPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('No se pudo cerrar caja: $error')));
+      ).showSnackBar(SnackBar(content: Text('No se pudo cerrar caja: ${friendlyErrorMessage(error)}')));
     }
   }
 
@@ -496,7 +497,7 @@ class _CashRegisterPageState extends ConsumerState<CashRegisterPage> {
       );
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(content: Text('No se pudo reimprimir: $error')),
+        SnackBar(content: Text('No se pudo reimprimir: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -549,7 +550,7 @@ class _CashRegisterPageState extends ConsumerState<CashRegisterPage> {
       if (!mounted) return;
       // Si ya existe un cierre Z para esta sesión, el RPC lo bloquea.
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo sellar el cierre Z: $error')),
+        SnackBar(content: Text('No se pudo sellar el cierre Z: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -585,7 +586,7 @@ class _CashRegisterPageState extends ConsumerState<CashRegisterPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo registrar el movimiento: $error')),
+        SnackBar(content: Text('No se pudo registrar el movimiento: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -995,7 +996,7 @@ class _AllCashiersPanel extends ConsumerWidget {
         ),
         error: (e, _) => Padding(
           padding: const EdgeInsets.all(AppTokens.s16),
-          child: Text('No se pudieron cargar las cajas: $e'),
+          child: Text('No se pudieron cargar las cajas: ${friendlyErrorMessage(e)}'),
         ),
         data: (overviews) {
           if (overviews.isEmpty) {

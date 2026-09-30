@@ -7,6 +7,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../../shared/widgets/empty_state.dart';
@@ -151,7 +152,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar gastos: $error',
+              message: 'No se pudieron cargar gastos: ${friendlyErrorMessage(error)}',
               onRetry: () => ref.invalidate(expensesListProvider),
             ),
           ),
@@ -167,7 +168,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo abrir formulario: $error')),
+        SnackBar(content: Text('No se pudo abrir formulario: ${friendlyErrorMessage(error)}')),
       );
       return;
     }
@@ -199,7 +200,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo registrar gasto: $error')),
+        SnackBar(content: Text('No se pudo registrar gasto: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -215,7 +216,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo preparar el comprobante: $e')),
+        SnackBar(content: Text('No se pudo preparar el comprobante: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -228,7 +229,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo abrir formulario: $error')),
+        SnackBar(content: Text('No se pudo abrir formulario: ${friendlyErrorMessage(error)}')),
       );
       return;
     }
@@ -253,7 +254,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar el gasto: $error')),
+        SnackBar(content: Text('No se pudo actualizar el gasto: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -296,7 +297,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo eliminar el gasto: $error')),
+        SnackBar(content: Text('No se pudo eliminar el gasto: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -352,7 +353,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar gastos: $e')),
+        SnackBar(content: Text('No se pudieron cargar gastos: ${friendlyErrorMessage(e)}')),
       );
       return;
     }
@@ -383,7 +384,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a Excel: $error')),
+        SnackBar(content: Text('No se pudo exportar a Excel: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -395,7 +396,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar gastos: $e')),
+        SnackBar(content: Text('No se pudieron cargar gastos: ${friendlyErrorMessage(e)}')),
       );
       return;
     }
@@ -426,7 +427,7 @@ class _ExpensesPageState extends ConsumerState<ExpensesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a PDF: $error')),
+        SnackBar(content: Text('No se pudo exportar a PDF: ${friendlyErrorMessage(error)}')),
       );
     }
   }

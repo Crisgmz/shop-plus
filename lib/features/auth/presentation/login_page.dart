@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../shared/errors/friendly_error.dart';
 import 'auth_providers.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -41,7 +42,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo iniciar sesión: $error')),
+        SnackBar(content: Text('No se pudo iniciar sesión: ${friendlyErrorMessage(error)}')),
       );
     } finally {
       if (mounted) {

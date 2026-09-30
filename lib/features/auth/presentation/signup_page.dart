@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../shared/errors/friendly_error.dart';
 import 'auth_providers.dart';
 
 class SignupPage extends ConsumerStatefulWidget {
@@ -80,7 +81,7 @@ class _SignupPageState extends ConsumerState<SignupPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo registrar: $error')),
+        SnackBar(content: Text('No se pudo registrar: ${friendlyErrorMessage(error)}')),
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);

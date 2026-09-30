@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/packaging/product_packaging.dart';
 import '../../../shared/widgets/empty_state.dart';
@@ -365,7 +366,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar: $e')),
+        SnackBar(content: Text('No se pudo guardar: ${friendlyErrorMessage(e)}')),
       );
     } finally {
       if (mounted) setState(() => _submitting = false);
@@ -406,7 +407,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
               child: CircularProgressIndicator(),
             )),
         error: (e, _) => ErrorCard(
-          message: 'No se pudo cargar la venta: $e',
+          message: 'No se pudo cargar la venta: ${friendlyErrorMessage(e)}',
           onRetry: () =>
               ref.invalidate(salesHistoryDetailProvider(widget.saleId)),
         ),
@@ -422,7 +423,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
               ),
             ),
             error: (e, _) => ErrorCard(
-              message: 'No se pudieron cargar productos: $e',
+              message: 'No se pudieron cargar productos: ${friendlyErrorMessage(e)}',
               onRetry: () => ref.invalidate(salesProductsProvider),
             ),
             data: (products) {
@@ -705,7 +706,7 @@ class _ClientSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     return clientsAsync.when(
       loading: () => const LinearProgressIndicator(),
-      error: (e, _) => Text('Error al cargar clientes: $e'),
+      error: (e, _) => Text('Error al cargar clientes: ${friendlyErrorMessage(e)}'),
       data: (clients) => DropdownButtonFormField<String?>(
         initialValue: clientId,
         isExpanded: true,

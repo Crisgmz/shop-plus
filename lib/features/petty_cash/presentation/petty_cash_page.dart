@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
@@ -41,7 +42,7 @@ class PettyCashPage extends ConsumerWidget {
       child: dataAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => ErrorCard(
-          message: 'No se pudo cargar caja chica: $error',
+          message: 'No se pudo cargar caja chica: ${friendlyErrorMessage(error)}',
           onRetry: () => ref.invalidate(pettyCashDataProvider),
         ),
         data: (data) => _Body(data: data),
@@ -94,7 +95,7 @@ class _Body extends ConsumerWidget {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo abrir caja chica: $e')),
+        SnackBar(content: Text('No se pudo abrir caja chica: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -119,7 +120,7 @@ class _Body extends ConsumerWidget {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo cerrar caja chica: $e')),
+        SnackBar(content: Text('No se pudo cerrar caja chica: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -156,7 +157,7 @@ class _Body extends ConsumerWidget {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+        SnackBar(content: Text(friendlyErrorMessage(e))),
       );
     }
   }
@@ -196,7 +197,7 @@ class _Body extends ConsumerWidget {
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+        SnackBar(content: Text(friendlyErrorMessage(e))),
       );
     }
   }

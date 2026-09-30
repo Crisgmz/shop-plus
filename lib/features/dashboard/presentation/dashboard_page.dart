@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
@@ -82,7 +83,7 @@ class _HeroKpiGrid extends ConsumerWidget {
     return heroAsync.when(
       loading: () => const _KpiSkeletonGrid(),
       error: (error, _) => ErrorCard(
-        message: 'No se pudieron cargar los KPIs: $error',
+        message: 'No se pudieron cargar los KPIs: ${friendlyErrorMessage(error)}',
         onRetry: () => ref.invalidate(dashboardHeroKpisProvider),
       ),
       data: (kpis) {
@@ -572,7 +573,7 @@ class _SalesChartCard extends ConsumerWidget {
               error: (error, _) => SizedBox(
                 height: 280,
                 child: Center(
-                  child: Text('No se pudo cargar el gráfico: $error'),
+                  child: Text('No se pudo cargar el gráfico: ${friendlyErrorMessage(error)}'),
                 ),
               ),
               data: (points) => _BarChart(points: points, range: range),

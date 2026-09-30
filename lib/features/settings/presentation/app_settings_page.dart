@@ -120,7 +120,7 @@ class _AppSettingsPageState extends ConsumerState<AppSettingsPage> {
       child: settingsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => ErrorCard(
-          message: 'No se pudo cargar la configuración: $error',
+          message: 'No se pudo cargar la configuración: ${friendlyErrorMessage(error)}',
           onRetry: () => ref.read(appSettingsProvider.notifier).refresh(),
         ),
         data: (settings) => _Body(
@@ -1974,7 +1974,7 @@ class _NetworkPrinterSectionState
           ),
           error: (e, _) => Padding(
             padding: const EdgeInsets.only(top: AppTokens.s16),
-            child: Text('No se pudo cargar la configuración: $e'),
+            child: Text('No se pudo cargar la configuración: ${friendlyErrorMessage(e)}'),
           ),
           data: (config) {
             _syncControllers(config);
@@ -2713,7 +2713,7 @@ class _CategoriesEditorState extends ConsumerState<_CategoriesEditor> {
             ),
             error: (e, _) => Padding(
               padding: const EdgeInsets.symmetric(vertical: AppTokens.s8),
-              child: Text('No se pudieron cargar categorías: $e'),
+              child: Text('No se pudieron cargar categorías: ${friendlyErrorMessage(e)}'),
             ),
             data: (categories) {
               if (categories.isEmpty && !_adding) {
@@ -3039,7 +3039,7 @@ class _CashRegistersEditorState extends ConsumerState<_CashRegistersEditor> {
             ),
             error: (e, _) => Padding(
               padding: const EdgeInsets.symmetric(vertical: AppTokens.s8),
-              child: Text('No se pudieron cargar cajas: $e'),
+              child: Text('No se pudieron cargar cajas: ${friendlyErrorMessage(e)}'),
             ),
             data: (cajas) {
               if (cajas.isEmpty && !_adding) {

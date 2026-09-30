@@ -1,3 +1,4 @@
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/packaging/product_packaging.dart';
 import 'dart:typed_data';
 
@@ -311,7 +312,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'Error al cargar inventario: $error',
+              message: 'Error al cargar inventario: ${friendlyErrorMessage(error)}',
               onRetry: _refreshInventoryData,
             ),
           ),
@@ -446,7 +447,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo ajustar el stock: $error')),
+        SnackBar(content: Text('No se pudo ajustar el stock: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -475,7 +476,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar estado: $error')),
+        SnackBar(content: Text('No se pudo actualizar estado: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -611,19 +612,19 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
         } catch (innerError) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('No se pudo desactivar: $innerError')),
+            SnackBar(content: Text('No se pudo desactivar: ${friendlyErrorMessage(innerError)}')),
           );
         }
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo eliminar: ${e.message}')),
+          SnackBar(content: Text('No se pudo eliminar: ${friendlyErrorMessage(e)}')),
         );
       }
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo eliminar: $error')),
+        SnackBar(content: Text('No se pudo eliminar: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -673,7 +674,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar producto: $error')),
+        SnackBar(content: Text('No se pudo guardar producto: ${friendlyErrorMessage(error)}')),
       );
     } finally {
       _isSavingProduct = false;
@@ -736,7 +737,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     } catch (error) {
       if (!mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar categorías: $error')),
+        SnackBar(content: Text('No se pudieron cargar categorías: ${friendlyErrorMessage(error)}')),
       );
       return null;
     }
@@ -814,7 +815,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar productos: $error')),
+        SnackBar(content: Text('No se pudieron cargar productos: ${friendlyErrorMessage(error)}')),
       );
       return;
     }
@@ -854,7 +855,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar: $error')),
+        SnackBar(content: Text('No se pudo exportar: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -872,7 +873,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar productos: $error')),
+        SnackBar(content: Text('No se pudieron cargar productos: ${friendlyErrorMessage(error)}')),
       );
       return;
     }
@@ -931,7 +932,7 @@ class _InventoryPageState extends ConsumerState<InventoryPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a PDF: $error')),
+        SnackBar(content: Text('No se pudo exportar a PDF: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -2530,7 +2531,7 @@ class _ProductDialogState extends ConsumerState<_ProductDialog> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo subir la imagen: $error')),
+        SnackBar(content: Text('No se pudo subir la imagen: ${friendlyErrorMessage(error)}')),
       );
     } finally {
       if (mounted) setState(() => _uploadingImage = false);
@@ -2770,7 +2771,7 @@ class _ImportInventoryDialogState
     try {
       return await ref.read(inventoryCategoriesProvider.future);
     } catch (error) {
-      _snack('No se pudieron cargar categorías: $error');
+      _snack('No se pudieron cargar categorías: ${friendlyErrorMessage(error)}');
       return null;
     }
   }
@@ -2796,7 +2797,7 @@ class _ImportInventoryDialogState
       );
       if (saved) _snack('Plantilla para artículos nuevos generada');
     } catch (error) {
-      _snack('No se pudo generar la plantilla: $error');
+      _snack('No se pudo generar la plantilla: ${friendlyErrorMessage(error)}');
     } finally {
       if (mounted) setState(() => _busy = null);
     }
@@ -2826,7 +2827,7 @@ class _ImportInventoryDialogState
         _snack('Plantilla con ${products.length} artículos existentes generada');
       }
     } catch (error) {
-      _snack('No se pudo generar la plantilla: $error');
+      _snack('No se pudo generar la plantilla: ${friendlyErrorMessage(error)}');
     } finally {
       if (mounted) setState(() => _busy = null);
     }
@@ -2843,7 +2844,7 @@ class _ImportInventoryDialogState
         _pickedName = picked.name;
       });
     } catch (error) {
-      _snack('No se pudo abrir el archivo: $error');
+      _snack('No se pudo abrir el archivo: ${friendlyErrorMessage(error)}');
     }
   }
 
@@ -2872,7 +2873,7 @@ class _ImportInventoryDialogState
                 priceTypes: priceTypes,
               );
       } catch (error) {
-        _snack('Archivo inválido: $error');
+        _snack('Archivo inválido: ${friendlyErrorMessage(error)}');
         return;
       }
 
@@ -2919,7 +2920,7 @@ class _ImportInventoryDialogState
       try {
         result = await repository.bulkUpsertProducts(inputs);
       } catch (error) {
-        _snack('Error durante la importación: $error');
+        _snack('Error durante la importación: ${friendlyErrorMessage(error)}');
         return;
       }
 

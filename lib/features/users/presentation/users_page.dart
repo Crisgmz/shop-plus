@@ -149,7 +149,8 @@ class _UsersPageState extends ConsumerState<UsersPage> {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar usuarios: $error',
+              message:
+                  'No se pudieron cargar usuarios: ${friendlyErrorMessage(error)}',
               onRetry: _refresh,
             ),
           ),
@@ -523,7 +524,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo crear el usuario: $error')),
+        SnackBar(
+          content: Text(
+            'No se pudo crear el usuario: ${friendlyErrorMessage(error)}',
+          ),
+        ),
       );
     }
   }
@@ -560,7 +565,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar usuario: $error')),
+        SnackBar(
+          content: Text(
+            'No se pudo guardar usuario: ${friendlyErrorMessage(error)}',
+          ),
+        ),
       );
     }
   }
@@ -604,7 +613,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo eliminar el usuario: $error')),
+        SnackBar(
+          content: Text(
+            'No se pudo eliminar el usuario: ${friendlyErrorMessage(error)}',
+          ),
+        ),
       );
     }
   }
@@ -625,7 +638,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar estado: $error')),
+        SnackBar(
+          content: Text(
+            'No se pudo actualizar estado: ${friendlyErrorMessage(error)}',
+          ),
+        ),
       );
     }
   }
@@ -655,7 +672,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo asignar sucursal: $error')),
+        SnackBar(
+          content: Text(
+            'No se pudo asignar sucursal: ${friendlyErrorMessage(error)}',
+          ),
+        ),
       );
     }
   }
@@ -676,7 +697,9 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('No se pudo cambiar sucursal por defecto: $error'),
+          content: Text(
+            'No se pudo cambiar sucursal por defecto: ${friendlyErrorMessage(error)}',
+          ),
         ),
       );
     }
@@ -699,9 +722,13 @@ class _UsersPageState extends ConsumerState<UsersPage> {
       ).showSnackBar(const SnackBar(content: Text('Asignación actualizada')));
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('No se pudo actualizar: $error')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'No se pudo actualizar: ${friendlyErrorMessage(error)}',
+          ),
+        ),
+      );
     }
   }
 
@@ -727,7 +754,11 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar asignación: $error')),
+        SnackBar(
+          content: Text(
+            'No se pudo actualizar asignación: ${friendlyErrorMessage(error)}',
+          ),
+        ),
       );
     }
   }
@@ -1233,7 +1264,7 @@ class _UserPermissionsPanelState extends ConsumerState<_UserPermissionsPanel> {
                 error: (error, _) => Padding(
                   padding: const EdgeInsets.all(AppTokens.s20),
                   child: Text(
-                    'No se pudieron cargar permisos: $error',
+                    'No se pudieron cargar permisos: ${friendlyErrorMessage(error)}',
                     style: const TextStyle(color: AppTokens.destructive),
                   ),
                 ),

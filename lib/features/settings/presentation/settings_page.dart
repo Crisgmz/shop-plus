@@ -104,7 +104,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         },
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => ErrorCard(
-          message: 'No se pudo cargar configuración: $error',
+          message: 'No se pudo cargar configuración: ${friendlyErrorMessage(error)}',
           onRetry: _refresh,
         ),
       ),
@@ -453,7 +453,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
               ),
               error: (e, _) => Text(
-                'Error cargando perfil: $e',
+                'Error cargando perfil: ${friendlyErrorMessage(e)}',
                 style: const TextStyle(color: AppTokens.destructive),
               ),
             ),
@@ -714,7 +714,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar perfil: $error')),
+        SnackBar(content: Text('No se pudo actualizar perfil: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -763,7 +763,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar sucursal: $error')),
+        SnackBar(content: Text('No se pudo actualizar sucursal: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -811,7 +811,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('No se pudo guardar configuración fiscal: $error'),
+          content: Text('No se pudo guardar configuración fiscal: ${friendlyErrorMessage(error)}'),
         ),
       );
     }
@@ -865,7 +865,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar secuencia: $error')),
+        SnackBar(content: Text('No se pudo guardar secuencia: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -890,7 +890,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar secuencia: $error')),
+        SnackBar(content: Text('No se pudo actualizar secuencia: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -939,7 +939,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron asignar los NCF: $error')),
+        SnackBar(content: Text('No se pudieron asignar los NCF: ${friendlyErrorMessage(error)}')),
       );
     }
   }

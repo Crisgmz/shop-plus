@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
@@ -49,7 +50,7 @@ class ReturnsPage extends ConsumerWidget {
           child: Center(child: CircularProgressIndicator()),
         ),
         error: (error, _) => ErrorCard(
-          message: 'No se pudo cargar el historial: $error',
+          message: 'No se pudo cargar el historial: ${friendlyErrorMessage(error)}',
           onRetry: () => ref.invalidate(returnsHistoryProvider),
         ),
         data: (items) {

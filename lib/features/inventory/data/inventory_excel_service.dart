@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
 
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/excel/xlsx_repair.dart';
 import 'inventory_repository.dart';
 
@@ -331,9 +332,7 @@ class InventoryExcelService {
   InventoryImportRowError _rowError(int rowNumber, Object error) {
     return InventoryImportRowError(
       rowNumber: rowNumber,
-      message: error is Exception
-          ? error.toString().replaceFirst('Exception: ', '')
-          : error.toString(),
+      message: friendlyErrorMessage(error),
     );
   }
 

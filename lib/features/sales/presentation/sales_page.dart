@@ -467,7 +467,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Error: $e')),
+      error: (e, _) => Center(child: Text(friendlyErrorMessage(e))),
     );
   }
 
@@ -1202,7 +1202,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo crear el cliente: $e')),
+        SnackBar(
+          content: Text(
+            'No se pudo crear el cliente: ${friendlyErrorMessage(e)}',
+          ),
+        ),
       );
     }
   }
@@ -1267,7 +1271,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: Colors.red,
-          content: Text('No se pudo guardar la cuenta: $error'),
+          content: Text(
+            'No se pudo guardar la cuenta: ${friendlyErrorMessage(error)}',
+          ),
         ),
       );
     } finally {
@@ -1656,9 +1662,13 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error al cargar la venta: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Error al cargar la venta: ${friendlyErrorMessage(e)}',
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -1701,7 +1711,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error al procesar devolución: $e'),
+            content: Text(
+              'Error al procesar devolución: ${friendlyErrorMessage(e)}',
+            ),
             backgroundColor: Colors.red,
           ),
         );

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
@@ -210,7 +211,7 @@ class TaxesPage extends ConsumerWidget {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar impuestos: $error',
+              message: 'No se pudieron cargar impuestos: ${friendlyErrorMessage(error)}',
               onRetry: () => ref.invalidate(taxesDataProvider),
             ),
           ),
@@ -349,7 +350,7 @@ class TaxesPage extends ConsumerWidget {
       );
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a Excel: $e')),
+        SnackBar(content: Text('No se pudo exportar a Excel: ${friendlyErrorMessage(e)}')),
       );
     }
   }

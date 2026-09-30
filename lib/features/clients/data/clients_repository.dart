@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../../shared/errors/friendly_error.dart';
+
 class ClientEntity {
   ClientEntity({
     required this.id,
@@ -376,7 +378,7 @@ class ClientsRepository {
           updated += 1;
         }
       } catch (e) {
-        errors.add('${input.fullName}: $e');
+        errors.add('${input.fullName}: ${friendlyErrorMessage(e)}');
       }
     }
 

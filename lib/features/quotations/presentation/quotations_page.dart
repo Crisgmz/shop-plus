@@ -8,6 +8,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../../shared/widgets/empty_state.dart';
@@ -73,7 +74,7 @@ class _QuotationsPageState extends ConsumerState<QuotationsPage> {
       error: (error, _) => ModulePage(
         title: 'Cotizaciones',
         child: ErrorCard(
-          message: 'No se pudo cargar la base de cotizaciones: $error',
+          message: 'No se pudo cargar la base de cotizaciones: ${friendlyErrorMessage(error)}',
           onRetry: () => ref.invalidate(quotationsFoundationProvider),
         ),
       ),
@@ -150,7 +151,7 @@ class _QuotationsPageState extends ConsumerState<QuotationsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a Excel: $error')),
+        SnackBar(content: Text('No se pudo exportar a Excel: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -182,7 +183,7 @@ class _QuotationsPageState extends ConsumerState<QuotationsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a PDF: $error')),
+        SnackBar(content: Text('No se pudo exportar a PDF: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -672,7 +673,7 @@ class _QuotesDataTable extends ConsumerWidget {
       }
     } catch (e) {
       if (context.mounted) {
-        messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
+        messenger.showSnackBar(SnackBar(content: Text(friendlyErrorMessage(e))));
       }
     }
   }
@@ -711,7 +712,7 @@ class _QuotesDataTable extends ConsumerWidget {
         if (context.mounted) {
           ScaffoldMessenger.of(
             context,
-          ).showSnackBar(SnackBar(content: Text('Error: $e')));
+          ).showSnackBar(SnackBar(content: Text(friendlyErrorMessage(e))));
         }
       }
     }
@@ -758,7 +759,7 @@ Future<void> _convertQuoteToSale(
       ),
     );
   } catch (e) {
-    messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
+    messenger.showSnackBar(SnackBar(content: Text(friendlyErrorMessage(e))));
   }
 }
 
@@ -883,7 +884,7 @@ class _QuoteMobileCard extends ConsumerWidget {
       }
     } catch (e) {
       if (context.mounted) {
-        messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
+        messenger.showSnackBar(SnackBar(content: Text(friendlyErrorMessage(e))));
       }
     }
   }

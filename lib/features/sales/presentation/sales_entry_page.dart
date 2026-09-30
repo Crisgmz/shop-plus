@@ -133,7 +133,7 @@ class _SalesCashRegisterPickerState
           padding: const EdgeInsets.symmetric(vertical: 48),
           child: Center(
             child: Text(
-              'No se pudieron cargar las cajas: $error',
+              'No se pudieron cargar las cajas: ${friendlyErrorMessage(error)}',
               style: const TextStyle(color: Color(0xFFEF4444)),
             ),
           ),

@@ -114,9 +114,11 @@ class DgiiLookupService {
     final dynamic res;
     try {
       res = await _supabase.rpc('rnc_lookup', params: {'p_rnc': cleaned});
-    } on PostgrestException catch (e) {
+    } on PostgrestException {
       // La función SQL lanza con mensaje legible (formato, error DGII, etc.).
-      throw Exception(e.message);
+      // Sube tal cual: la pantalla lo traduce con `friendlyErrorMessage`,
+      // que muestra ese mensaje y oculta los técnicos.
+      rethrow;
     } catch (e) {
       throw Exception(
         'No se pudo conectar a DGII. Revisa tu conexión e intenta de nuevo.',

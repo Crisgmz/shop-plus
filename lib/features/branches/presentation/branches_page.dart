@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/extensions/iterable_extensions.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../../shared/widgets/empty_state.dart';
@@ -129,7 +130,7 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar sucursales: $error',
+              message: 'No se pudieron cargar sucursales: ${friendlyErrorMessage(error)}',
               onRetry: _refreshAll,
             ),
           ),
@@ -382,7 +383,7 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
               ),
               error: (error, _) => Padding(
                 padding: const EdgeInsets.all(AppTokens.s20),
-                child: Text('No se pudieron cargar usuarios: $error'),
+                child: Text('No se pudieron cargar usuarios: ${friendlyErrorMessage(error)}'),
               ),
             ),
         ],
@@ -430,7 +431,7 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar sucursal: $error')),
+        SnackBar(content: Text('No se pudo guardar sucursal: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -454,7 +455,7 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar estado: $error')),
+        SnackBar(content: Text('No se pudo actualizar estado: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -473,7 +474,7 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo marcar como principal: $error')),
+        SnackBar(content: Text('No se pudo marcar como principal: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -508,7 +509,7 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo asignar usuario: $error')),
+        SnackBar(content: Text('No se pudo asignar usuario: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -532,7 +533,7 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('No se pudo cambiar sucursal por defecto: $error'),
+          content: Text('No se pudo cambiar sucursal por defecto: ${friendlyErrorMessage(error)}'),
         ),
       );
     }
@@ -561,7 +562,7 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar asignación: $error')),
+        SnackBar(content: Text('No se pudo actualizar asignación: ${friendlyErrorMessage(error)}')),
       );
     }
   }

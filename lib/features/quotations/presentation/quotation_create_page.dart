@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../cash_register/presentation/cash_register_providers.dart';
@@ -193,7 +194,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo cargar la cotización: $error')),
+        SnackBar(content: Text('No se pudo cargar la cotización: ${friendlyErrorMessage(error)}')),
       );
       context.pop();
     } finally {
@@ -376,7 +377,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al guardar la cotización: $error')),
+        SnackBar(content: Text('Error al guardar la cotización: ${friendlyErrorMessage(error)}')),
       );
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -421,7 +422,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo eliminar: $error')),
+        SnackBar(content: Text('No se pudo eliminar: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -471,7 +472,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo convertir: $error')),
+        SnackBar(content: Text('No se pudo convertir: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -706,7 +707,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
       },
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) =>
-          Center(child: Text('Error cargando productos: $error')),
+          Center(child: Text('Error cargando productos: ${friendlyErrorMessage(error)}')),
     );
   }
 
@@ -745,7 +746,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                     },
                   ),
                   loading: () => const LinearProgressIndicator(),
-                  error: (error, _) => Text('Error cargando clientes: $error'),
+                  error: (error, _) => Text('Error cargando clientes: ${friendlyErrorMessage(error)}'),
                 ),
                 const SizedBox(height: AppTokens.s12),
                 // Estado y vigencia en la misma fila: son los dos datos

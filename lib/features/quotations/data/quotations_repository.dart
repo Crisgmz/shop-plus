@@ -294,8 +294,9 @@ class QuotationsRepository implements QuotationsRepositoryContract {
       // mostrar el error crudo; al contado sigue funcionando.
       if (asCredit && _isMissingFunction(error)) {
         throw Exception(
-          'La venta a crédito desde cotizaciones requiere la migración 88 en '
-          'la base de datos. Mientras tanto se puede convertir al contado.',
+          'La venta a crédito desde cotizaciones necesita una actualización '
+          'del sistema. Contacta a soporte. Mientras tanto se puede convertir '
+          'al contado.',
         );
       }
       rethrow;

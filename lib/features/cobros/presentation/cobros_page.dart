@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../../shared/widgets/empty_state.dart';
@@ -140,7 +141,7 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar cuentas por cobrar: $error',
+              message: 'No se pudieron cargar cuentas por cobrar: ${friendlyErrorMessage(error)}',
               onRetry: _refreshCobrosData,
             ),
           ),
@@ -193,7 +194,7 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
             },
             loading: () => const SizedBox.shrink(),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar pagos: $error',
+              message: 'No se pudieron cargar pagos: ${friendlyErrorMessage(error)}',
               onRetry: _refreshCobrosData,
             ),
           ),
@@ -234,7 +235,7 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo registrar pago: $error')),
+        SnackBar(content: Text('No se pudo registrar pago: ${friendlyErrorMessage(error)}')),
       );
     }
   }
@@ -270,7 +271,7 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al preparar impresión: $e')),
+        SnackBar(content: Text('Error al preparar impresión: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -303,7 +304,7 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo extender el plazo: $e')),
+        SnackBar(content: Text('No se pudo extender el plazo: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -319,7 +320,7 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo preparar el recibo: $e')),
+        SnackBar(content: Text('No se pudo preparar el recibo: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -349,7 +350,7 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar el pago: $e')),
+        SnackBar(content: Text('No se pudo actualizar el pago: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -394,7 +395,7 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo anular el pago: $e')),
+        SnackBar(content: Text('No se pudo anular el pago: ${friendlyErrorMessage(e)}')),
       );
     }
   }
@@ -893,7 +894,7 @@ class _InvoiceViewerDialog extends ConsumerWidget {
                         } catch (e) {
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Error: $e')),
+                            SnackBar(content: Text(friendlyErrorMessage(e))),
                           );
                         }
                       },
@@ -1209,7 +1210,7 @@ class _CustomerBalancesPanel extends ConsumerWidget {
         error: (error, _) => Padding(
           padding: const EdgeInsets.all(AppTokens.s20),
           child: Text(
-            'No se pudieron cargar saldos: $error',
+            'No se pudieron cargar saldos: ${friendlyErrorMessage(error)}',
             style: const TextStyle(color: AppTokens.destructive),
           ),
         ),

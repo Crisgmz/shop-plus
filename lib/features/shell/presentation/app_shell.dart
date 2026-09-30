@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
 import '../../../core/web/cache_buster.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/extensions/iterable_extensions.dart';
 import '../../../shared/responsive/responsive.dart';
 import '../../../shared/widgets/app_page_layout.dart';
@@ -76,7 +77,7 @@ class AppShell extends ConsumerWidget {
       } catch (error) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('No se pudo cerrar sesión: $error')),
+            SnackBar(content: Text('No se pudo cerrar sesión: ${friendlyErrorMessage(error)}')),
           );
         }
       }
@@ -100,7 +101,7 @@ class AppShell extends ConsumerWidget {
         );
       } catch (error) {
         messenger.showSnackBar(
-          SnackBar(content: Text('No se pudo cambiar sucursal: $error')),
+          SnackBar(content: Text('No se pudo cambiar sucursal: ${friendlyErrorMessage(error)}')),
         );
       }
     }

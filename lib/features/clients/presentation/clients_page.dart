@@ -332,7 +332,8 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
             },
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (error, _) => ErrorCard(
-              message: 'No se pudieron cargar clientes: $error',
+              message:
+                  'No se pudieron cargar clientes: ${friendlyErrorMessage(error)}',
               onRetry: () => ref.invalidate(clientsListProvider),
             ),
           ),
@@ -443,7 +444,11 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar cliente: $error')),
+        SnackBar(
+          content: Text(
+            'No se pudo guardar cliente: ${friendlyErrorMessage(error)}',
+          ),
+        ),
       );
     } finally {
       _isSavingClient = false;
@@ -515,7 +520,11 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo actualizar cliente: $error')),
+        SnackBar(
+          content: Text(
+            'No se pudo actualizar cliente: ${friendlyErrorMessage(error)}',
+          ),
+        ),
       );
     }
   }
@@ -587,7 +596,11 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar clientes: $e')),
+        SnackBar(
+          content: Text(
+            'No se pudieron cargar clientes: ${friendlyErrorMessage(e)}',
+          ),
+        ),
       );
       return;
     }
@@ -618,7 +631,11 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo exportar a PDF: $error')),
+        SnackBar(
+          content: Text(
+            'No se pudo exportar a PDF: ${friendlyErrorMessage(error)}',
+          ),
+        ),
       );
     }
   }
@@ -877,7 +894,11 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron cargar clientes: $e')),
+        SnackBar(
+          content: Text(
+            'No se pudieron cargar clientes: ${friendlyErrorMessage(e)}',
+          ),
+        ),
       );
       return;
     }
@@ -903,9 +924,11 @@ class _ClientsPageState extends ConsumerState<ClientsPage> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('No se pudo exportar: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo exportar: ${friendlyErrorMessage(e)}'),
+        ),
+      );
     }
   }
 }
@@ -957,7 +980,7 @@ class _ImportClientsDialogState extends ConsumerState<_ImportClientsDialog> {
       );
       if (saved) _snack('Plantilla para clientes nuevos generada');
     } catch (e) {
-      _snack('No se pudo generar la plantilla: $e');
+      _snack('No se pudo generar la plantilla: ${friendlyErrorMessage(e)}');
     } finally {
       if (mounted) setState(() => _busy = null);
     }
@@ -981,7 +1004,7 @@ class _ImportClientsDialogState extends ConsumerState<_ImportClientsDialog> {
         _snack('Plantilla con ${clients.length} clientes existentes generada');
       }
     } catch (e) {
-      _snack('No se pudo generar la plantilla: $e');
+      _snack('No se pudo generar la plantilla: ${friendlyErrorMessage(e)}');
     } finally {
       if (mounted) setState(() => _busy = null);
     }
@@ -996,7 +1019,7 @@ class _ImportClientsDialogState extends ConsumerState<_ImportClientsDialog> {
         _pickedName = picked.name;
       });
     } catch (e) {
-      _snack('No se pudo abrir el archivo: $e');
+      _snack('No se pudo abrir el archivo: ${friendlyErrorMessage(e)}');
     }
   }
 
@@ -1009,7 +1032,7 @@ class _ImportClientsDialogState extends ConsumerState<_ImportClientsDialog> {
       try {
         existing = await ref.read(clientsListProvider.future);
       } catch (e) {
-        _snack('No se pudieron cargar clientes: $e');
+        _snack('No se pudieron cargar clientes: ${friendlyErrorMessage(e)}');
         return;
       }
 
@@ -1020,7 +1043,7 @@ class _ImportClientsDialogState extends ConsumerState<_ImportClientsDialog> {
           existingClients: existing,
         );
       } catch (e) {
-        _snack('Archivo inválido: $e');
+        _snack('Archivo inválido: ${friendlyErrorMessage(e)}');
         return;
       }
 
@@ -1108,7 +1131,7 @@ class _ImportClientsDialogState extends ConsumerState<_ImportClientsDialog> {
           ),
         );
       } catch (e) {
-        _snack('Error al importar: $e');
+        _snack('Error al importar: ${friendlyErrorMessage(e)}');
       }
     } finally {
       if (mounted) setState(() => _busy = null);
@@ -1424,9 +1447,11 @@ class _PaymentHistoryDialogState extends ConsumerState<_PaymentHistoryDialog> {
       ).showSnackBar(const SnackBar(content: Text('Pago actualizado')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error al actualizar: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error al actualizar: ${friendlyErrorMessage(e)}'),
+        ),
+      );
     }
   }
 
@@ -1464,9 +1489,11 @@ class _PaymentHistoryDialogState extends ConsumerState<_PaymentHistoryDialog> {
       ).showSnackBar(const SnackBar(content: Text('Pago eliminado')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error al eliminar: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error al eliminar: ${friendlyErrorMessage(e)}'),
+        ),
+      );
     }
   }
 }

@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
@@ -961,7 +962,7 @@ class _VentasReport extends ConsumerWidget {
           const Padding(padding: EdgeInsets.all(AppTokens.s32), child:
               Center(child: CircularProgressIndicator())),
       error: (error, _) => ErrorCard(
-        message: 'No se pudieron cargar las ventas: $error',
+        message: 'No se pudieron cargar las ventas: ${friendlyErrorMessage(error)}',
         onRetry: () => ref.invalidate(salesDailyReportProvider),
       ),
       data: (rows) {
@@ -1096,7 +1097,7 @@ class _CajaReport extends ConsumerWidget {
           const Padding(padding: EdgeInsets.all(AppTokens.s32), child:
               Center(child: CircularProgressIndicator())),
       error: (error, _) => ErrorCard(
-        message: 'No se pudieron cargar las sesiones de caja: $error',
+        message: 'No se pudieron cargar las sesiones de caja: ${friendlyErrorMessage(error)}',
         onRetry: () => ref.invalidate(cashSessionsReportProvider),
       ),
       data: (rows) {
@@ -1201,7 +1202,7 @@ class _LiquidacionReport extends ConsumerWidget {
           const Padding(padding: EdgeInsets.all(AppTokens.s32), child:
               Center(child: CircularProgressIndicator())),
       error: (error, _) => ErrorCard(
-        message: 'No se pudo cargar la liquidación: $error',
+        message: 'No se pudo cargar la liquidación: ${friendlyErrorMessage(error)}',
         onRetry: () => ref.invalidate(operationalCloseoutReportProvider),
       ),
       data: (data) {
@@ -1314,7 +1315,7 @@ class _CobrosReport extends ConsumerWidget {
           const Padding(padding: EdgeInsets.all(AppTokens.s32), child:
               Center(child: CircularProgressIndicator())),
       error: (error, _) => ErrorCard(
-        message: 'No se pudieron cargar los cobros: $error',
+        message: 'No se pudieron cargar los cobros: ${friendlyErrorMessage(error)}',
         onRetry: () => ref.invalidate(paymentsReportProvider),
       ),
       data: (rows) {
@@ -1403,7 +1404,7 @@ class _PagosReport extends ConsumerWidget {
           const Padding(padding: EdgeInsets.all(AppTokens.s32), child:
               Center(child: CircularProgressIndicator())),
       error: (error, _) => ErrorCard(
-        message: 'No se pudieron cargar los pagos: $error',
+        message: 'No se pudieron cargar los pagos: ${friendlyErrorMessage(error)}',
         onRetry: () => ref.invalidate(outgoingPaymentsReportProvider),
       ),
       data: (rows) {
@@ -1499,7 +1500,7 @@ class _SuspendedReport extends ConsumerWidget {
           const Padding(padding: EdgeInsets.all(AppTokens.s32), child:
               Center(child: CircularProgressIndicator())),
       error: (error, _) => ErrorCard(
-        message: 'No se pudieron cargar las ventas suspendidas: $error',
+        message: 'No se pudieron cargar las ventas suspendidas: ${friendlyErrorMessage(error)}',
         onRetry: () => ref.invalidate(suspendedSalesReportProvider),
       ),
       data: (rows) {
@@ -1847,7 +1848,7 @@ class _DetailedSalesReport extends ConsumerWidget {
         child: Center(child: CircularProgressIndicator()),
       ),
       error: (error, _) => ErrorCard(
-        message: 'No se pudieron cargar las ventas: $error',
+        message: 'No se pudieron cargar las ventas: ${friendlyErrorMessage(error)}',
         onRetry: () => ref.invalidate(voidedOnly
             ? voidedSalesReportProvider
             : detailedSalesReportProvider),
@@ -1990,7 +1991,7 @@ class _TimeReport extends ConsumerWidget {
         child: Center(child: CircularProgressIndicator()),
       ),
       error: (error, _) => ErrorCard(
-        message: 'No se pudieron cargar las ventas por hora: $error',
+        message: 'No se pudieron cargar las ventas por hora: ${friendlyErrorMessage(error)}',
         onRetry: () => ref.invalidate(hourlySalesReportProvider),
       ),
       data: (rows) {
@@ -2084,7 +2085,7 @@ class _EmpleadosReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudo cargar: $e',
+        message: 'No se pudo cargar: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(employeeProductivityProvider),
       ),
       data: (rows) {
@@ -2188,7 +2189,7 @@ class _ComisionReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudo cargar la comisión: $e',
+        message: 'No se pudo cargar la comisión: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(commissionReportProvider),
       ),
       data: (data) {
@@ -2309,7 +2310,7 @@ class _InventarioReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudo cargar el inventario: $e',
+        message: 'No se pudo cargar el inventario: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(inventoryStatusReportProvider),
       ),
       data: (rows) {
@@ -2414,7 +2415,7 @@ class _ArticulosReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudieron cargar los artículos: $e',
+        message: 'No se pudieron cargar los artículos: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(salesByItemReportProvider),
       ),
       data: (rows) {
@@ -2519,7 +2520,7 @@ class _CategoriasReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudieron cargar las categorías: $e',
+        message: 'No se pudieron cargar las categorías: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(salesByCategoryReportProvider),
       ),
       data: (rows) {
@@ -2658,7 +2659,7 @@ class _PreciosActualSection extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudieron cargar los precios: $e',
+        message: 'No se pudieron cargar los precios: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(currentPricesReportProvider),
       ),
       data: (rows) {
@@ -2709,7 +2710,7 @@ class _PreciosHistorialSection extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudo cargar el historial: $e',
+        message: 'No se pudo cargar el historial: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(priceHistoryReportProvider),
       ),
       data: (rows) {
@@ -2792,7 +2793,7 @@ class _MermasReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudieron cargar las mermas: $e',
+        message: 'No se pudieron cargar las mermas: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(inventoryMovementsReportProvider),
       ),
       data: (rows) {
@@ -2893,7 +2894,7 @@ class _PlReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudo calcular P&L: $e',
+        message: 'No se pudo calcular P&L: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(plReportProvider),
       ),
       data: (data) {
@@ -2979,7 +2980,7 @@ class _CreditoReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudo cargar crédito: $e',
+        message: 'No se pudo cargar crédito: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(creditAgingReportProvider),
       ),
       data: (rows) {
@@ -3091,7 +3092,7 @@ class _GastosReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudieron cargar los gastos: $e',
+        message: 'No se pudieron cargar los gastos: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(expensesReportProvider),
       ),
       data: (rows) {
@@ -3174,7 +3175,7 @@ class _ComprasReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudieron cargar las compras: $e',
+        message: 'No se pudieron cargar las compras: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(purchasesReportV2Provider),
       ),
       data: (rows) {
@@ -3270,7 +3271,7 @@ class _ProveedoresReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudieron cargar proveedores: $e',
+        message: 'No se pudieron cargar proveedores: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(suppliersReportProvider),
       ),
       data: (rows) {
@@ -3345,7 +3346,7 @@ class _ClientesReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudieron cargar los clientes: $e',
+        message: 'No se pudieron cargar los clientes: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(clientsReportProvider),
       ),
       data: (rows) {
@@ -3420,7 +3421,7 @@ class _DescuentosReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudieron cargar los descuentos: $e',
+        message: 'No se pudieron cargar los descuentos: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(discountsReportProvider),
       ),
       data: (rows) {
@@ -3568,7 +3569,7 @@ class _EstadoDiarioReport extends ConsumerWidget {
         child: Center(child: CircularProgressIndicator()),
       ),
       error: (e, _) => ErrorCard(
-        message: 'No se pudo cargar el estado de diario: $e',
+        message: 'No se pudo cargar el estado de diario: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(detailedSalesReportProvider),
       ),
       data: (rows) {
@@ -3823,15 +3824,16 @@ class _DgiiReportSection extends StatelessWidget {
               'Configúralo en Configuración → Datos de la empresa '
               'para poder descargar.',
             ),
+          // Sin desglose = la base no tiene la migración 93.
           if (!formato.desglosado)
             _DgiiAviso(
               formato.tipo == '606'
-                  ? 'La base de datos aún no tiene la migración 93: la forma '
-                      'de pago, la fecha de pago y el monto en servicios salen '
-                      'vacíos. Ejecútala en Supabase antes de enviar el 606.'
-                  : 'La base de datos aún no tiene la migración 93: todo lo '
-                      'cobrado sale como efectivo y la propina legal no se '
-                      'incluye. Ejecútala en Supabase antes de enviar el 607.',
+                  ? 'Falta una actualización del sistema: la forma de pago, '
+                      'la fecha de pago y el monto en servicios salen vacíos. '
+                      'Contacta a soporte antes de enviar el 606.'
+                  : 'Falta una actualización del sistema: todo lo cobrado '
+                      'sale como efectivo y la propina legal no se incluye. '
+                      'Contacta a soporte antes de enviar el 607.',
             ),
           if (consumo != null && consumo.cantidad > 0)
             _DgiiAviso(
@@ -3910,7 +3912,7 @@ class _DgiiReportSection extends StatelessWidget {
                         } catch (e) {
                           messenger.showSnackBar(
                             SnackBar(
-                              content: Text('No se pudo exportar a Excel: $e'),
+                              content: Text('No se pudo exportar a Excel: ${friendlyErrorMessage(e)}'),
                             ),
                           );
                         }
@@ -4047,7 +4049,7 @@ class _Dgii606Report extends ConsumerWidget {
         async.when(
           loading: () => const _LoadingBox(),
           error: (e, _) => ErrorCard(
-            message: 'No se pudo generar 606: $e',
+            message: 'No se pudo generar 606: ${friendlyErrorMessage(e)}',
             onRetry: () => ref.invalidate(dgii606Provider),
           ),
           data: (data) {
@@ -4087,7 +4089,7 @@ class _Dgii607Report extends ConsumerWidget {
         async.when(
           loading: () => const _LoadingBox(),
           error: (e, _) => ErrorCard(
-            message: 'No se pudo generar 607: $e',
+            message: 'No se pudo generar 607: ${friendlyErrorMessage(e)}',
             onRetry: () => ref.invalidate(dgii607Provider),
           ),
           data: (data) {
@@ -4127,7 +4129,7 @@ class _DgiiIt1Report extends ConsumerWidget {
         async.when(
           loading: () => const _LoadingBox(),
           error: (e, _) => ErrorCard(
-            message: 'No se pudo generar IT-1: $e',
+            message: 'No se pudo generar IT-1: ${friendlyErrorMessage(e)}',
             onRetry: () => ref.invalidate(dgiiIt1Provider),
           ),
           data: (data) {
@@ -4265,7 +4267,7 @@ class _CierreZReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudo cargar los cierres Z: $e',
+        message: 'No se pudo cargar los cierres Z: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(fiscalZClosuresProvider),
       ),
       data: (rows) {
@@ -4352,7 +4354,7 @@ class _ImpuestosReport extends ConsumerWidget {
     return async.when(
       loading: () => const _LoadingBox(),
       error: (e, _) => ErrorCard(
-        message: 'No se pudo cargar impuestos: $e',
+        message: 'No se pudo cargar impuestos: ${friendlyErrorMessage(e)}',
         onRetry: () => ref.invalidate(taxBreakdownV2Provider),
       ),
       data: (rows) {
@@ -4658,7 +4660,7 @@ Future<void> _exportZClosurePdf(
     } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error al exportar cierre Z: $e')),
+        SnackBar(content: Text('Error al exportar cierre Z: ${friendlyErrorMessage(e)}')),
       );
     }
 }
@@ -4964,7 +4966,7 @@ Future<void> _exportCurrentSnapshot(
   } catch (e) {
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Error al exportar: $e')),
+      SnackBar(content: Text('Error al exportar: ${friendlyErrorMessage(e)}')),
     );
   }
 }

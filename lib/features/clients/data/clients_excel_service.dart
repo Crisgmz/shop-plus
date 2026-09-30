@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'package:excel/excel.dart';
 
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/excel/xlsx_repair.dart';
 import 'clients_repository.dart';
 
@@ -225,9 +226,7 @@ class ClientsExcelService {
         errors.add(
           ClientImportRowError(
             rowNumber: rowNumber,
-            message: error is Exception
-                ? error.toString().replaceFirst('Exception: ', '')
-                : error.toString(),
+            message: friendlyErrorMessage(error),
           ),
         );
       }

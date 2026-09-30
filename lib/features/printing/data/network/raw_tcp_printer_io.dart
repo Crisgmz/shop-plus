@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
 import 'raw_tcp_printer.dart';
 
 /// Implementación de [RawTcpPrinter] basada en `dart:io` (escritorio/móvil).
@@ -37,7 +39,10 @@ class RawTcpPrinterImpl implements RawTcpPrinter {
       );
     } catch (e) {
       _destroy(socket);
-      return TcpPrintResult.failure('Error de impresión: $e');
+      return TcpPrintResult.failure(
+        'No se pudo imprimir. Verifica que la impresora esté encendida e '
+        'intenta de nuevo.',
+      );
     }
   }
 
@@ -50,7 +55,10 @@ class RawTcpPrinterImpl implements RawTcpPrinter {
   }
 
   String _socketMessage(String host, int port, SocketException e) {
-    final reason = e.osError?.message ?? e.message;
-    return 'No se pudo conectar a la impresora en $host:$port ($reason).';
+    // El motivo del sistema operativo ("Connection refused", en inglés) va a
+    // la consola, no al usuario.
+    debugPrint('Impresora $host:$port: ${e.osError?.message ?? e.message}');
+    return 'No se pudo conectar a la impresora en $host:$port. Verifica que '
+        'esté encendida y en la misma red.';
   }
 }
