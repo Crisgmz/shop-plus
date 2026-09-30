@@ -244,8 +244,50 @@ SIEMPRE la unidad base; cajas y paquetes se derivan, nunca se guardan aparte.
 - Compras escribe `purchase_items.uom` / `uom_factor` directo (no hay RPC): la
   cantidad va en unidades base y los montos salen del costo por presentación,
   para cuadrar con la factura del proveedor.
-- Límite conocido: `edit_sale_transactional` reinserta las líneas y pierde la
-  marca. La venta editada se imprime en unidades (plata e inventario correctos).
+- `edit_sale_transactional` conserva la presentación desde la migración 92
+  (el app la reenvía: `uom`, `uom_factor`, `uom_price`, `unit_name`).
+
+### Editar, anular y devolver (migraciones 96–98, 30 sep 2026)
+Orden: `96` (valores de enum, SIN transacción) → `97` → `98`. Las tres son
+idempotentes y conservan las firmas que usa `flutter_shop+`.
+
+- **Inventario:** lo mueve SOLO el trigger `trg_sale_items_stock`. Desde la
+  migración 25 `edit_sale_transactional` además lo movía a mano y editaba el
+  stock por el doble; y el `UPDATE products … FROM sale_items` con dos líneas
+  del mismo producto (caja + sueltas) aplicaba una sola. Anular suma por
+  producto.
+- **Editar:** solo `completed`/`credit`, nunca con devoluciones. Stock por
+  producto con la regla de la 87 de `flutter_shop+` (solo si pide más y
+  respetando `inv_disallow_no_stock`). Pagos: `sum(pagos) − cambio = total`.
+  Cuentas por cobrar: lo abonado se respeta. Comprobante fiscal exige cliente
+  con RNC. `fiscal_documents` se actualiza.
+- **Anular:** `void_sale_with_stock_return(p_sale_id, p_reason_code)` (tipo
+  DGII 01–10, se guarda en `sales.void_reason_code`; la firma de 1 parámetro
+  sigue). Solo `completed`/`credit`, nunca con devoluciones, fila bloqueada.
+  Pagos de turnos CERRADOS se conservan y el efectivo sale de la caja abierta
+  de quien anula como movimiento `withdrawal` con
+  `reference_type = 'sale_void'`. Marca `fiscal_documents` como `voided`.
+- **Devolver (`process_return`):** con venta original, los montos salen de las
+  líneas de la venta (prorrateo; el app ya no manda el precio que cuenta),
+  tope = vendido − devuelto, el cliente es el de la venta, primero rebaja el
+  saldo pendiente (`returns.credit_applied`) y solo el resto se reembolsa
+  (`returns.cash_refund_amount`; `refund_method = 'credit_balance'` si todo fue
+  al saldo). Venta con NCF ⇒ Nota de Crédito: `assign_next_ncf(…,
+  'credit_note')` (secuencia B04 en Configuración), `returns.ncf` +
+  `returns.ncf_modificado` y fila en `fiscal_documents` (serie B; una E34 no se
+  encola: el emisor e-CF aún no la maneja). Sin secuencia B04 la devolución
+  se hace igual y la respuesta trae `ncf_error`.
+- **Saldos de cliente:** `recompute_client_balance()` = suma de `balance_due`
+  de sus ventas vivas (misma regla que `register_sale_payment`).
+- **Reportes (98):** 607 con las notas de crédito; `dgii_608_data` (anulados);
+  IT-1 en hora de la sucursal, con bases desde las líneas, sin ventas sin
+  comprobante y solo NC fiscales; vistas de ventas con las ventas a crédito;
+  P&L sin ITBIS; KPIs del dashboard en hora dominicana; emisor de
+  `fiscal_documents` desde la empresa (no `app_settings id = 1`).
+- **Límites conocidos:** editar una venta con total mayor a lo entregado
+  suma la diferencia al último pago, aunque sea de un turno ya cerrado. Editar
+  recalcula ITBIS con la configuración actual del producto. Las notas de
+  crédito electrónicas (E34) no se envían aún.
 
 ### Tiempo real
 Migración `20260916_93_realtime_todas_las_pantallas.sql`: fuente ÚNICA de las

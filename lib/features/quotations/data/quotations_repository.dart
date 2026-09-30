@@ -74,7 +74,7 @@ class QuotationsRepository implements QuotationsRepositoryContract {
         .from('products')
         .select(
           'id, name, sku, barcode, description, price, tax_rate, stock, '
-          'is_active, '
+          'is_active, is_tax_exempt, price_includes_tax, '
           // Empaques (migración 86) y precios de caja por tipo, para poder
           // cotizar por caja igual que en el punto de venta.
           'units_per_pack, packs_per_box, unit_label, pack_label, box_label, '
@@ -275,6 +275,7 @@ class QuotationsRepository implements QuotationsRepositoryContract {
     String? cashSessionId,
     bool asCredit = false,
     int? creditDueDays,
+    String receiptType = 'consumer_final',
   }) async {
     final Object? result;
     try {
@@ -286,6 +287,7 @@ class QuotationsRepository implements QuotationsRepositoryContract {
           cashSessionId: cashSessionId,
           asCredit: asCredit,
           creditDueDays: creditDueDays,
+          receiptType: receiptType,
         ),
       );
     } on PostgrestException catch (error) {
@@ -765,9 +767,13 @@ Map<String, dynamic> buildConvertQuotationParams({
   String? cashSessionId,
   bool asCredit = false,
   int? creditDueDays,
+  String receiptType = 'consumer_final',
 }) {
   return {
     'target_quotation_id': quoteId,
+    // Solo si no es el default del servidor (Consumidor Final): así una
+    // conversión B02 manda exactamente lo mismo que antes.
+    if (receiptType != 'consumer_final') 'requested_receipt_type': receiptType,
     'requested_payment_method': paymentMethod,
     if (cashSessionId != null && cashSessionId.isNotEmpty)
       'requested_cash_session_id': cashSessionId,

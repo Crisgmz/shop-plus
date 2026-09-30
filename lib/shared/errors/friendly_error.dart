@@ -147,7 +147,9 @@ String _postgrest(PostgrestException error) {
     case '42883':
       return needsUpdateMessage;
     case '23505':
-      return _duplicate(raw);
+      // Los RPC también usan 23505 para "ya anulada" y similares: si el
+      // mensaje es propio, se muestra tal cual.
+      return _ownMessage(error.message) ?? _duplicate(raw);
     case '23502':
       return 'Falta completar un dato obligatorio.';
     case '23514':
@@ -368,8 +370,6 @@ bool _looksTechnical(String text) {
     'pgrst',
     'violates',
     'constraint',
-    'relation "',
-    'column "',
     'function ',
     'syntax error',
     'jsonb',
@@ -392,7 +392,14 @@ bool _looksTechnical(String text) {
     'undefined',
     'schema',
   ];
-  if (markers.any(lower.contains)) return true;
+  // Postgres cita tablas y columnas entre comillas: `relation "x" does not
+  // exist`. Se mira antes de quitar las comillas.
+  if (lower.contains('relation "') || lower.contains('column "')) return true;
+  // Lo que va entre comillas son nombres que escribió el usuario (producto,
+  // cliente): pueden traer cualquier palabra —"Cable USB to Lightning"— y no
+  // dicen nada de quién escribió el mensaje.
+  final unquoted = lower.replaceAll(RegExp(r'"[^"]*"|“[^”]*”|«[^»]*»'), ' ');
+  if (markers.any(unquoted.contains)) return true;
   // Los mensajes propios están en español; Postgres y el servidor responden
   // en inglés. Palabras sueltas que en español no existen lo delatan.
   // ("error" y "has" no: también son palabras en español.)
@@ -400,6 +407,6 @@ bool _looksTechnical(String text) {
     'the', 'of', 'is', 'to', 'for', 'with', 'and', 'does', 'was', 'be', //
     'an', 'must', 'already', 'user', 'value', 'not',
   ];
-  final words = lower.split(RegExp(r'[^a-záéíóúñü]+'));
+  final words = unquoted.split(RegExp(r'[^a-záéíóúñü]+'));
   return words.any(englishWords.contains);
 }

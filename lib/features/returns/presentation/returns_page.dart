@@ -10,6 +10,7 @@ import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
+import '../../../shared/widgets/print_receipt_dialog.dart';
 import '../../sales/data/sales_repository.dart';
 import '../../sales/presentation/sales_providers.dart';
 
@@ -31,10 +32,7 @@ class ReturnsPage extends ConsumerWidget {
       description: 'Historial de devoluciones registradas en la sucursal.',
       actions: [
         FilledButton.tonalIcon(
-          onPressed: () {
-            ref.read(posModeProvider.notifier).state = PosMode.returnMode;
-            context.go('/ventas');
-          },
+          onPressed: () => _startReturn(context, ref),
           icon: const Icon(Icons.add, size: 18),
           label: const Text('Nueva devolución'),
         ),
@@ -85,13 +83,76 @@ class ReturnsPage extends ConsumerWidget {
   }
 }
 
-class _ReturnRow extends StatelessWidget {
+/// Abre el POS en modo devolución. Si hay una VENTA a medio armar, se pide
+/// confirmar antes de descartarla: antes el carrito de la venta se convertía
+/// en devolución sin avisar.
+Future<void> _startReturn(BuildContext context, WidgetRef ref) async {
+  final draft = ref.read(saleDraftProvider);
+  final alreadyReturn = ref.read(posModeProvider) == PosMode.returnMode;
+  if (!draft.isEmpty && !alreadyReturn) {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Descartar venta en curso'),
+        content: Text(
+          'En Ventas hay ${draft.items.length} artículo(s) sin cobrar. Para '
+          'hacer una devolución se descarta ese carrito. ¿Continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Descartar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    const empty = SaleDraft();
+    ref.read(saleDraftProvider.notifier).state = empty;
+    saveSaleDraftToStore(empty);
+  }
+  ref.read(posModeProvider.notifier).state = PosMode.returnMode;
+  if (context.mounted) context.go('/ventas');
+}
+
+class _ReturnRow extends ConsumerWidget {
   const _ReturnRow({required this.item});
 
   final ReturnSummary item;
 
+  /// Reimprime la nota de crédito de esta devolución.
+  Future<void> _print(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final job = await ref
+          .read(salesRepositoryProvider)
+          .prepareReturnPrintJob(returnId: item.id);
+      if (!context.mounted) return;
+      if (job == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('No se encontró la devolución.')),
+        );
+        return;
+      }
+      await PrintReceiptDialog.show(context, job);
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'No se pudo preparar la nota de crédito: '
+            '${friendlyErrorMessage(e)}',
+          ),
+        ),
+      );
+    }
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Padding(
       padding: const EdgeInsets.symmetric(
         horizontal: AppTokens.s16,
@@ -140,12 +201,25 @@ class _ReturnRow extends StatelessWidget {
                 Text(
                   '${item.itemsCount} línea(s)'
                   '${item.clientName != null ? " · ${item.clientName}" : ""}'
-                  '${item.originalSaleId != null ? " · ref. ${_short(item.originalSaleId!)}" : ""}',
+                  '${item.originalSaleNumber != null ? " · venta ${item.originalSaleNumber}" : item.originalSaleId != null ? " · ref. ${_short(item.originalSaleId!)}" : ""}'
+                  '${item.refundMethod == 'credit_balance' ? " · rebajada del saldo" : ""}',
                   style: const TextStyle(
                     color: AppTokens.mutedForeground,
                     fontSize: 12,
                   ),
                 ),
+                // Nota de crédito fiscal: su NCF y el de la venta que modifica.
+                if (item.ncf != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    'Nota de crédito ${item.ncf}'
+                    '${item.ncfModificado != null ? ' · modifica ${item.ncfModificado}' : ''}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
                 if (item.notes != null && item.notes!.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
@@ -161,6 +235,12 @@ class _ReturnRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AppTokens.s12),
+          IconButton(
+            tooltip: 'Imprimir nota de crédito',
+            icon: const Icon(Icons.print_outlined, size: 18),
+            onPressed: () => _print(context, ref),
+          ),
+          const SizedBox(width: AppTokens.s4),
           Text(
             '- ${money(item.totalAmount)}',
             style: const TextStyle(

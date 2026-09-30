@@ -85,6 +85,11 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
   /// antes de sacar los elegidos.
   final Map<String, Set<String>> _originalImeis = {};
 
+  /// Líneas de la venta que no se pudieron cargar (producto borrado). El RPC
+  /// reemplaza TODAS las líneas, así que guardar las eliminaría: mientras haya
+  /// alguna, no se deja guardar.
+  final List<String> _unloadableLines = [];
+
   @override
   void dispose() {
     _notesCtrl.dispose();
@@ -139,18 +144,29 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
   }
 
   /// Carga inicial de los items de la venta en el estado local.
-  void _hydrate(SalesHistoryDetail detail, List<SalesProduct> products) {
+  void _hydrate(
+    SalesHistoryDetail detail,
+    List<SalesProduct> products,
+    List<SalesProduct> lineProducts,
+  ) {
     if (_initialized) return;
     _initialized = true;
 
-    final byId = {for (final p in products) p.id: p};
+    // Los del catálogo activo, más los de la venta aunque se hayan
+    // desactivado después: sin ellos su línea desaparecía y se borraba.
+    final byId = {
+      for (final p in lineProducts) p.id: p,
+      for (final p in products) p.id: p,
+    };
     _receiptType = detail.sale.receiptType;
     _clientId = detail.sale.clientId;
     for (final si in detail.items) {
       final pid = si.productId;
-      if (pid == null) continue;
-      final product = byId[pid];
-      if (product == null) continue;
+      final product = pid == null ? null : byId[pid];
+      if (pid == null || product == null) {
+        _unloadableLines.add(si.description);
+        continue;
+      }
       // Igual que al reabrir una cuenta guardada: "4 Cajas" al precio de la
       // caja con que se cobró, con su tipo de precio y su descuento.
       final item = cartItemFromSaleLine(
@@ -425,9 +441,42 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     });
   }
 
+  /// Comprobante que exige cliente con RNC/cédula (todo menos Consumidor
+  /// Final y sin comprobante). Espeja `tg_sales_assert_fiscal_client`.
+  bool get _needsFiscalClient =>
+      _receiptType != 'consumer_final' && _receiptType != 'none';
+
+  /// Por qué el cliente elegido no sirve para el comprobante, o null.
+  String? get _fiscalClientProblem {
+    if (!_needsFiscalClient) return null;
+    final id = _clientId;
+    if (id == null) {
+      return 'Esta factura tiene comprobante fiscal: necesita un cliente con '
+          'RNC o cédula.';
+    }
+    final client = ref.read(salesClientsByIdProvider)[id];
+    // Si la lista de clientes aún no cargó, decide el servidor.
+    if (client == null) return null;
+    if ((client.documentNumber ?? '').trim().isEmpty) {
+      return '${client.fullName} no tiene RNC o cédula registrado, y esta '
+          'factura tiene comprobante fiscal.';
+    }
+    return null;
+  }
+
   Future<void> _save() async {
+    if (_unloadableLines.isNotEmpty) {
+      _snack('Esta venta tiene productos que ya no existen; no se puede '
+          'editar sin perderlos.');
+      return;
+    }
     if (_lines.isEmpty) {
       _snack('La venta debe tener al menos un item.');
+      return;
+    }
+    final fiscalProblem = _fiscalClientProblem;
+    if (fiscalProblem != null) {
+      _snack(fiscalProblem);
       return;
     }
     // Suelto por debajo del mínimo: el POS no deja cobrarlo, aquí tampoco.
@@ -452,12 +501,21 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
       );
 
       // Si el método de pago cambió, actualizar los payments en una segunda
-      // llamada (el RPC editSale no lo modifica).
+      // llamada (el RPC editSale no lo modifica). La venta ya quedó guardada:
+      // si esto falla, se dice así y no "No se pudo guardar".
       if (_paymentMethod != _originalPaymentMethod) {
-        await repo.updateSalePaymentMethod(
-          saleId: widget.saleId,
-          paymentMethod: _paymentMethod,
-        );
+        try {
+          await repo.updateSalePaymentMethod(
+            saleId: widget.saleId,
+            paymentMethod: _paymentMethod,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          ref.invalidate(salesHistoryDetailProvider(widget.saleId));
+          _snack('La venta se guardó, pero no se pudo cambiar el método de '
+              'pago: ${friendlyErrorMessage(e)}');
+          return;
+        }
       }
       if (!mounted) return;
       ref.invalidate(salesHistoryPageProvider);
@@ -485,6 +543,8 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
   Widget build(BuildContext context) {
     final detailAsync = ref.watch(salesHistoryDetailProvider(widget.saleId));
     final productsAsync = ref.watch(salesProductsProvider);
+    final lineProductsAsync =
+        ref.watch(saleLineProductsProvider(widget.saleId));
     final clientsAsync = ref.watch(salesClientsProvider);
 
     return ModulePage(
@@ -525,6 +585,25 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
           if (detail == null) {
             return const _SaleNotFound();
           }
+          // Solo ventas cobradas o a crédito. Una anulada ya devolvió todo y
+          // una cuenta guardada se edita reabriéndola en el POS.
+          final status = detail.sale.status;
+          if (status != 'completed' && status != 'credit') {
+            return _NotEditable(
+              message: status == 'voided'
+                  ? 'Esta venta está anulada: no se puede editar.'
+                  : 'Esta venta no está cobrada. Una cuenta guardada se '
+                      'edita reabriéndola en Ventas.',
+            );
+          }
+          if (lineProductsAsync.isLoading && !lineProductsAsync.hasValue) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(48),
+                child: CircularProgressIndicator(),
+              ),
+            );
+          }
           return productsAsync.when(
             loading: () => const Center(
               child: Padding(
@@ -538,13 +617,21 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
               onRetry: () => ref.invalidate(salesProductsProvider),
             ),
             data: (products) {
-              _hydrate(detail, products);
+              _hydrate(
+                detail,
+                products,
+                lineProductsAsync.valueOrNull ?? const [],
+              );
+              final shades = shadesByProduct([
+                for (final line in _lines) line.item.product.id,
+              ]);
               return _EditForm(
                 detail: detail,
                 lines: [
                   for (var i = 0; i < _lines.length; i++)
                     CartLineTile(
                       key: ValueKey(_lines[i].id),
+                      shaded: shades[i],
                       item: _lines[i].item,
                       chargesTax: _chargesTax,
                       pricesIncludeTax: _pricesIncludeTax,
@@ -559,6 +646,17 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
                       onRemoveImei: (imei) => _removeImei(i, imei),
                     ),
                 ],
+                warnings: [
+                  if (_unloadableLines.isNotEmpty)
+                    'No se puede guardar: ${_unloadableLines.join(', ')} ya '
+                        'no existe en el inventario y se perdería.',
+                  if (detail.sale.ncf != null)
+                    'Factura con NCF ${detail.sale.ncf}: los cambios de '
+                        'montos quedan en el 607 del mes de la venta. Para '
+                        'devolver mercancía usa una devolución (nota de '
+                        'crédito).',
+                  ?_fiscalClientProblem,
+                ],
                 clientId: _clientId,
                 notesCtrl: _notesCtrl,
                 paymentMethod: _paymentMethod,
@@ -566,6 +664,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
                 subtotal: _subtotal,
                 tax: _tax,
                 total: _total,
+                hideTaxBreakdown: _pricesIncludeTax,
                 onClientChanged: (v) => setState(() => _clientId = v),
                 onPaymentMethodChanged: (v) =>
                     setState(() => _paymentMethod = v),
@@ -613,6 +712,7 @@ class _EditForm extends StatelessWidget {
   const _EditForm({
     required this.detail,
     required this.lines,
+    this.warnings = const [],
     required this.clientId,
     required this.notesCtrl,
     required this.paymentMethod,
@@ -620,6 +720,7 @@ class _EditForm extends StatelessWidget {
     required this.subtotal,
     required this.tax,
     required this.total,
+    this.hideTaxBreakdown = false,
     required this.onClientChanged,
     required this.onPaymentMethodChanged,
     required this.onAddProduct,
@@ -629,6 +730,9 @@ class _EditForm extends StatelessWidget {
 
   /// Una [CartLineTile] por línea de la venta.
   final List<Widget> lines;
+
+  /// Avisos arriba del formulario (NCF, cliente sin RNC…).
+  final List<String> warnings;
   final String? clientId;
   final TextEditingController notesCtrl;
   final String paymentMethod;
@@ -636,6 +740,10 @@ class _EditForm extends StatelessWidget {
   final double subtotal;
   final double tax;
   final double total;
+
+  /// Consumidor Final (B02): el ITBIS se cobra pero no se desglosa, igual que
+  /// en el POS y en la factura.
+  final bool hideTaxBreakdown;
   final ValueChanged<String?> onClientChanged;
   final ValueChanged<String> onPaymentMethodChanged;
   final VoidCallback onAddProduct;
@@ -646,6 +754,10 @@ class _EditForm extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _Header(detail: detail),
+        for (final warning in warnings) ...[
+          const SizedBox(height: AppTokens.s8),
+          _Warning(warning),
+        ],
         const SizedBox(height: AppTokens.s16),
         _ClientSelector(
           clientId: clientId,
@@ -653,24 +765,10 @@ class _EditForm extends StatelessWidget {
           onChanged: onClientChanged,
         ),
         const SizedBox(height: AppTokens.s16),
-        DropdownButtonFormField<String>(
-          initialValue: paymentMethod,
-          decoration: const InputDecoration(
-            labelText: 'Método de pago',
-            isDense: true,
-            border: OutlineInputBorder(),
-          ),
-          items: const [
-            DropdownMenuItem(value: 'cash', child: Text('Efectivo')),
-            DropdownMenuItem(value: 'transfer', child: Text('Transferencia')),
-            DropdownMenuItem(value: 'card', child: Text('Tarjeta')),
-            DropdownMenuItem(value: 'mobile', child: Text('Pago móvil')),
-            DropdownMenuItem(value: 'mixed', child: Text('Mixto')),
-            DropdownMenuItem(value: 'credit', child: Text('Crédito')),
-          ],
-          onChanged: (v) {
-            if (v != null) onPaymentMethodChanged(v);
-          },
+        _PaymentMethodField(
+          detail: detail,
+          value: paymentMethod,
+          onChanged: onPaymentMethodChanged,
         ),
         const SizedBox(height: AppTokens.s16),
         Row(
@@ -720,6 +818,7 @@ class _EditForm extends StatelessWidget {
           subtotal: subtotal,
           tax: tax,
           total: total,
+          hideTaxBreakdown: hideTaxBreakdown,
           // En ventas PAGADAS el pago sigue al total (queda saldada), igual
           // que hace el RPC al guardar. En crédito se conserva lo pagado y el
           // pendiente se recalcula contra el nuevo total.
@@ -728,6 +827,142 @@ class _EditForm extends StatelessWidget {
               : detail.sale.paidAmount,
         ),
       ],
+    );
+  }
+}
+
+/// Método de pago de la venta. Solo se puede cambiar cuando todos sus pagos
+/// son de un mismo método: el RPC re-etiqueta TODOS los pagos, así que en un
+/// pago dividido (efectivo + tarjeta) movía dinero de un método a otro. Y no
+/// ofrece "Crédito" ni "Mixto": cambiar la etiqueta no convierte una venta
+/// cobrada en una cuenta por cobrar, solo sacaba el dinero del cuadre.
+class _PaymentMethodField extends StatelessWidget {
+  const _PaymentMethodField({
+    required this.detail,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final SalesHistoryDetail detail;
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  static const _labels = {
+    'cash': 'Efectivo',
+    'transfer': 'Transferencia',
+    'card': 'Tarjeta',
+    'mobile': 'Pago móvil',
+    'mixed': 'Mixto',
+    'credit': 'Crédito',
+    'credit_note': 'Nota de crédito',
+  };
+  static const _editable = ['cash', 'transfer', 'card', 'mobile'];
+
+  String _label(String method) => _labels[method] ?? method;
+
+  @override
+  Widget build(BuildContext context) {
+    final methods = detail.paymentMethods;
+    String? readOnly;
+    if (detail.paymentCount == 0) {
+      readOnly = 'Sin pagos registrados. Los abonos se registran en Cobros.';
+    } else if (methods.length > 1) {
+      readOnly = 'Pago dividido (${methods.map(_label).join(' + ')}): no se '
+          'cambia desde aquí.';
+    } else if (!_editable.contains(value)) {
+      readOnly = _label(value);
+    }
+    if (readOnly != null) {
+      return InputDecorator(
+        decoration: const InputDecoration(
+          labelText: 'Método de pago',
+          isDense: true,
+          border: OutlineInputBorder(),
+        ),
+        child: Text(
+          readOnly,
+          style: const TextStyle(color: AppTokens.mutedForeground),
+        ),
+      );
+    }
+    return DropdownButtonFormField<String>(
+      initialValue: value,
+      decoration: const InputDecoration(
+        labelText: 'Método de pago',
+        isDense: true,
+        border: OutlineInputBorder(),
+      ),
+      items: [
+        for (final method in _editable)
+          DropdownMenuItem(value: method, child: Text(_label(method))),
+      ],
+      onChanged: (v) {
+        if (v != null) onChanged(v);
+      },
+    );
+  }
+}
+
+/// Aviso en ámbar arriba del formulario.
+class _Warning extends StatelessWidget {
+  const _Warning(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppTokens.s12),
+      decoration: BoxDecoration(
+        color: AppTokens.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTokens.warning.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.info_outline_rounded,
+            size: 18,
+            color: AppTokens.warning,
+          ),
+          const SizedBox(width: AppTokens.s8),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 13))),
+        ],
+      ),
+    );
+  }
+}
+
+/// La venta existe pero no se puede editar (anulada, cuenta guardada…).
+class _NotEditable extends StatelessWidget {
+  const _NotEditable({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(48),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.block,
+              size: 48,
+              color: AppTokens.mutedForeground,
+            ),
+            const SizedBox(height: 12),
+            Text(message, textAlign: TextAlign.center),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: () => context.go('/ventas/historial'),
+              child: const Text('Volver al historial'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -851,12 +1086,14 @@ class _Totals extends StatelessWidget {
     required this.tax,
     required this.total,
     required this.paid,
+    this.hideTaxBreakdown = false,
   });
 
   final double subtotal;
   final double tax;
   final double total;
   final double paid;
+  final bool hideTaxBreakdown;
 
   @override
   Widget build(BuildContext context) {
@@ -868,9 +1105,11 @@ class _Totals extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _row('Subtotal', money(subtotal)),
-            _row('ITBIS', money(tax)),
-            const Divider(),
+            if (!hideTaxBreakdown) ...[
+              _row('Subtotal', money(subtotal)),
+              _row('ITBIS', money(tax)),
+              const Divider(),
+            ],
             _row('Total', money(total), bold: true),
             const SizedBox(height: 8),
             _row('Pagado', money(paid)),

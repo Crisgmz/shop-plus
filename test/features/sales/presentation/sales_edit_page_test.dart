@@ -31,13 +31,13 @@ SalesProduct _vasosCon({double stock = 580}) => SalesProduct(
   ),
 );
 
-final _detail = SalesHistoryDetail(
+SalesHistoryDetail _detailFor(String receiptType) => SalesHistoryDetail(
   sale: SalesHistoryRow.fromMap({
     'id': 'venta',
     'sale_number': 'FA-000008',
     'sale_date': '2026-09-30T13:29:00Z',
     'status': 'completed',
-    'receipt_type': 'fiscal_credit',
+    'receipt_type': receiptType,
     'ncf': 'B0100000200',
     'total_amount': 29179.98,
     'paid_amount': 29179.98,
@@ -64,14 +64,20 @@ final _detail = SalesHistoryDetail(
   subtotal: 24728.80,
   taxAmount: 4451.18,
   paymentMethod: 'transfer',
+  paymentMethods: const ['transfer'],
+  paymentCount: 1,
 );
 
 /// Devuelve FA-000008 y guarda lo que la pantalla manda al RPC.
 class _FakeHistoryRepo implements SalesHistoryRepository {
+  _FakeHistoryRepo(this.receiptType);
+
+  final String receiptType;
   List<Map<String, dynamic>>? saved;
 
   @override
-  Future<SalesHistoryDetail?> fetchDetail(String saleId) async => _detail;
+  Future<SalesHistoryDetail?> fetchDetail(String saleId) async =>
+      _detailFor(receiptType);
 
   @override
   Future<SalesEditResult> editSale({
@@ -110,12 +116,14 @@ class _FakeSettings extends AppSettingsController {
 Future<_FakeHistoryRepo> _openEdit(
   WidgetTester tester, {
   double stock = 580,
+  String? clientRnc = '133334781',
+  String receiptType = 'fiscal_credit',
 }) async {
   tester.view.physicalSize = const Size(1400, 1000);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
 
-  final repo = _FakeHistoryRepo();
+  final repo = _FakeHistoryRepo(receiptType);
   final router = GoRouter(
     initialLocation: '/editar',
     routes: [
@@ -137,9 +145,16 @@ Future<_FakeHistoryRepo> _openEdit(
         salesProductsProvider.overrideWith(
           (ref) async => [_vasosCon(stock: stock)],
         ),
+        saleLineProductsProvider.overrideWith(
+          (ref, saleId) async => [_vasosCon(stock: stock)],
+        ),
         salesClientsProvider.overrideWith(
           (ref) async => [
-            SalesClient(id: 'sober', fullName: 'SOBER LOUNGE SRL'),
+            SalesClient(
+              id: 'sober',
+              fullName: 'SOBER LOUNGE SRL',
+              documentNumber: clientRnc,
+            ),
           ],
         ),
         appSettingsProvider.overrideWith(_FakeSettings.new),
@@ -235,5 +250,36 @@ void main() {
 
     await _save(tester);
     expect(repo.saved!.single['quantity'], 100);
+  });
+
+  testWidgets('una factura B01 no se guarda con un cliente sin RNC', (
+    tester,
+  ) async {
+    final repo = await _openEdit(tester, clientRnc: null);
+
+    expect(find.textContaining('no tiene RNC o cédula'), findsOneWidget);
+    await _save(tester);
+    expect(repo.saved, isNull);
+  });
+
+  testWidgets('avisa que la factura tiene NCF', (tester) async {
+    await _openEdit(tester);
+    expect(find.textContaining('Factura con NCF B0100000200'), findsOneWidget);
+  });
+
+  testWidgets('B02: el precio va con el ITBIS adentro y no se desglosa', (
+    tester,
+  ) async {
+    final repo = await _openEdit(tester, receiptType: 'consumer_final');
+
+    // 6,182.20 + 18% = 7,294.996 → 7,295.00 por caja.
+    expect(find.widgetWithText(TextField, '7295'), findsOneWidget);
+    expect(find.text('ITBIS'), findsNothing);
+    expect(find.text('Subtotal'), findsNothing);
+    expect(find.text('RD\$ 29,179.98'), findsWidgets);
+
+    // Lo que se guarda sigue siendo el precio base de la caja.
+    await _save(tester);
+    expect(repo.saved!.single['uom_price'], 6182.20);
   });
 }

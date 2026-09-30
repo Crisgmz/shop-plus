@@ -7,12 +7,16 @@ import '../../../shared/formatters/formatters.dart';
 /// Cómo se cobra la venta que sale de una cotización: al contado con un
 /// método de pago, o a crédito con un plazo en días.
 class QuoteConversionChoice {
-  const QuoteConversionChoice.cash(this.paymentMethod)
-      : asCredit = false,
+  const QuoteConversionChoice.cash(
+    this.paymentMethod, {
+    this.receiptType = 'consumer_final',
+  })  : asCredit = false,
         creditDueDays = null;
 
-  const QuoteConversionChoice.credit(int days)
-      : asCredit = true,
+  const QuoteConversionChoice.credit(
+    int days, {
+    this.receiptType = 'consumer_final',
+  })  : asCredit = true,
         creditDueDays = days,
         paymentMethod = 'cash';
 
@@ -20,7 +24,20 @@ class QuoteConversionChoice {
   final String paymentMethod;
   final bool asCredit;
   final int? creditDueDays;
+
+  /// Comprobante de la venta: 'consumer_final' (B02), 'fiscal_credit' (B01),
+  /// 'governmental', 'special' o 'none' (sin comprobante).
+  final String receiptType;
 }
+
+/// Comprobantes que se pueden emitir al convertir, con su nombre.
+const quoteReceiptTypes = <({String value, String label})>[
+  (value: 'consumer_final', label: 'Consumidor Final (B02)'),
+  (value: 'fiscal_credit', label: 'Crédito Fiscal (B01)'),
+  (value: 'governmental', label: 'Gubernamental (B15)'),
+  (value: 'special', label: 'Régimen Especial (B14)'),
+  (value: 'none', label: 'Sin comprobante'),
+];
 
 /// Días de plazo escritos por el cajero, acotados igual que el servidor
 /// (1..365). Vacío o inválido ⇒ el default de la empresa.
@@ -58,6 +75,7 @@ Future<QuoteConversionChoice?> showConvertPaymentDialog(
   required bool hasClient,
   bool creditAllowed = true,
   int defaultCreditDays = 30,
+  String defaultReceiptType = 'consumer_final',
 }) {
   return showDialog<QuoteConversionChoice>(
     context: context,
@@ -67,6 +85,7 @@ Future<QuoteConversionChoice?> showConvertPaymentDialog(
       hasClient: hasClient,
       creditAllowed: creditAllowed,
       defaultCreditDays: defaultCreditDays,
+      defaultReceiptType: defaultReceiptType,
     ),
   );
 }
@@ -78,6 +97,7 @@ class _ConvertPaymentDialog extends StatefulWidget {
     required this.hasClient,
     required this.creditAllowed,
     required this.defaultCreditDays,
+    required this.defaultReceiptType,
   });
 
   final String quoteCode;
@@ -85,6 +105,7 @@ class _ConvertPaymentDialog extends StatefulWidget {
   final bool hasClient;
   final bool creditAllowed;
   final int defaultCreditDays;
+  final String defaultReceiptType;
 
   @override
   State<_ConvertPaymentDialog> createState() => _ConvertPaymentDialogState();
@@ -93,6 +114,13 @@ class _ConvertPaymentDialog extends StatefulWidget {
 class _ConvertPaymentDialogState extends State<_ConvertPaymentDialog> {
   bool _asCredit = false;
   String _method = 'cash';
+  // Antes toda cotización se convertía como Consumidor Final: gastaba un B02
+  // aunque el cliente necesitara B01, o aunque el negocio vendiera sin
+  // comprobante. Arranca en el comprobante por defecto del POS.
+  late String _receiptType =
+      quoteReceiptTypes.any((t) => t.value == widget.defaultReceiptType)
+          ? widget.defaultReceiptType
+          : 'consumer_final';
   late final TextEditingController _days =
       TextEditingController(text: widget.defaultCreditDays.toString());
 
@@ -131,6 +159,43 @@ class _ConvertPaymentDialogState extends State<_ConvertPaymentDialog> {
               'La cotización ${widget.quoteCode} se convertirá en una venta '
               'por ${money(widget.total)} con sus líneas y montos actuales.',
             ),
+            const SizedBox(height: AppTokens.s16),
+            DropdownButtonFormField<String>(
+              initialValue: _receiptType,
+              decoration: const InputDecoration(
+                labelText: 'Comprobante',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                for (final t in quoteReceiptTypes)
+                  DropdownMenuItem(value: t.value, child: Text(t.label)),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _receiptType = value);
+              },
+            ),
+            if (_receiptType != 'consumer_final' && _receiptType != 'none') ...[
+              const SizedBox(height: AppTokens.s8),
+              Text(
+                'Este comprobante exige que el cliente de la cotización tenga '
+                'RNC o cédula.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppTokens.mutedForeground,
+                ),
+              ),
+            ],
+            if (_receiptType == 'none') ...[
+              const SizedBox(height: AppTokens.s8),
+              Text(
+                'Sin comprobante no se cobra ITBIS: la venta sale por el '
+                'subtotal.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppTokens.mutedForeground,
+                ),
+              ),
+            ],
             const SizedBox(height: AppTokens.s16),
             SegmentedButton<bool>(
               segments: [
@@ -227,8 +292,14 @@ class _ConvertPaymentDialogState extends State<_ConvertPaymentDialog> {
               ? () => Navigator.pop(
                     context,
                     _asCredit
-                        ? QuoteConversionChoice.credit(_parsedDays)
-                        : QuoteConversionChoice.cash(_method),
+                        ? QuoteConversionChoice.credit(
+                            _parsedDays,
+                            receiptType: _receiptType,
+                          )
+                        : QuoteConversionChoice.cash(
+                            _method,
+                            receiptType: _receiptType,
+                          ),
                   )
               : null,
           child: Text(_asCredit ? 'Convertir a crédito' : 'Convertir y cobrar'),

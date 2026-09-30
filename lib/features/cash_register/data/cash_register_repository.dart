@@ -67,6 +67,10 @@ class CashSessionMetrics {
     this.changeGiven = 0,
     this.supplierCashPayments = 0,
     this.cashRefunds = 0,
+    this.cashDeposits = 0,
+    this.cashWithdrawals = 0,
+    this.cashAdjustments = 0,
+    this.cashVoidRefunds = 0,
   });
 
   final double totalPayments;
@@ -90,19 +94,43 @@ class CashSessionMetrics {
   /// Devoluciones reembolsadas en efectivo en esta caja (migración 68).
   final double cashRefunds;
 
+  /// Efectivo metido a mano en la gaveta: movimientos `deposit` y
+  /// `opening_top_up` (refuerzo de apertura).
+  final double cashDeposits;
+
+  /// Sangrías: movimientos `withdrawal`. En positivo; en el esperado se resta.
+  final double cashWithdrawals;
+
+  /// Ajustes (`adjustment`): el check de la tabla obliga a `amount > 0` y el
+  /// trigger SQL los suma (sobrante declarado), así que aquí también suman.
+  final double cashAdjustments;
+
+  /// Efectivo devuelto en esta caja al anular ventas de turnos ya cerrados
+  /// (movimientos `withdrawal` con `reference_type = 'sale_void'`, migración
+  /// 97). Sale del cajón como una sangría, pero se muestra aparte.
+  final double cashVoidRefunds;
+
   double get netPayments => _round2(totalPayments - totalExpenses);
 
-  /// Efectivo esperado = apertura + cobros en efectivo − todo lo que salió
-  /// del cajón: gastos en efectivo, cambio entregado, pagos a proveedores en
-  /// efectivo y devoluciones reembolsadas en efectivo.
+  /// Efectivo esperado = apertura + cobros en efectivo + depósitos y ajustes
+  /// − todo lo que salió del cajón: gastos en efectivo, cambio entregado,
+  /// pagos a proveedores en efectivo, devoluciones en efectivo y sangrías.
+  ///
+  /// Los movimientos manuales SÍ mueven la gaveta. Antes no entraban: cada
+  /// sangría quedaba como faltante y cada depósito como sobrante, y así se
+  /// guardaba al cerrar. Es la misma fórmula del otro app (flutter_shop+).
   double expectedCashFromOpening(double openingAmount) {
     return _round2(
       openingAmount +
-          cashPayments -
+          cashPayments +
+          cashDeposits +
+          cashAdjustments -
           cashExpenses -
           changeGiven -
           supplierCashPayments -
-          cashRefunds,
+          cashRefunds -
+          cashWithdrawals -
+          cashVoidRefunds,
     );
   }
 
@@ -596,7 +624,14 @@ class CashRegisterRepository {
         .eq('branch_id', branchId)
         .eq('cash_session_id', cashSessionId)
         .neq('status', 'voided');
-    final (payments, expenses, salesRows, supplierPayments, refunds) = await (
+    final (
+      payments,
+      expenses,
+      salesRows,
+      supplierPayments,
+      refunds,
+      movements,
+    ) = await (
       _client
           .from('payments')
           .select('amount, payment_method')
@@ -615,9 +650,11 @@ class CashRegisterRepository {
           .eq('branch_id', branchId)
           .eq('cash_session_id', cashSessionId),
       // Devoluciones reembolsadas desde esta caja (columnas de la migración 68).
+      _fetchSessionRefunds(cashSessionId, branchId),
+      // Depósitos, sangrías y ajustes hechos a mano en esta caja.
       _client
-          .from('returns')
-          .select('total_amount, refund_method')
+          .from('cash_register_movements')
+          .select('movement_type, amount, reference_type')
           .eq('branch_id', branchId)
           .eq('cash_session_id', cashSessionId),
     ).wait;
@@ -683,11 +720,32 @@ class CashRegisterRepository {
       amountKey: 'amount',
       methodKey: 'payment_method',
     );
-    final cashRefunds = sumCash(
-      refunds,
-      amountKey: 'total_amount',
-      methodKey: 'refund_method',
-    );
+    // Lo que realmente salió en efectivo: una devolución de una venta a
+    // crédito primero baja la deuda (migración 97) y solo reembolsa el resto.
+    // Las anteriores a la 97 no tienen `cash_refund_amount`: su total.
+    final cashRefunds = _round2(refunds.fold<double>(0, (sum, item) {
+      final row = item as Map;
+      if ((row['refund_method'] ?? 'cash').toString() != 'cash') return sum;
+      return sum +
+          _toDouble(row['cash_refund_amount'] ?? row['total_amount']);
+    }));
+
+    // Solo los movimientos manuales. Uno ligado a una devolución o a un gasto
+    // ya se cuenta en `cashRefunds` / `cashExpenses`: sumarlo otra vez lo
+    // restaría dos veces (hoy ningún flujo los crea; es una defensa, como en
+    // flutter_shop+).
+    double sumMovements(Set<String> types, {bool voids = false}) => _round2(
+          movements.fold<double>(0, (sum, item) {
+            final row = item as Map;
+            final reference = (row['reference_type'] ?? '').toString();
+            if (reference == 'return' || reference == 'expense') return sum;
+            // Las devoluciones por anulación van en su propia línea.
+            if ((reference == 'sale_void') != voids) return sum;
+            final type = (row['movement_type'] ?? '').toString();
+            if (!types.contains(type)) return sum;
+            return sum + _toDouble(row['amount']);
+          }),
+        );
 
     return CashSessionMetrics(
       totalPayments: totalPayments,
@@ -701,7 +759,34 @@ class CashRegisterRepository {
       cashExpenses: cashExpenses,
       supplierCashPayments: supplierCashPayments,
       cashRefunds: cashRefunds,
+      cashDeposits: sumMovements(const {'deposit', 'opening_top_up'}),
+      cashWithdrawals: sumMovements(const {'withdrawal'}),
+      cashAdjustments: sumMovements(const {'adjustment'}),
+      cashVoidRefunds: sumMovements(const {'withdrawal'}, voids: true),
     );
+  }
+
+  /// Devoluciones de la sesión. `cash_refund_amount` llega con la migración
+  /// 97: si la base aún no la tiene, se relee sin ella (se asume el total,
+  /// como antes) en vez de romper la pantalla de Caja.
+  Future<List<dynamic>> _fetchSessionRefunds(
+    String cashSessionId,
+    String branchId,
+  ) async {
+    try {
+      return await _client
+          .from('returns')
+          .select('total_amount, cash_refund_amount, refund_method')
+          .eq('branch_id', branchId)
+          .eq('cash_session_id', cashSessionId);
+    } on PostgrestException catch (error) {
+      if (error.code != '42703') rethrow;
+      return _client
+          .from('returns')
+          .select('total_amount, refund_method')
+          .eq('branch_id', branchId)
+          .eq('cash_session_id', cashSessionId);
+    }
   }
 
   /// Registra un movimiento manual de efectivo en la sesión activa.

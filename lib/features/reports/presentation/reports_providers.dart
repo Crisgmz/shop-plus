@@ -253,6 +253,14 @@ final dgii607Provider =
   return repo.fetchDgii607(year: year, month: month);
 });
 
+final dgii608Provider =
+    FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
+  final repo = ref.watch(reportsRepositoryProvider);
+  final year = ref.watch(dgiiYearProvider);
+  final month = ref.watch(dgiiMonthProvider);
+  return repo.fetchDgii608(year: year, month: month);
+});
+
 final dgiiIt1Provider =
     FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
   final repo = ref.watch(reportsRepositoryProvider);

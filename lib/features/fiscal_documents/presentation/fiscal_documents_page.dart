@@ -3,11 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
 import '../../../shared/errors/friendly_error.dart';
+import '../../../shared/fiscal/dgii_void_reasons.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/role_gate.dart';
 import '../../../shared/widgets/ui_custom.dart';
+import '../../sales/presentation/sales_history_providers.dart';
 import '../data/fiscal_documents_repository.dart';
 import 'fiscal_documents_providers.dart';
 
@@ -17,6 +19,7 @@ const _receiptLabels = <String, String>{
   'governmental': 'Gubernamental',
   'special': 'Especial',
   'export': 'Exportación',
+  'credit_note': 'Nota de Crédito',
 };
 
 const _statusLabels = <String, String>{
@@ -24,6 +27,7 @@ const _statusLabels = <String, String>{
   'sent': 'Enviado',
   'approved': 'Aprobado',
   'rejected': 'Rechazado',
+  'voided': 'Anulado',
 };
 
 const _statusColors = <String, Color>{
@@ -31,6 +35,7 @@ const _statusColors = <String, Color>{
   'sent': Color(0xFF3B82F6),
   'approved': Color(0xFF22C55E),
   'rejected': Color(0xFFEF4444),
+  'voided': Color(0xFF64748B),
 };
 
 const _receiptTypes = <String>[
@@ -39,6 +44,7 @@ const _receiptTypes = <String>[
   'governmental',
   'special',
   'export',
+  'credit_note',
 ];
 
 const _statusOptions = <String>[
@@ -46,6 +52,7 @@ const _statusOptions = <String>[
   'sent',
   'approved',
   'rejected',
+  'voided',
 ];
 
 class FiscalDocumentsPage extends ConsumerWidget {
@@ -339,7 +346,100 @@ class _FiscalDocDetailDialogState
     extends ConsumerState<_FiscalDocDetailDialog> {
   bool _voiding = false;
 
+  /// Comprobante de una venta: se anula LA VENTA (stock, dinero y NCF) con
+  /// el motivo DGII. Antes solo se marcaba el comprobante —y ni eso: el
+  /// estado 'voided' no existía hasta la migración 96— y la venta seguía
+  /// contando en el 607 y en caja.
+  Future<void> _onVoidSale(String saleId) async {
+    var reason = '04';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Anular comprobante'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Se anula la venta del NCF ${widget.doc.ncf}: se devuelve '
+                  'el stock y el dinero, y el comprobante queda anulado para '
+                  'el 608. No se puede deshacer.',
+                  style: const TextStyle(color: AppTokens.mutedForeground),
+                ),
+                const SizedBox(height: AppTokens.s12),
+                DropdownButtonFormField<String>(
+                  initialValue: reason,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Motivo (DGII)',
+                  ),
+                  items: [
+                    for (final (code, label) in dgiiVoidReasons)
+                      DropdownMenuItem(
+                        value: code,
+                        child: Text('$code · $label'),
+                      ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setLocal(() => reason = v);
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTokens.destructive,
+              ),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Anular'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _voiding = true);
+    try {
+      final cashOut = await ref
+          .read(salesHistoryRepositoryProvider)
+          .voidSaleWithStockReturn(saleId, reasonCode: reason);
+      if (!mounted) return;
+      widget.listRef.invalidate(fiscalDocumentsProvider);
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            cashOut > 0
+                ? 'Venta y comprobante anulados. Salieron ${money(cashOut)} '
+                    'de tu caja (se cobró en un turno cerrado).'
+                : 'Venta y comprobante anulados.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _voiding = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo anular: ${friendlyErrorMessage(error)}'),
+        ),
+      );
+    }
+  }
+
   Future<void> _onVoid() async {
+    final saleId = widget.doc.saleId;
+    if (saleId != null) return _onVoidSale(saleId);
     final reasonController = TextEditingController();
 
     final confirmed = await showDialog<bool>(
@@ -418,8 +518,12 @@ class _FiscalDocDetailDialogState
     final receiptLabel =
         _receiptLabels[doc.receiptType] ?? _pretty(doc.receiptType);
     final access = ref.watch(roleAccessProvider);
-    final canVoid =
-        !doc.isVoided && doc.fiscalStatus != 'voided' && access.canVoidSale;
+    // Una nota de crédito no se anula desde aquí: su devolución ya movió
+    // stock y dinero, y anularla no los revierte.
+    final canVoid = !doc.isVoided &&
+        doc.fiscalStatus != 'voided' &&
+        doc.receiptType != 'credit_note' &&
+        access.canVoidSale;
 
     return AlertDialog(
       title: Row(

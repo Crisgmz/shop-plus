@@ -77,6 +77,7 @@ class CartLineTile extends ConsumerStatefulWidget {
     required this.onPriceTierChanged,
     required this.onUomChanged,
     this.isReturn = false,
+    this.shaded = false,
     this.quantityReadOnly = false,
     this.onRemoveImei,
   });
@@ -102,6 +103,10 @@ class CartLineTile extends ConsumerStatefulWidget {
   /// Línea de una devolución en el POS: se pinta en rojo.
   final bool isReturn;
 
+  /// Fondo alterno, para distinguir un producto del de al lado. Ver
+  /// [shadesByProduct].
+  final bool shaded;
+
   /// La cantidad solo se muestra. La edición de ventas lo usa en líneas con
   /// IMEIs, donde la cantidad son los equipos.
   final bool quantityReadOnly;
@@ -111,6 +116,25 @@ class CartLineTile extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<CartLineTile> createState() => _CartLineTileState();
+}
+
+/// Ancho desde el que los chips de tipo de precio y presentación caben en la
+/// fila del nombre sin apretarlo.
+const double _inlineChipsMinWidth = 520;
+
+/// Qué líneas llevan el fondo alterno ([CartLineTile.shaded]). El tono cambia
+/// cada vez que cambia el producto: dos productos seguidos nunca se ven
+/// igual, y las líneas de un mismo producto (caja y suelto) quedan del mismo
+/// tono, como un grupo.
+List<bool> shadesByProduct(List<String> productIds) {
+  final shades = <bool>[];
+  for (var i = 0; i < productIds.length; i++) {
+    final sameAsPrevious = i > 0 && productIds[i] == productIds[i - 1];
+    shades.add(
+      i == 0 ? false : (sameAsPrevious ? shades[i - 1] : !shades[i - 1]),
+    );
+  }
+  return shades;
 }
 
 class _CartLineTileState extends ConsumerState<CartLineTile> {
@@ -183,9 +207,12 @@ class _CartLineTileState extends ConsumerState<CartLineTile> {
   Widget build(BuildContext context) {
     final item = widget.item;
     final isReturn = widget.isReturn;
-    final bgColor = isReturn
-        ? const Color(0xFFFEF2F2)
-        : const Color(0xFFF8FAFC);
+    final bgColor = switch ((isReturn, widget.shaded)) {
+      (true, false) => const Color(0xFFFEF2F2),
+      (true, true) => AppTokens.destructive.withValues(alpha: 0.12),
+      (false, false) => const Color(0xFFF8FAFC),
+      (false, true) => AppTokens.primary.withValues(alpha: 0.08),
+    };
 
     // Tipos de precio del producto (Detalle + tiers nombrados). Solo se muestra
     // el selector si hay más de una opción configurada en Ajustes.
@@ -221,6 +248,30 @@ class _CartLineTileState extends ConsumerState<CartLineTile> {
         ? 'Personalizado'
         : priceTierLabel(item.priceTier, priceTypes);
 
+    final hasChips = priceOptions.length > 1 || item.product.packaging.hasPacks;
+    // Tipo de precio y presentación. En pantallas angostas el Wrap baja el
+    // segundo chip en vez de desbordarse.
+    final chips = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        if (priceOptions.length > 1)
+          _buildPriceTypeChip(priceOptions, currentPriceLabel),
+        if (item.product.packaging.hasPacks) _buildPresentationChip(item),
+      ],
+    );
+
+    final nameText = Text(
+      item.product.name,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        fontWeight: FontWeight.w600,
+        fontSize: 13,
+        color: Color(0xFF1E293B),
+      ),
+    );
+
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
@@ -228,199 +279,202 @@ class _CartLineTileState extends ConsumerState<CartLineTile> {
         color: bgColor,
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Fila superior: nombre + botón quitar ──
-          Row(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Con espacio (la edición de ventas, un carrito ancho) los chips van
+          // al lado del nombre y la línea ocupa menos alto. En el carrito
+          // angosto del POS van debajo, para no apretar el nombre.
+          final inlineChips =
+              hasChips && constraints.maxWidth >= _inlineChipsMinWidth;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      item.product.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        color: Color(0xFF1E293B),
-                      ),
-                    ),
-                    Text(
-                      'Inventario: ${item.product.packaging.hasPacks ? item.product.packaging.describeStock(item.product.stock) : _fmtNum(item.product.stock)}'
-                      '${item.product.sku != null ? '  ·  SKU: ${item.product.sku}' : ''}',
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFF94A3B8),
-                      ),
-                    ),
-                    if (item.imeis.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Wrap(
-                          spacing: 4,
-                          runSpacing: 4,
-                          children: [
-                            for (final imei in item.imeis)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFEFF6FF),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      'IMEI $imei',
-                                      style: const TextStyle(
-                                        fontFamily: 'monospace',
-                                        fontSize: 10,
-                                        color: Color(0xFF2563EB),
-                                      ),
+              // ── Fila superior: nombre (+ chips) + botón quitar ──
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (inlineChips)
+                          // Los chips pegados al nombre, no al borde: el
+                          // nombre toma solo su ancho (Flexible, no Expanded).
+                          Row(
+                            children: [
+                              Flexible(child: nameText),
+                              const SizedBox(width: 12),
+                              chips,
+                            ],
+                          )
+                        else
+                          nameText,
+                        Text(
+                          'Inventario: ${item.product.packaging.hasPacks ? item.product.packaging.describeStock(item.product.stock) : _fmtNum(item.product.stock)}'
+                          '${item.product.sku != null ? '  ·  SKU: ${item.product.sku}' : ''}',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF94A3B8),
+                          ),
+                        ),
+                        if (item.imeis.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Wrap(
+                              spacing: 4,
+                              runSpacing: 4,
+                              children: [
+                                for (final imei in item.imeis)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
                                     ),
-                                    if (widget.onRemoveImei != null &&
-                                        item.imeis.length > 1)
-                                      InkWell(
-                                        onTap: () => widget.onRemoveImei!(imei),
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: const Padding(
-                                          padding: EdgeInsets.only(left: 2),
-                                          child: Tooltip(
-                                            message: 'Quitar de la venta',
-                                            child: Icon(
-                                              Icons.close_rounded,
-                                              size: 12,
-                                              color: Color(0xFF2563EB),
-                                            ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFEFF6FF),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          'IMEI $imei',
+                                          style: const TextStyle(
+                                            fontFamily: 'monospace',
+                                            fontSize: 10,
+                                            color: Color(0xFF2563EB),
                                           ),
                                         ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
+                                        if (widget.onRemoveImei != null &&
+                                            item.imeis.length > 1)
+                                          InkWell(
+                                            onTap: () =>
+                                                widget.onRemoveImei!(imei),
+                                            borderRadius: BorderRadius.circular(
+                                              8,
+                                            ),
+                                            child: const Padding(
+                                              padding: EdgeInsets.only(left: 2),
+                                              child: Tooltip(
+                                                message: 'Quitar de la venta',
+                                                child: Icon(
+                                                  Icons.close_rounded,
+                                                  size: 12,
+                                                  color: Color(0xFF2563EB),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: widget.onRemove,
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      size: 18,
+                      color: Color(0xFFF87171),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                  ),
+                ],
               ),
-              IconButton(
-                onPressed: widget.onRemove,
-                icon: const Icon(
-                  Icons.close_rounded,
-                  size: 18,
-                  color: Color(0xFFF87171),
-                ),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-              ),
-            ],
-          ),
-          if (priceOptions.length > 1 || item.product.packaging.hasPacks) ...[
-            const SizedBox(height: 8),
-            // Tipo de precio y presentación en la misma fila. En pantallas
-            // angostas el Wrap baja el segundo chip en vez de desbordarse.
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                if (priceOptions.length > 1)
-                  _buildPriceTypeChip(priceOptions, currentPriceLabel),
-                if (item.product.packaging.hasPacks)
-                  _buildPresentationChip(item),
+              if (hasChips && !inlineChips) ...[
+                const SizedBox(height: 8),
+                chips,
               ],
-            ),
-          ],
-          const SizedBox(height: 8),
-          // ── Fila inferior: 4 campos (Precio, Cant, Desc, Total) ──
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: _CartField(
-                  label: item.isPresentation
-                      ? 'Precio ${item.presentationLabel.toLowerCase()}'
-                      : 'Precio',
-                  controller: _priceCtrl,
-                  suffix: r'$',
-                  onSubmit: (raw) {
-                    final v = double.tryParse(raw);
-                    // El campo se "envía" en cada blur: sin cambio no se toca
-                    // el precio base, que al revertir el ITBIS podría moverse
-                    // un centavo.
-                    if (v == null || v == _displayPrice) return;
-                    widget.onPriceChanged(_round2(v / _taxFactor));
-                  },
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: _CartField(
-                  label: item.isPresentation
-                      ? pluralLabel(item.presentationLabel, 2)
-                      : 'Cantidad',
-                  controller: _qtyCtrl,
-                  readOnly: widget.quantityReadOnly,
-                  onSubmit: (raw) {
-                    final v = double.tryParse(raw) ?? item.quantity;
-                    widget.onQuantityChanged(v);
-                  },
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: _CartField(
-                  label: 'Descuento',
-                  controller: _discountCtrl,
-                  suffix: '%',
-                  onSubmit: (raw) {
-                    final v = double.tryParse(raw) ?? item.discountPct;
-                    widget.onDiscountChanged(v);
-                  },
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Total',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFF64748B),
-                        fontWeight: FontWeight.w600,
-                      ),
+              const SizedBox(height: 8),
+              // ── Fila inferior: 4 campos (Precio, Cant, Desc, Total) ──
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: _CartField(
+                      label: item.isPresentation
+                          ? 'Precio ${item.presentationLabel.toLowerCase()}'
+                          : 'Precio',
+                      controller: _priceCtrl,
+                      suffix: r'$',
+                      onSubmit: (raw) {
+                        final v = double.tryParse(raw);
+                        // El campo se "envía" en cada blur: sin cambio no se toca
+                        // el precio base, que al revertir el ITBIS podría moverse
+                        // un centavo.
+                        if (v == null || v == _displayPrice) return;
+                        widget.onPriceChanged(_round2(v / _taxFactor));
+                      },
                     ),
-                    const SizedBox(height: 4),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Text(
-                        money(
-                          widget.chargesTax ? item.lineTotal : item.lineNet,
-                        ),
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                          color: isReturn
-                              ? const Color(0xFFEF4444)
-                              : const Color(0xFF2563EB),
-                        ),
-                      ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: _CartField(
+                      label: item.isPresentation
+                          ? pluralLabel(item.presentationLabel, 2)
+                          : 'Cantidad',
+                      controller: _qtyCtrl,
+                      readOnly: widget.quantityReadOnly,
+                      onSubmit: (raw) {
+                        final v = double.tryParse(raw) ?? item.quantity;
+                        widget.onQuantityChanged(v);
+                      },
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: _CartField(
+                      label: 'Descuento',
+                      controller: _discountCtrl,
+                      suffix: '%',
+                      onSubmit: (raw) {
+                        final v = double.tryParse(raw) ?? item.discountPct;
+                        widget.onDiscountChanged(v);
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Total',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF64748B),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Text(
+                            money(
+                              widget.chargesTax ? item.lineTotal : item.lineNet,
+                            ),
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: isReturn
+                                  ? const Color(0xFFEF4444)
+                                  : const Color(0xFF2563EB),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
-          ),
-        ],
+          );
+        },
       ),
     );
   }

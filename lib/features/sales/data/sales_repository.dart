@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart'
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../printing/data/printing.dart';
+import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/packaging/presentation_row.dart';
 import '../../../shared/packaging/product_packaging.dart';
 import '../../../shared/packaging/product_unit_labels.dart';
@@ -93,6 +94,40 @@ class SalesProduct {
   /// Empaques: caja → paquete → unidad. El POS ofrece las presentaciones que
   /// estén configuradas y convierte a unidades base antes de cobrar.
   final ProductPackaging packaging;
+
+  /// Copia con otro stock. Al reabrir una cuenta guardada, lo que ella misma
+  /// reservó vuelve a estar disponible para completarla.
+  SalesProduct withStock(double newStock) => SalesProduct(
+        id: id,
+        name: name,
+        price: price,
+        cost: cost,
+        taxRate: taxRate,
+        stock: newStock,
+        isActive: isActive,
+        sku: sku,
+        barcode: barcode,
+        categoryId: categoryId,
+        categoryName: categoryName,
+        priceTier1: priceTier1,
+        priceTier2: priceTier2,
+        priceTier3: priceTier3,
+        priceTier4: priceTier4,
+        priceTier5: priceTier5,
+        priceTier6: priceTier6,
+        priceTier7: priceTier7,
+        priceTier8: priceTier8,
+        priceTier9: priceTier9,
+        priceTier10: priceTier10,
+        imageUrl: imageUrl,
+        imeis: imeis,
+        isService: isService,
+        isTaxExempt: isTaxExempt,
+        allowNegativeStock: allowNegativeStock,
+        priceIncludesTax: priceIncludesTax,
+        trackInventory: trackInventory,
+        packaging: packaging,
+      );
 
   /// Tasa realmente aplicable a este producto. Espeja la tasa efectiva del
   /// RPC: un producto exento no factura ITBIS aunque tenga tasa configurada.
@@ -462,12 +497,18 @@ class SaleCheckoutInput {
     this.cashSessionId,
     this.holdSaleIdToComplete,
     this.clientSkipsTax = false,
+    this.downPayments = const <SalePaymentLine>[],
   });
 
   final List<SaleCartItem> items;
   final String receiptType;
   final bool asCredit;
   final String? paymentMethod;
+
+  /// Venta a crédito: lo que el cliente paga en el momento (abono inicial).
+  /// Se registra con `register_sale_payment` en la misma caja; el resto
+  /// queda como saldo.
+  final List<SalePaymentLine> downPayments;
 
   /// Pago mixto: una o más líneas {método, monto}. Si está vacío, se usa
   /// `paymentMethod` por el total (flujo de pago único anterior).
@@ -528,6 +569,7 @@ class SaleCheckoutResult {
     this.ncf,
     this.preparedPrintJob,
     this.receiptError,
+    this.downPaymentError,
   });
 
   final String saleId;
@@ -552,6 +594,10 @@ class SaleCheckoutResult {
   /// bien. Existe para que el POS nunca reporte como fallida una venta que ya
   /// está cobrada: eso hacía que el cajero la cobrara dos veces.
   final String? receiptError;
+
+  /// El abono inicial de una venta a crédito no se pudo registrar (la venta
+  /// sí quedó). Mensaje para el usuario.
+  final String? downPaymentError;
 }
 
 class SalesRepository {
@@ -581,6 +627,43 @@ class SalesRepository {
         .toList(growable: false);
   }
 
+  static const _productColumns =
+      'id, name, sku, barcode, category_id, price, cost, tax_rate, stock, '
+      'is_active, is_service, is_tax_exempt, allow_negative_stock, '
+      'price_includes_tax, track_inventory, '
+      // Empaques (migración 86).
+      'units_per_pack, packs_per_box, unit_label, pack_label, box_label, '
+      'pack_price, box_price, min_unit_qty, metadata, '
+      'price_tier_1, price_tier_2, price_tier_3, '
+      'price_tier_4, price_tier_5, price_tier_6, price_tier_7, '
+      'price_tier_8, price_tier_9, price_tier_10, image_url, imeis';
+
+  /// Productos por id, ACTIVOS O NO. La edición de ventas los necesita: una
+  /// venta puede tener un producto que se desactivó después, y sin él la
+  /// línea no se podía mostrar y se borraba al guardar.
+  Future<List<SalesProduct>> fetchProductsByIds(Iterable<String> ids) async {
+    final branchId = await _currentBranchId();
+    final wanted = ids.toSet().toList(growable: false);
+    if (branchId == null || wanted.isEmpty) return const [];
+    final categories = await fetchCategories();
+    final categoryNames = <String, String>{
+      for (final category in categories) category.id: category.name,
+    };
+    final rows = await _client
+        .from('products')
+        .select(_productColumns)
+        .eq('branch_id', branchId)
+        .inFilter('id', wanted);
+    return rows
+        .map(
+          (item) => SalesProduct.fromMap(
+            Map<String, dynamic>.from(item as Map),
+            categoryNames,
+          ),
+        )
+        .toList(growable: false);
+  }
+
   Future<List<SalesProduct>> fetchProducts() async {
     final branchId = await _currentBranchId();
     if (branchId == null) return const [];
@@ -600,17 +683,7 @@ class SalesRepository {
     while (true) {
       final page = await _client
           .from('products')
-          .select(
-            'id, name, sku, barcode, category_id, price, cost, tax_rate, stock, '
-            'is_active, is_service, is_tax_exempt, allow_negative_stock, '
-            'price_includes_tax, track_inventory, '
-            // Empaques (migración 86).
-            'units_per_pack, packs_per_box, unit_label, pack_label, box_label, '
-            'pack_price, box_price, min_unit_qty, metadata, '
-            'price_tier_1, price_tier_2, price_tier_3, '
-            'price_tier_4, price_tier_5, price_tier_6, price_tier_7, '
-            'price_tier_8, price_tier_9, price_tier_10, image_url, imeis',
-          )
+          .select(_productColumns)
           .eq('branch_id', branchId)
           .eq('is_active', true)
           .order('name')
@@ -749,8 +822,35 @@ class SalesRepository {
       throw Exception('No se pudo crear la venta.');
     }
 
-    // Antes de armar el recibo, para que la factura ya salga con "1 Caja".
-    await _tagPresentations(saleId, normalizedCheckout);
+    // La presentación ("1 Caja") ya la guarda el checkout (migración 92).
+    // Antes se marcaba después con `tag_sale_item_presentations`, que podía
+    // etiquetar como caja una línea suelta con la misma cantidad y precio.
+
+    // Venta a crédito con abono inicial: el abono se registra antes de armar
+    // el recibo, para que la factura ya salga con lo pagado y el saldo. La
+    // venta ya está hecha: si el abono falla, no se tumba el cobro; se avisa
+    // para registrarlo en Cobros.
+    String? downPaymentError;
+    if (input.asCredit && input.downPayments.isNotEmpty) {
+      for (final payment in input.downPayments) {
+        try {
+          await _client.rpc(
+            'register_sale_payment',
+            params: {
+              'p_sale_id': saleId,
+              'p_amount': payment.amount,
+              'p_payment_method': payment.method,
+              'p_notes': 'Abono inicial',
+              'p_cash_session_id': _nullIfEmpty(input.cashSessionId),
+            },
+          );
+        } catch (error) {
+          debugPrint('Venta $saleId: el abono inicial falló: $error');
+          downPaymentError = friendlyErrorMessage(error);
+          break;
+        }
+      }
+    }
 
     PreparedPrintJobData? preparedPrintJob;
     final status = (payload['status'] ?? '').toString();
@@ -790,6 +890,7 @@ class SalesRepository {
       ncf: _nullIfEmpty(preparedPrintJob?.document.ncf),
       preparedPrintJob: preparedPrintJob,
       receiptError: receiptError,
+      downPaymentError: downPaymentError,
     );
   }
 
@@ -874,39 +975,12 @@ class SalesRepository {
       throw Exception('No se pudo guardar la cuenta.');
     }
 
-    // Así la cuenta reabre con sus cajas, no en unidades.
-    await _tagPresentations(saleId, normalized);
     return HeldSaleResult(
       saleId: saleId,
       saleNumber: (payload['sale_number'] ?? '').toString(),
       totalAmount: _toDouble(payload['total_amount']),
       itemsCount: _toInt(payload['items_count']),
     );
-  }
-
-  /// Marca en `sale_items` la presentación de cada línea ("1 Caja") con
-  /// `tag_sale_item_presentations` (migración 89).
-  ///
-  /// Es un RPC aparte, después del cobro, a propósito: el checkout lo comparten
-  /// dos apps y no se toca. Si esto falla, la venta ya quedó correcta en plata
-  /// e inventario —solo se imprimiría en unidades—, así que no se propaga el
-  /// error: tumbar un cobro ya hecho por una etiqueta sería peor.
-  Future<void> _tagPresentations(
-    String saleId,
-    NormalizedSaleCheckout checkout,
-  ) async {
-    final tags = checkout.toPresentationTags();
-    if (tags.isEmpty) return;
-    try {
-      await _client.rpc(
-        'tag_sale_item_presentations',
-        params: <String, dynamic>{'p_sale_id': saleId, 'p_lines': tags},
-      );
-    } catch (error) {
-      debugPrint(
-        'No se pudo marcar la presentación de la venta $saleId: $error',
-      );
-    }
   }
 
   /// Líneas de una venta con [columns] + `uom_price`. `uom_price` llega con la
@@ -966,12 +1040,34 @@ class SalesRepository {
       'uom, uom_factor',
     );
 
-    final products = await fetchProducts();
-    final productsById = {for (final p in products) p.id: p};
+    final rows = [
+      for (final raw in itemRows) Map<String, dynamic>.from(raw as Map),
+    ];
+    final productIds = [
+      for (final row in rows)
+        if (row['product_id'] != null) row['product_id'].toString(),
+    ];
+    // Activos o no: un producto desactivado después de guardar la cuenta
+    // desaparecía del carrito en silencio. Así se ve, y el cobro dice por qué
+    // no se puede vender.
+    final products = await fetchProductsByIds(productIds);
+
+    // Lo que esta cuenta tiene reservado vuelve a estar disponible para ella:
+    // al completarla, el servidor libera la reserva antes de descontar. Sin
+    // esto, stock 3 con 2 reservados decía "Disponible: 1" y no dejaba cobrar.
+    final reserved = <String, double>{};
+    for (final row in rows) {
+      final id = row['product_id']?.toString();
+      if (id == null) continue;
+      reserved[id] = (reserved[id] ?? 0) + _toDouble(row['quantity']);
+    }
+    final productsById = {
+      for (final p in products)
+        p.id: p.withStock(round3(p.stock + (reserved[p.id] ?? 0))),
+    };
 
     final items = <SaleCartItem>[];
-    for (final raw in itemRows) {
-      final row = Map<String, dynamic>.from(raw as Map);
+    for (final row in rows) {
       final productId = row['product_id']?.toString();
       if (productId == null) continue;
       final product = productsById[productId];
@@ -985,6 +1081,213 @@ class SalesRepository {
       clientId: _nullIfEmpty(sale['client_id']?.toString()),
       receiptType: (sale['receipt_type'] ?? 'consumer_final').toString(),
       notes: sale['notes']?.toString() ?? '',
+    );
+  }
+
+  /// Sucursal, ajustes de la empresa, logo y QR: lo que comparten la factura
+  /// y la nota de crédito.
+  Future<
+      ({
+        Map<String, dynamic> branch,
+        Map<String, dynamic> settings,
+        List<int>? logoBytes,
+        List<int>? qrBytes,
+      })> _loadPrintContext(String branchId) async {
+    final branchRows = await _client
+        .from('branches')
+        .select('name, address, phone')
+        .eq('id', branchId)
+        .limit(1);
+    final branch = branchRows.isEmpty
+        ? const <String, dynamic>{}
+        : Map<String, dynamic>.from(branchRows.first as Map);
+
+    // app_settings (multi-tenant: la RLS filtra a la fila de la empresa
+    // del usuario). RNC, logo, ocultar barcode.
+    // Se piden todas las columnas (no una lista explícita) para que la venta
+    // NO se rompa si la migración de campos del emisor (company_address, etc.)
+    // todavía no se aplicó: las columnas ausentes simplemente vienen nulas.
+    final settingsRows = await _client.from('app_settings').select().limit(1);
+    final settings = settingsRows.isEmpty
+        ? const <String, dynamic>{}
+        : Map<String, dynamic>.from(settingsRows.first as Map);
+
+    final logoBytes = await _downloadBytes(
+      settings['company_logo_url']?.toString(),
+    );
+    // QR del pie: descarga en runtime (como el logo) para no depender del
+    // asset bundleado ni del caché del service worker en web.
+    final qrBytes = await _downloadBytes(
+      settings['company_qr_url']?.toString(),
+    );
+    return (
+      branch: branch,
+      settings: settings,
+      logoBytes: logoBytes,
+      qrBytes: qrBytes,
+    );
+  }
+
+  /// Nota de crédito de una devolución, lista para imprimir: su NCF (B04) y,
+  /// en notas, el NCF y el número de la venta que modifica. Montos en
+  /// positivo; el título deja claro que es una devolución.
+  Future<PreparedPrintJobData?> prepareReturnPrintJob({
+    required String returnId,
+    PrintPaperSize paperSize = PrintPaperSize.thermal80mm,
+  }) async {
+    final returnRows = await _client
+        .from('returns')
+        .select()
+        .eq('id', returnId)
+        .limit(1);
+    if (returnRows.isEmpty) return null;
+    final ret = Map<String, dynamic>.from(returnRows.first as Map);
+    final branchId = (ret['branch_id'] ?? '').toString();
+    if (branchId.isEmpty) return null;
+
+    final ctx = await _loadPrintContext(branchId);
+    final settings = ctx.settings;
+
+    final clientId = ret['client_id']?.toString();
+    Map<String, dynamic> client = const <String, dynamic>{};
+    if (clientId != null && clientId.isNotEmpty) {
+      final rows = await _client
+          .from('clients')
+          .select(
+            'full_name, document_type, document_number, address, phone, email',
+          )
+          .eq('id', clientId)
+          .eq('branch_id', branchId)
+          .limit(1);
+      if (rows.isNotEmpty) client = Map<String, dynamic>.from(rows.first as Map);
+    }
+
+    String? cashierName;
+    final cashierId = ret['cashier_id']?.toString();
+    if (cashierId != null && cashierId.isNotEmpty) {
+      final rows = await _client
+          .from('profiles')
+          .select('full_name')
+          .eq('id', cashierId)
+          .limit(1);
+      if (rows.isNotEmpty) {
+        cashierName = (rows.first as Map)['full_name']?.toString();
+      }
+    }
+
+    String? originalNumber;
+    String? originalReceiptType;
+    final originalId = ret['original_sale_id']?.toString();
+    if (originalId != null && originalId.isNotEmpty) {
+      final rows = await _client
+          .from('sales')
+          .select('sale_number, receipt_type')
+          .eq('id', originalId)
+          .limit(1);
+      if (rows.isNotEmpty) {
+        final row = rows.first as Map;
+        originalNumber = row['sale_number']?.toString();
+        originalReceiptType = row['receipt_type']?.toString();
+      }
+    }
+
+    final itemRows = await _client
+        .from('return_items')
+        .select()
+        .eq('return_id', returnId)
+        .order('created_at');
+
+    final total = _toDouble(ret['total_amount']);
+    final creditApplied = _toDouble(ret['credit_applied']);
+    final refunded = ret['cash_refund_amount'] == null
+        ? total - creditApplied
+        : _toDouble(ret['cash_refund_amount']);
+    final refundMethod = (ret['refund_method'] ?? 'cash').toString();
+    final modifies = _nullIfEmpty(ret['ncf_modificado']?.toString());
+    final notes = [
+      if (modifies != null)
+        'Modifica el NCF $modifies'
+            '${originalNumber != null ? ' (venta $originalNumber)' : ''}'
+      else if (originalNumber != null)
+        'Devolución de la venta $originalNumber',
+      ?_nullIfEmpty(ret['notes']?.toString()),
+    ].join('\n');
+
+    final source = SalePrintSource(
+      saleId: returnId,
+      branchId: branchId,
+      saleNumber: (ret['return_number'] ?? '').toString(),
+      // "completed": la nota de crédito es un documento cerrado.
+      status: 'completed',
+      saleDate: DateTime.tryParse((ret['return_date'] ?? '').toString()) ??
+          DateTime.now(),
+      receiptType: 'credit_note',
+      // Nota de crédito de una venta B02: el ITBIS no se le desglosa al
+      // cliente, igual que en la factura que modifica.
+      hideTaxBreakdown: originalReceiptType == 'consumer_final',
+      branchName: (ctx.branch['name'] ?? 'Sucursal').toString(),
+      branchAddress: _firstNonEmpty([
+        settings['company_address'],
+        ctx.branch['address'],
+      ]),
+      branchPhone:
+          _firstNonEmpty([settings['company_phone'], ctx.branch['phone']]),
+      branchEmail: _firstNonEmpty([settings['company_email']]),
+      branchTaxId: settings['company_tax_id']?.toString(),
+      branchLogoBytes: ctx.logoBytes,
+      qrBytes: ctx.qrBytes,
+      showBarcode: settings['receipt_hide_barcode'] != true,
+      showItbis: settings['invoice_show_itbis'] != false,
+      clientName: _firstNonEmpty([client['full_name']]),
+      clientDocument: _buildClientDocumentLabel(
+        documentType: client['document_type']?.toString(),
+        documentNumber: client['document_number']?.toString(),
+      ),
+      clientAddress: client['address']?.toString(),
+      clientPhone: client['phone']?.toString(),
+      clientEmail: client['email']?.toString(),
+      cashierName: cashierName,
+      ncf: _nullIfEmpty(ret['ncf']?.toString()),
+      notes: notes.isEmpty ? null : notes,
+      items: itemRows
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .map(
+            (item) => SalePrintItemSource(
+              description: () {
+                final base = (item['description'] ?? '').toString();
+                final imeis = item['imeis'] is List
+                    ? (item['imeis'] as List)
+                        .map((e) => e.toString())
+                        .where((e) => e.trim().isNotEmpty)
+                        .toList()
+                    : const <String>[];
+                return imeis.isEmpty ? base : '$base\nIMEI: ${imeis.join(", ")}';
+              }(),
+              quantity: presentationQuantity(item),
+              unitPrice: presentationUnitPrice(item),
+              presentationLabel: presentationLabelOf(item),
+              lineSubtotal: _toDouble(item['line_subtotal']),
+              lineTax: _toDouble(item['line_tax']),
+              lineTotal: _toDouble(item['line_total']),
+            ),
+          )
+          .toList(growable: false),
+      payments: [
+        if (creditApplied > 0)
+          SalePrintPaymentSource(method: 'credit', amount: creditApplied),
+        if (refunded > 0)
+          SalePrintPaymentSource(method: refundMethod, amount: refunded),
+      ],
+      subtotal: _toDouble(ret['subtotal']),
+      taxAmount: _toDouble(ret['tax_amount']),
+      totalAmount: total,
+      paidAmount: total,
+      balanceDue: 0,
+    );
+
+    return _salePrintPreparationService.prepareCompletedSaleReceipt(
+      sale: source,
+      paperSize: paperSize,
     );
   }
 
@@ -1017,35 +1320,11 @@ class SalesRepository {
       throw Exception('La venta no tiene sucursal asociada.');
     }
 
-    final branchRows = await _client
-        .from('branches')
-        .select('name, address, phone')
-        .eq('id', branchId)
-        .limit(1);
-    final branch = branchRows.isEmpty
-        ? const <String, dynamic>{}
-        : Map<String, dynamic>.from(branchRows.first as Map);
-
-    // app_settings (multi-tenant: la RLS filtra a la fila de la empresa
-    // del usuario). RNC, logo, ocultar barcode.
-    // Se piden todas las columnas (no una lista explícita) para que la venta
-    // NO se rompa si la migración de campos del emisor (company_address, etc.)
-    // todavía no se aplicó: las columnas ausentes simplemente vienen nulas.
-    final settingsRows = await _client.from('app_settings').select().limit(1);
-    final settings = settingsRows.isEmpty
-        ? const <String, dynamic>{}
-        : Map<String, dynamic>.from(settingsRows.first as Map);
-
-    final logoUrl = settings['company_logo_url']?.toString();
-    debugPrint('Logo URL en app_settings: $logoUrl');
-    final logoBytes = await _downloadBytes(logoUrl);
-    debugPrint('Logo bytes descargados: ${logoBytes?.length ?? 0}');
-
-    // QR del pie: descarga en runtime (como el logo) para no depender del
-    // asset bundleado ni del caché del service worker en web.
-    final qrBytes = await _downloadBytes(
-      settings['company_qr_url']?.toString(),
-    );
+    final ctx = await _loadPrintContext(branchId);
+    final branch = ctx.branch;
+    final settings = ctx.settings;
+    final logoBytes = ctx.logoBytes;
+    final qrBytes = ctx.qrBytes;
 
     // Cash session → nombre legible para "Caja registradora".
     final cashSessionId = sale['cash_session_id']?.toString();
@@ -1105,8 +1384,10 @@ class SalesRepository {
     // de la caja del unitario (ver `_presentationUnitPrice`).
     final itemRows = await _fetchSaleItemsWithUomPrice(
       saleId,
-      'description, quantity, unit_price, discount_amount, line_subtotal, '
-      'line_tax, line_total, sku_snapshot, unit_name, imeis, uom, uom_factor',
+      // product_id: sin él las etiquetas de unidad del recibo nunca cargaban.
+      'product_id, description, quantity, unit_price, discount_amount, '
+      'line_subtotal, line_tax, line_total, sku_snapshot, unit_name, imeis, '
+      'uom, uom_factor',
     );
 
     final unitLabels = await fetchProductUnitLabels(
@@ -1229,65 +1510,138 @@ class SalesRepository {
   /// Busca una venta por número en la sucursal actual y devuelve sus líneas
   /// listas para precargar el carrito en modo devolución. Si no la encuentra,
   /// retorna null.
+  ///
+  /// Las líneas salen como en la factura ("4 Cajas" a su precio, con su
+  /// descuento y sus IMEIs) y descontando lo que ya se devolvió antes. El
+  /// monto que se reembolsa lo calcula el servidor desde la venta (migración
+  /// 97); esto es para que el cajero vea lo mismo.
   Future<SaleLookupResult?> fetchSaleForReturn(String saleNumber) async {
     final branchId = await _currentBranchId();
     if (branchId == null) return null;
+
     final cleaned = saleNumber.trim();
     if (cleaned.isEmpty) return null;
 
     final rows = await _client
         .from('sales')
-        .select('id, sale_number, client_id, status, total_amount')
+        .select(
+          'id, sale_number, client_id, status, total_amount, receipt_type, '
+          'ncf, balance_due',
+        )
         .eq('branch_id', branchId)
         .eq('sale_number', cleaned)
         .limit(1);
 
     if (rows.isEmpty) return null;
     final sale = Map<String, dynamic>.from(rows.first as Map);
+    final saleId = sale['id'].toString();
 
-    final itemRows = await _client
-        .from('sale_items')
-        .select(
-          'product_id, description, quantity, unit_price, tax_rate, '
-          'line_subtotal, line_total',
-        )
-        .eq('branch_id', branchId)
-        .eq('sale_id', sale['id'])
-        .order('created_at');
+    final itemRows = await _fetchSaleItemsWithUomPrice(
+      saleId,
+      'product_id, description, quantity, unit_price, discount_amount, '
+      'imeis, uom, uom_factor',
+    );
+    final lines = [
+      for (final raw in itemRows) Map<String, dynamic>.from(raw as Map),
+    ];
 
-    final products = await fetchProducts();
+    // Lo ya devuelto de cada producto (base) y sus IMEIs.
+    final returnIds = [
+      for (final row in await _client
+          .from('returns')
+          .select('id')
+          .eq('branch_id', branchId)
+          .eq('original_sale_id', saleId))
+        (row as Map)['id'].toString(),
+    ];
+    final returnedRows = returnIds.isEmpty
+        ? const <dynamic>[]
+        : await _client
+            .from('return_items')
+            .select('product_id, quantity, imeis')
+            .inFilter('return_id', returnIds);
+    final returned = <String, double>{};
+    final returnedImeis = <String>{};
+    for (final raw in returnedRows) {
+      final row = raw as Map;
+      final id = row['product_id']?.toString();
+      if (id == null) continue;
+      returned[id] = (returned[id] ?? 0) + _toDouble(row['quantity']);
+      if (row['imeis'] is List) {
+        returnedImeis.addAll((row['imeis'] as List).map((e) => e.toString()));
+      }
+    }
+
+    final productIds = [
+      for (final row in lines)
+        if (row['product_id'] != null) row['product_id'].toString(),
+    ];
+    // Activos o no: se puede devolver algo que ya no se vende.
+    final products = await fetchProductsByIds(productIds);
     final productsById = {for (final p in products) p.id: p};
 
     final items = <SaleCartItem>[];
-    for (final raw in itemRows) {
-      final row = Map<String, dynamic>.from(raw as Map);
+    var skipped = 0;
+    // Se descuenta lo devuelto de atrás hacia adelante: primero las últimas
+    // líneas de cada producto.
+    for (final row in lines.reversed) {
       final productId = row['product_id']?.toString();
-      if (productId == null) continue;
-      final product = productsById[productId];
-      if (product == null) continue;
-      final qty = (row['quantity'] is num)
-          ? (row['quantity'] as num).toDouble()
-          : double.tryParse(row['quantity']?.toString() ?? '') ?? 0;
-      if (qty <= 0) continue;
-      // Precio NETO realmente cobrado en esa línea: `unit_price` es el bruto,
-      // así que si la venta llevaba descuento hay que partir del subtotal de
-      // la línea. Devolver al precio del catálogo reembolsaría otro monto.
-      final lineSubtotal = _toDoubleResult(row['line_subtotal']);
-      final unitPrice = lineSubtotal > 0
-          ? _round2(lineSubtotal / qty)
-          : _toDoubleResult(row['unit_price']);
-      items.add(
-        SaleCartItem(product: product, quantity: qty, unitPrice: unitPrice),
-      );
+      final product = productId == null ? null : productsById[productId];
+      if (productId == null || product == null) {
+        skipped++;
+        continue;
+      }
+      var item = cartItemFromHeldSaleRow(row, product);
+      if (item == null) continue;
+      final alreadyBack = returned[productId] ?? 0;
+      if (alreadyBack > 0) {
+        final take = alreadyBack < item.baseQuantity
+            ? alreadyBack
+            : item.baseQuantity;
+        returned[productId] = alreadyBack - take;
+        final left = round3(item.baseQuantity - take);
+        if (left <= 0) continue;
+        if (item.isPresentation) {
+          final boxes = left / item.uomFactor;
+          item = boxes == boxes.roundToDouble()
+              ? item.copyWith(quantity: boxes)
+              // Quedan cajas incompletas: la línea pasa a unidades, al
+              // precio por unidad de la caja.
+              : item.copyWith(
+                  uom: PackagingUom.unit,
+                  quantity: left,
+                  unitPrice: ProductPackaging.unitPriceFromPresentation(
+                    item.presentationPrice,
+                    item.uomFactor,
+                  ),
+                  clearPresentationPrice: true,
+                );
+        } else {
+          item = item.copyWith(quantity: left);
+        }
+      }
+      if (item.imeis.isNotEmpty && returnedImeis.isNotEmpty) {
+        final left = [
+          for (final imei in item.imeis)
+            if (!returnedImeis.contains(imei)) imei,
+        ];
+        item = item.copyWith(imeis: left);
+      }
+      items.insert(0, item);
     }
 
     return SaleLookupResult(
-      saleId: sale['id'].toString(),
+      saleId: saleId,
       saleNumber: sale['sale_number']?.toString() ?? cleaned,
       clientId: sale['client_id']?.toString(),
       status: (sale['status'] ?? '').toString(),
       totalAmount: _toDoubleResult(sale['total_amount']),
+      receiptType: (sale['receipt_type'] ?? 'consumer_final').toString(),
+      ncf: _nullIfEmpty(sale['ncf']?.toString()),
+      balanceDue: _toDoubleResult(sale['balance_due']),
       items: items,
+      skippedLines: skipped,
+      hadReturns: returnedRows.isNotEmpty,
     );
   }
 
@@ -1296,24 +1650,57 @@ class SalesRepository {
     final branchId = await _currentBranchId();
     if (branchId == null) return const [];
 
-    final rows = await _client
-        .from('returns')
-        .select(
-          'id, return_number, return_date, total_amount, tax_amount, '
-          'notes, original_sale_id, '
-          'clients(full_name), '
-          'return_items(quantity)',
-        )
-        .eq('branch_id', branchId)
-        .order('return_date', ascending: false)
-        .limit(limit);
+    const base =
+        'id, return_number, return_date, total_amount, tax_amount, '
+        'notes, original_sale_id, refund_method, '
+        'clients(full_name), return_items(quantity)';
+    PostgrestList rows;
+    try {
+      rows = await _client
+          .from('returns')
+          .select('$base, ncf, ncf_modificado, credit_applied')
+          .eq('branch_id', branchId)
+          .order('return_date', ascending: false)
+          .limit(limit);
+    } on PostgrestException catch (error) {
+      // Base sin la migración 97: sin columnas de nota de crédito.
+      if (error.code != '42703') rethrow;
+      rows = await _client
+          .from('returns')
+          .select(base)
+          .eq('branch_id', branchId)
+          .order('return_date', ascending: false)
+          .limit(limit);
+    }
 
-    return rows
-        .map(
-          (item) =>
-              ReturnSummary.fromMap(Map<String, dynamic>.from(item as Map)),
-        )
-        .toList(growable: false);
+    // Número de la venta original de cada devolución (consulta aparte: la
+    // relación es por una FK compuesta).
+    final saleIds = {
+      for (final row in rows)
+        if ((row as Map)['original_sale_id'] != null)
+          row['original_sale_id'].toString(),
+    };
+    final saleNumbers = <String, String>{};
+    if (saleIds.isNotEmpty) {
+      final saleRows = await _client
+          .from('sales')
+          .select('id, sale_number')
+          .inFilter('id', saleIds.toList());
+      for (final row in saleRows) {
+        final map = row as Map;
+        saleNumbers[map['id'].toString()] =
+            (map['sale_number'] ?? '').toString();
+      }
+    }
+
+    return rows.map((item) {
+      final map = Map<String, dynamic>.from(item as Map);
+      final saleId = map['original_sale_id']?.toString();
+      if (saleId != null && saleNumbers.containsKey(saleId)) {
+        map['sales'] = {'sale_number': saleNumbers[saleId]};
+      }
+      return ReturnSummary.fromMap(map);
+    }).toList(growable: false);
   }
 
   /// Procesa una devolución desde el POS llamando al RPC `process_return`.
@@ -1342,17 +1729,30 @@ class SalesRepository {
         'p_notes': input.notes,
       if (input.cashSessionId != null && input.cashSessionId!.isNotEmpty)
         'p_cash_session_id': input.cashSessionId,
+      // Cómo sale el dinero. Antes no se mandaba y todo quedaba como efectivo:
+      // un reembolso a tarjeta descuadraba la caja.
+      'p_refund_method': input.refundMethod,
       'p_items': input.items
           .map(
             (item) => {
               'product_id': item.product.id,
               // En unidades base: devolver "1 Caja" son 12 unidades al inventario.
               'quantity': item.baseQuantity,
-              // El precio de la LÍNEA, no el del catálogo: si el producto
-              // cambió de precio, se vendió con tier o con descuento, el
-              // catálogo devuelve un monto distinto al que se cobró.
-              'unit_price': item.unitPrice,
+              // Con venta original el servidor toma precio e ITBIS de la
+              // venta (migración 97); esto solo cuenta en una devolución sin
+              // venta. Neto por unidad base, como se cobra.
+              'unit_price': item.baseQuantity > 0
+                  ? _round2(item.lineNet / item.baseQuantity)
+                  : item.unitPrice,
               'tax_rate': item.product.effectiveTaxRate,
+              // Los equipos que vuelven al inventario.
+              if (item.imeis.isNotEmpty) 'imeis': item.imeis,
+              // "1 Caja" en la nota de crédito.
+              if (item.isPresentation) ...{
+                'uom': item.uom.dbValue,
+                'uom_factor': item.uomFactor,
+                'unit_name': item.presentationLabel,
+              },
             },
           )
           .toList(growable: false),
@@ -1514,12 +1914,16 @@ class ReturnInput {
     this.originalSaleId,
     this.notes,
     this.cashSessionId,
+    this.refundMethod = 'cash',
   });
 
   final List<SaleCartItem> items;
   final String? clientId;
   final String? originalSaleId;
   final String? notes;
+
+  /// 'cash' | 'card' | 'transfer' | 'mobile'. Solo 'cash' sale del cajón.
+  final String refundMethod;
 
   /// Caja de la que sale el efectivo del reembolso. Sin esto el arqueo no
   /// descuenta lo devuelto y la caja aparece corta (migración 68).
@@ -1535,11 +1939,32 @@ class SaleLookupResult {
     required this.totalAmount,
     required this.items,
     this.clientId,
+    this.receiptType = 'consumer_final',
+    this.ncf,
+    this.balanceDue = 0,
+    this.skippedLines = 0,
+    this.hadReturns = false,
   });
 
   final String saleId;
   final String saleNumber;
   final String? clientId;
+
+  /// Comprobante de la venta: la devolución se muestra con sus mismas reglas
+  /// de ITBIS.
+  final String receiptType;
+
+  /// NCF de la venta. Con NCF, la devolución lleva Nota de Crédito (B04).
+  final String? ncf;
+
+  /// Saldo pendiente (venta a crédito): la devolución lo baja primero.
+  final double balanceDue;
+
+  /// Líneas cuyo producto ya no existe: no se pueden devolver.
+  final int skippedLines;
+
+  /// La venta ya tenía devoluciones (las líneas vienen descontadas).
+  final bool hadReturns;
 
   /// `'completed' | 'credit' | 'voided' | ...` (enum `sale_status`).
   final String status;
@@ -1558,7 +1983,12 @@ class ReturnSummary {
     required this.itemsCount,
     this.clientName,
     this.originalSaleId,
+    this.originalSaleNumber,
     this.notes,
+    this.ncf,
+    this.ncfModificado,
+    this.refundMethod,
+    this.creditApplied = 0,
   });
 
   factory ReturnSummary.fromMap(Map<String, dynamic> map) {
@@ -1566,6 +1996,7 @@ class ReturnSummary {
     final clientName = clientMap is Map
         ? clientMap['full_name']?.toString()
         : null;
+    final saleMap = map['sales'];
     final itemsRaw = map['return_items'];
     final itemsCount = itemsRaw is List ? itemsRaw.length : 0;
     return ReturnSummary(
@@ -1579,7 +2010,13 @@ class ReturnSummary {
       itemsCount: itemsCount,
       clientName: clientName,
       originalSaleId: map['original_sale_id']?.toString(),
+      originalSaleNumber:
+          saleMap is Map ? saleMap['sale_number']?.toString() : null,
       notes: map['notes']?.toString(),
+      ncf: _nullIfEmpty(map['ncf']?.toString()),
+      ncfModificado: _nullIfEmpty(map['ncf_modificado']?.toString()),
+      refundMethod: map['refund_method']?.toString(),
+      creditApplied: _toDoubleResult(map['credit_applied']),
     );
   }
 
@@ -1591,7 +2028,14 @@ class ReturnSummary {
   final int itemsCount;
   final String? clientName;
   final String? originalSaleId;
+  final String? originalSaleNumber;
   final String? notes;
+
+  /// Nota de Crédito fiscal (B04) y el NCF de la venta que modifica.
+  final String? ncf;
+  final String? ncfModificado;
+  final String? refundMethod;
+  final double creditApplied;
 }
 
 class ReturnProcessedResult {
@@ -1601,7 +2045,12 @@ class ReturnProcessedResult {
     required this.totalAmount,
     required this.itemsCount,
     required this.creditBalanceAdjusted,
-  });
+    this.creditApplied = 0,
+    double? cashRefundAmount,
+    this.ncf,
+    this.ncfModificado,
+    this.ncfError,
+  }) : cashRefundAmount = cashRefundAmount ?? totalAmount;
 
   factory ReturnProcessedResult.fromMap(Map<String, dynamic> map) {
     return ReturnProcessedResult(
@@ -1610,6 +2059,13 @@ class ReturnProcessedResult {
       totalAmount: _toDoubleResult(map['total_amount']),
       itemsCount: _toIntResult(map['items_count']),
       creditBalanceAdjusted: map['credit_balance_adjusted'] == true,
+      creditApplied: _toDoubleResult(map['credit_applied']),
+      cashRefundAmount: map['cash_refund_amount'] == null
+          ? null
+          : _toDoubleResult(map['cash_refund_amount']),
+      ncf: _nullIfEmpty(map['ncf']?.toString()),
+      ncfModificado: _nullIfEmpty(map['ncf_modificado']?.toString()),
+      ncfError: _nullIfEmpty(map['ncf_error']?.toString()),
     );
   }
 
@@ -1618,6 +2074,19 @@ class ReturnProcessedResult {
   final double totalAmount;
   final int itemsCount;
   final bool creditBalanceAdjusted;
+
+  /// Parte que bajó el saldo pendiente de la venta a crédito.
+  final double creditApplied;
+
+  /// Lo que se le devuelve al cliente (total − lo aplicado al saldo).
+  final double cashRefundAmount;
+
+  /// NCF de Nota de Crédito (B04) y el de la venta que modifica.
+  final String? ncf;
+  final String? ncfModificado;
+
+  /// La venta tenía NCF pero no hay secuencia B04: se registró sin NCF.
+  final String? ncfError;
 }
 
 double _toDoubleResult(dynamic value) {

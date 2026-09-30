@@ -136,23 +136,6 @@ void main() {
       expect(checkout(cart).total, closeTo(screen, 0.001));
     });
 
-    test('solo las líneas por presentación se marcan después del cobro', () {
-      final tags = checkout([
-        SaleCartItem(product: vasos(), quantity: 2, uom: PackagingUom.pack),
-        SaleCartItem(product: vasos(), quantity: 5),
-      ]).toPresentationTags();
-
-      expect(tags, hasLength(1));
-      expect(tags.single, {
-        'product_id': 'p1',
-        'quantity': 24.0,
-        'unit_price': 100.0,
-        'uom': 'pack',
-        'uom_factor': 12.0,
-        'unit_name': 'Caja',
-      });
-    });
-
     test('el inventario se valida sumando todas las presentaciones', () {
       final cart = [
         SaleCartItem(

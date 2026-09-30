@@ -4,11 +4,13 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/tokens.dart';
 import '../../../shared/errors/friendly_error.dart';
+import '../../../shared/fiscal/dgii_void_reasons.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/packaging/product_packaging.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/print_receipt_dialog.dart';
+import '../../../shared/widgets/role_gate.dart';
 import '../../../shared/widgets/ui_custom.dart';
 import '../data/sales_history_repository.dart';
 import 'sales_history_providers.dart';
@@ -533,6 +535,24 @@ class _RowActions extends ConsumerWidget {
       );
     }
 
+    // Anulada: solo se consulta. Editarla, anularla otra vez o reimprimirla
+    // como si fuera válida no aplica (el servidor lo rechazaba igual).
+    if (row.status == 'voided') {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ActionIcon(
+            tooltip: 'Ver detalle',
+            icon: Icons.visibility_outlined,
+            onPressed: () => _showDetail(context, ref, row.id),
+          ),
+        ],
+      );
+    }
+
+    // Editar la venta completa y anular son de admin/supervisor: a un cajero
+    // no se le ofrecen para que no choque con el rechazo del servidor.
+    final canManage = ref.watch(roleAccessProvider).canVoidSale;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -547,12 +567,15 @@ class _RowActions extends ConsumerWidget {
           onPressed: () => _reprint(context, ref, row.id),
         ),
         _MoreActions(
-          items: const [
-            _MenuAction('notes', 'Editar notas / cliente', Icons.edit_outlined),
-            _MenuAction('edit', 'Editar venta completa', Icons.edit_note),
-            _MenuAction('void', 'Anular venta (devuelve stock)',
-                Icons.delete_outline,
-                destructive: true),
+          items: [
+            const _MenuAction(
+                'notes', 'Editar notas / cliente', Icons.edit_outlined),
+            if (canManage) ...const [
+              _MenuAction('edit', 'Editar venta completa', Icons.edit_note),
+              _MenuAction('void', 'Anular venta (devuelve stock)',
+                  Icons.delete_outline,
+                  destructive: true),
+            ],
           ],
           onSelected: (action) {
             switch (action) {
@@ -662,40 +685,27 @@ class _RowActions extends ConsumerWidget {
     final saleLabel = row.saleNumber.isEmpty
         ? row.id.substring(0, 8)
         : row.saleNumber;
-    final confirmed = await showDialog<bool>(
+    final reasonCode = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Anular venta'),
-        content: Text(
-          '¿Anular la venta $saleLabel?\n\n'
-          'Esto va a:\n'
-          '• Devolver el stock de los productos vendidos\n'
-          '• Borrar los pagos asociados\n'
-          '• Marcar la venta como anulada (sale_status = voided)\n\n'
-          'La acción no se puede deshacer.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppTokens.error),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Anular venta'),
-          ),
-        ],
-      ),
+      builder: (ctx) => _VoidSaleDialog(saleLabel: saleLabel, row: row),
     );
-    if (confirmed != true) return;
+    if (reasonCode == null) return;
 
     try {
-      await ref
+      final cashOut = await ref
           .read(salesHistoryRepositoryProvider)
-          .voidSaleWithStockReturn(row.id);
+          .voidSaleWithStockReturn(row.id, reasonCode: reasonCode);
       ref.invalidate(salesHistoryPageProvider);
       messenger.showSnackBar(
-        const SnackBar(content: Text('Venta anulada y stock devuelto.')),
+        SnackBar(
+          content: Text(
+            cashOut > 0
+                ? 'Venta anulada y stock devuelto. Se cobró en un turno ya '
+                    'cerrado: se registró la salida de ${money(cashOut)} de '
+                    'tu caja.'
+                : 'Venta anulada y stock devuelto.',
+          ),
+        ),
       );
     } catch (error) {
       messenger.showSnackBar(
@@ -814,6 +824,8 @@ class _SaleDetailDialog extends ConsumerWidget {
                   ),
                   if (detail.sale.ncf != null)
                     _DetailKv('NCF', detail.sale.ncf!),
+                  if (detail.sale.status == 'voided')
+                    const _DetailKv('Estado', 'ANULADA'),
                   if (detail.sale.notes != null)
                     _DetailKv('Notas', detail.sale.notes!),
                   const Divider(height: 24),
@@ -869,7 +881,10 @@ class _SaleDetailDialog extends ConsumerWidget {
                           'Pagado: ${money(detail.sale.paidAmount)}',
                           style: const TextStyle(fontSize: 12),
                         ),
-                        if (detail.sale.balanceDue > 0)
+                        // Una anulada no debe nada, aunque haya sido a
+                        // crédito.
+                        if (detail.sale.balanceDue > 0 &&
+                            detail.sale.status != 'voided')
                           Text(
                             'Pendiente: ${money(detail.sale.balanceDue)}',
                             style: const TextStyle(
@@ -936,12 +951,86 @@ class _DetailKv extends StatelessWidget {
 class _MetadataEditResult {
   _MetadataEditResult({
     required this.notes,
-    required this.clientId,
-    required this.clearClient,
+    this.clientId,
+    this.clearClient = false,
   });
   final String? notes;
   final String? clientId;
   final bool clearClient;
+}
+
+
+/// Confirma la anulación y pide el motivo. Devuelve el código DGII, o null
+/// si se cancela.
+class _VoidSaleDialog extends StatefulWidget {
+  const _VoidSaleDialog({required this.saleLabel, required this.row});
+
+  final String saleLabel;
+  final SalesHistoryRow row;
+
+  @override
+  State<_VoidSaleDialog> createState() => _VoidSaleDialogState();
+}
+
+class _VoidSaleDialogState extends State<_VoidSaleDialog> {
+  String _reason = '04';
+
+  @override
+  Widget build(BuildContext context) {
+    final ncf = widget.row.ncf;
+    return AlertDialog(
+      title: const Text('Anular venta'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '¿Anular la venta ${widget.saleLabel}'
+              '${ncf != null ? ' (NCF $ncf)' : ''}?\n\n'
+              'Esto va a:\n'
+              '• Devolver el stock de los productos vendidos\n'
+              '• Devolver el dinero cobrado (si se cobró en un turno ya '
+              'cerrado, sale de tu caja abierta)\n'
+              '• Marcar la venta${ncf != null ? ' y su comprobante' : ''} '
+              'como anulada\n\n'
+              'La acción no se puede deshacer. Si el cliente devolvió solo '
+              'parte de la mercancía, usa una devolución.',
+            ),
+            const SizedBox(height: AppTokens.s16),
+            DropdownButtonFormField<String>(
+              initialValue: _reason,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Motivo (DGII)',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                for (final (code, label) in dgiiVoidReasons)
+                  DropdownMenuItem(value: code, child: Text('$code · $label')),
+              ],
+              onChanged: (v) {
+                if (v != null) setState(() => _reason = v);
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: AppTokens.error),
+          onPressed: () => Navigator.pop(context, _reason),
+          child: const Text('Anular venta'),
+        ),
+      ],
+    );
+  }
 }
 
 class _MetadataEditDialog extends ConsumerStatefulWidget {
@@ -959,6 +1048,17 @@ class _MetadataEditDialogState
   late final TextEditingController _notesCtrl;
   String? _clientId;
   bool _initialized = false;
+
+  /// El cliente solo se cambia aquí en ventas de consumo ya pagadas. En una
+  /// factura fiscal (B01…) o con saldo pendiente, cambiarlo directo en la
+  /// tabla se saltaba el RNC exigido y dejaba la deuda en el cliente viejo:
+  /// eso va por "Editar venta completa".
+  bool get _canChangeClient {
+    final row = widget.row;
+    final receiptOk =
+        row.receiptType == 'consumer_final' || row.receiptType == 'none';
+    return receiptOk && row.status == 'completed' && row.balanceDue <= 0;
+  }
 
   @override
   void initState() {
@@ -1029,9 +1129,19 @@ class _MetadataEditDialogState
                     ),
                   ),
                 ],
-                onChanged: (v) => setState(() => _clientId = v),
+                onChanged: _canChangeClient
+                    ? (v) => setState(() => _clientId = v)
+                    : null,
               ),
             ),
+            if (!_canChangeClient) ...[
+              const SizedBox(height: 4),
+              const Text(
+                'El cliente de una factura fiscal o a crédito se cambia desde '
+                '"Editar venta completa".',
+                style: TextStyle(fontSize: 11, color: AppTokens.mutedForeground),
+              ),
+            ],
             const SizedBox(height: AppTokens.s16),
             const Text(
               'Notas',
@@ -1059,6 +1169,13 @@ class _MetadataEditDialogState
         ),
         FilledButton(
           onPressed: () {
+            if (!_canChangeClient) {
+              Navigator.pop(
+                context,
+                _MetadataEditResult(notes: _notesCtrl.text),
+              );
+              return;
+            }
             final clear = _clientId == null;
             Navigator.pop(
               context,

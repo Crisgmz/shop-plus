@@ -211,7 +211,12 @@ class CobrosRepository {
         .toList(growable: false);
   }
 
-  Future<void> registerPayment(CobrosPaymentInput input) async {
+  /// [cashSessionId]: la caja ACTIVA del POS. Sin ella se usa la última
+  /// abierta por el usuario, que en cajas compartidas puede ser otra gaveta.
+  Future<void> registerPayment(
+    CobrosPaymentInput input, {
+    String? cashSessionId,
+  }) async {
     final branchId = await _currentBranchId();
     if (branchId == null) {
       throw Exception('No hay sucursal asignada para este usuario.');
@@ -220,7 +225,9 @@ class CobrosRepository {
     // Camino transaccional (migración 69): inserta el pago, ajusta el saldo de
     // la venta y recalcula el del cliente en UNA transacción, con la fila
     // bloqueada. Evita que dos cajeros abonando a la vez se pisen el saldo.
-    final openSessionId = await _currentOpenCashSessionId(branchId);
+    final openSessionId = (cashSessionId?.isNotEmpty ?? false)
+        ? cashSessionId
+        : await _currentOpenCashSessionId(branchId);
     try {
       await _client.rpc(
         'register_sale_payment',
@@ -294,6 +301,29 @@ class CobrosRepository {
     }
   }
 
+  /// Solo se anulan o editan ABONOS de cuentas por cobrar. El cobro de una
+  /// venta de contado se corrige anulando la venta o con una devolución:
+  /// borrarlo aquí convertía la venta en una deuda (de "Cliente General",
+  /// incluso) y sacaba el dinero del cuadre de caja.
+  Future<void> _assertCreditPayment(String? saleId, String branchId) async {
+    if (saleId == null) return;
+    final sale = await _client
+        .from('sales')
+        .select('due_date, status')
+        .eq('id', saleId)
+        .eq('branch_id', branchId)
+        .single();
+    final isAccount =
+        sale['due_date'] != null || (sale['status'] ?? '') == 'credit';
+    if (!isAccount) {
+      throw Exception(
+        'Este pago es el cobro de una venta de contado: no se cambia en '
+        'Cobros. Para devolver el dinero, anula la venta o registra una '
+        'devolución.',
+      );
+    }
+  }
+
   /// Anula (revierte) un abono: borra el registro de pago y devuelve el monto
   /// al balance de la venta. Recalcula el estado de la venta y el saldo del
   /// cliente. Es la operación inversa de [registerPayment].
@@ -313,6 +343,7 @@ class CobrosRepository {
     final amount = _toDouble(payment['amount']);
     final saleId = payment['sale_id']?.toString();
     final clientId = payment['client_id']?.toString();
+    await _assertCreditPayment(saleId, branchId);
 
     // 1) Borrar el pago. Verificamos que realmente se borró: bajo RLS, si el
     // usuario no tiene permiso (payments_delete exige rol supervisor/admin), el
@@ -391,6 +422,7 @@ class CobrosRepository {
     final oldAmount = _toDouble(payment['amount']);
     final saleId = payment['sale_id']?.toString();
     final clientId = payment['client_id']?.toString();
+    await _assertCreditPayment(saleId, branchId);
 
     final paymentUpdate = <String, dynamic>{
       'amount': newAmount,

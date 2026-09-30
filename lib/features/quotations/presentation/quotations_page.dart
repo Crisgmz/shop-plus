@@ -17,6 +17,7 @@ import '../../../shared/widgets/print_receipt_dialog.dart';
 import '../../cash_register/presentation/cash_register_providers.dart';
 import '../../cobros/presentation/cobros_providers.dart';
 import '../../inventory/data/file_io_helper.dart';
+import '../../sales/presentation/sales_providers.dart' show posDefaultReceiptTypeProvider;
 import '../data/quotations_excel_service.dart';
 import '../../settings/presentation/app_settings_providers.dart';
 import '../data/quotations_models.dart';
@@ -730,6 +731,11 @@ Future<void> _convertQuoteToSale(
   // la fila/tarjeta puede haber salido del árbol (lista virtualizada).
   final messenger = ScaffoldMessenger.of(context);
   final settings = ref.read(appSettingsProvider).valueOrNull;
+  // El mismo comprobante por defecto que el POS.
+  final defaultReceiptType = await ref
+      .read(posDefaultReceiptTypeProvider.future)
+      .catchError((_) => 'consumer_final');
+  if (!context.mounted) return;
   final choice = await showConvertPaymentDialog(
     context,
     quoteCode: quote.code,
@@ -738,6 +744,7 @@ Future<void> _convertQuoteToSale(
     hasClient: quote.clientId != null,
     creditAllowed: settings?.creditAllowSales ?? true,
     defaultCreditDays: settings?.creditDefaultDays ?? 30,
+    defaultReceiptType: defaultReceiptType,
   );
   if (choice == null) return;
   try {
@@ -749,6 +756,7 @@ Future<void> _convertQuoteToSale(
           cashSessionId: ref.read(activeCashSessionIdProvider),
           asCredit: choice.asCredit,
           creditDueDays: choice.creditDueDays,
+          receiptType: choice.receiptType,
         );
     ref.invalidate(quotationsFoundationProvider);
     // Una venta a crédito aparece en Cuentas por cobrar.

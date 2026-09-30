@@ -127,6 +127,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     _clientId = draft.clientId;
     _notesController.text = draft.notes;
     _reopenedHeldSaleId = draft.heldSaleId;
+    _returnOriginalSaleId = draft.returnOriginalSaleId;
 
     // Comprobante por defecto de una venta fresca: el configurado en
     // Ajustes → Fiscal. Ver [posDefaultReceiptTypeProvider] — si ese tipo
@@ -170,6 +171,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       clientId: _clientId,
       notes: _notesController.text,
       heldSaleId: _reopenedHeldSaleId,
+      returnOriginalSaleId: _returnOriginalSaleId,
     );
     ref.read(saleDraftProvider.notifier).state = draft;
     // Persistir también a localStorage (web) para sobrevivir recargas.
@@ -532,28 +534,48 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                       style: TextStyle(color: Color(0xFF94A3B8)),
                     ),
                   )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(AppTokens.s12),
-                    itemCount: _cart.length,
-                    itemBuilder: (context, i) => CartLineTile(
-                      // Producto + presentación: un producto puede tener una
-                      // línea por caja y otra suelta, y con solo el id las dos
-                      // llaves chocaban.
-                      key: ValueKey(
-                        '${_cart[i].product.id}-${_cart[i].uom.dbValue}',
-                      ),
-                      isReturn:
-                          ref.watch(posModeProvider) == PosMode.returnMode,
-                      item: _cart[i],
-                      chargesTax: _chargesTax,
-                      pricesIncludeTax: _hideTaxBreakdown,
-                      onRemove: () => _removeItem(i),
-                      onPriceChanged: (value) => _setUnitPrice(i, value),
-                      onQuantityChanged: (value) => _setQty(i, value),
-                      onDiscountChanged: (value) => _setDiscountPct(i, value),
-                      onPriceTierChanged: (tier) => _setLinePriceTier(i, tier),
-                      onUomChanged: (uom) => _setLineUom(i, uom),
-                    ),
+                : Builder(
+                    builder: (context) {
+                      final shades = shadesByProduct([
+                        for (final it in _cart) it.product.id,
+                      ]);
+                      return ListView.builder(
+                        padding: const EdgeInsets.all(AppTokens.s12),
+                        itemCount: _cart.length,
+                        itemBuilder: (context, i) => CartLineTile(
+                          shaded: shades[i],
+                          // Producto + presentación: un producto puede tener una
+                          // línea por caja y otra suelta, y con solo el id las dos
+                          // llaves chocaban.
+                          key: ValueKey(
+                            '${_cart[i].product.id}-${_cart[i].uom.dbValue}',
+                          ),
+                          isReturn:
+                              ref.watch(posModeProvider) == PosMode.returnMode,
+                          // Al devolver parte de los equipos, se quitan los
+                          // que NO regresan; la cantidad son los que quedan.
+                          quantityReadOnly:
+                              ref.watch(posModeProvider) ==
+                                  PosMode.returnMode &&
+                              _cart[i].imeis.isNotEmpty,
+                          onRemoveImei:
+                              ref.watch(posModeProvider) == PosMode.returnMode
+                                  ? (imei) => _removeReturnImei(i, imei)
+                                  : null,
+                          item: _cart[i],
+                          chargesTax: _chargesTax,
+                          pricesIncludeTax: _hideTaxBreakdown,
+                          onRemove: () => _removeItem(i),
+                          onPriceChanged: (value) => _setUnitPrice(i, value),
+                          onQuantityChanged: (value) => _setQty(i, value),
+                          onDiscountChanged: (value) =>
+                              _setDiscountPct(i, value),
+                          onPriceTierChanged: (tier) =>
+                              _setLinePriceTier(i, tier),
+                          onUomChanged: (uom) => _setLineUom(i, uom),
+                        ),
+                      );
+                    },
                   ),
           ),
           Padding(
@@ -819,7 +841,15 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     // `tracksStock` excluye servicios y productos con stock negativo
     // permitido: el RPC no los valida contra inventario y el POS tampoco debe
     // hacerlo, o un servicio (stock 0) sería imposible de vender.
-    final checksStock = _stockEnforced && product.tracksStock;
+    final checksStock =
+        _stockEnforced && !_isReturnMode && product.tracksStock;
+    // Si el producto ya está en el carrito, su stock es el de esa línea: en
+    // una cuenta guardada reabierta incluye lo que ella misma reservó.
+    final available = _cart
+            .where((it) => it.product.id == product.id)
+            .map((it) => it.product.stock)
+            .fold<double?>(null, (a, b) => a == null || b > a ? b : a) ??
+        product.stock;
     // Entra por la presentación MAYOR que alcance el inventario: caja, y si no
     // da para una caja completa, paquete, y si no, suelto. En un producto de
     // tres niveles (caja de 20 paquetes de 50) esto evita que entre por
@@ -829,7 +859,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     if (checksStock) {
       for (final option in packaging.sellableUoms) {
         uom = option;
-        if (inCart + packaging.factorFor(option) <= product.stock) break;
+        if (inCart + packaging.factorFor(option) <= available) break;
       }
     }
     final index = _cart.indexWhere(
@@ -839,7 +869,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     final minUnits = packaging.minUnitQty ?? 0;
     final startQty = uom == PackagingUom.unit && minUnits > 1 ? minUnits : 1.0;
     final addedBase = (index == -1 ? startQty : 1) * packaging.factorFor(uom);
-    if (checksStock && _cartBaseFor(product.id) + addedBase > product.stock) {
+    if (checksStock && _cartBaseFor(product.id) + addedBase > available) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Sin stock suficiente')));
@@ -894,6 +924,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       clearPresentationPrice: true,
     );
     if (_stockEnforced &&
+        !_isReturnMode &&
         item.product.tracksStock &&
         _cartBaseFor(item.product.id, exceptIndex: index) +
                 candidate.baseQuantity >
@@ -1021,6 +1052,39 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     _persistDraft();
   }
 
+  bool get _isReturnMode => ref.read(posModeProvider) == PosMode.returnMode;
+
+  /// Devolución enlazada a una venta: el servidor reembolsa lo que se cobró
+  /// en ESA venta (migración 97), así que precio, descuento, tipo de precio y
+  /// cliente no se tocan. Cambiarlos solo mostraba un monto que no se iba a
+  /// registrar.
+  bool _blockLinkedReturnEdit() {
+    if (!_isReturnMode || _returnOriginalSaleId == null) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'En la devolución de una venta se reembolsa lo que se cobró: el '
+          'precio, el descuento y el cliente no se cambian.',
+        ),
+      ),
+    );
+    return true;
+  }
+
+  /// Quita un equipo de una línea en devolución: ese IMEI no regresa.
+  void _removeReturnImei(int index, String imei) {
+    final item = _cart[index];
+    if (item.imeis.length <= 1) return;
+    final imeis = [...item.imeis]..remove(imei);
+    setState(
+      () => _cart[index] = item.copyWith(
+        imeis: imeis,
+        quantity: imeis.length.toDouble(),
+      ),
+    );
+    _persistDraft();
+  }
+
   /// Setea la cantidad a un valor específico (desde el input del cart line).
   /// Si es <= 0 elimina el item.
   void _setQty(int index, double value) {
@@ -1030,7 +1094,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     }
     final item = _cart[index];
     final next = item.copyWith(quantity: value);
+    // Al devolver, la mercancía ENTRA: no se valida contra el stock (un
+    // producto agotado no se podía devolver parcialmente).
     if (_stockEnforced &&
+        !_isReturnMode &&
         item.product.tracksStock &&
         _cartBaseFor(item.product.id, exceptIndex: index) + next.baseQuantity >
             item.product.stock) {
@@ -1054,6 +1121,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// mostrará como "Personalizado".
   void _setUnitPrice(int index, double value) {
     if (value < 0) return;
+    if (_blockLinkedReturnEdit()) return;
     final item = _cart[index];
     // En una línea por presentación el campo ES el precio de la caja y se
     // respeta tal cual: el checkout cobra la línea desde él (migración 92).
@@ -1081,6 +1149,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// Cambia el tipo de precio de una línea (Detalle / Por Mayor / etc.). Fija
   /// el precio unitario al precio del producto para ese tier.
   void _setLinePriceTier(int index, String tierKey) {
+    if (_blockLinkedReturnEdit()) return;
     final item = _cart[index];
     final newPrice = item.product.priceFor(tierKey);
     if (_belowCostEnforced && newPrice < item.product.cost) {
@@ -1104,6 +1173,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
 
   /// Setea el descuento porcentual de una línea (0-100).
   void _setDiscountPct(int index, double value) {
+    if (_blockLinkedReturnEdit()) return;
     final clamped = value.clamp(0, 100).toDouble();
     final item = _cart[index];
     setState(() => _cart[index] = item.copyWith(discountPct: clamped));
@@ -1114,6 +1184,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// nuevo tier. Si el nuevo cliente es null o "retail", vuelve al precio
   /// base de cada producto.
   void _onClientChanged(String? newId) {
+    if (newId != _clientId && _blockLinkedReturnEdit()) return;
     setState(() {
       _clientId = newId;
       if (_cart.isEmpty) return;
@@ -1268,7 +1339,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     );
     if (result == null || !mounted) return;
     if (result.asCredit) {
-      await _confirmCreditCheckout();
+      await _confirmCreditCheckout(downPayments: result.payments);
     } else {
       await _checkout(asCredit: false, payments: result.payments);
     }
@@ -1276,7 +1347,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
 
   /// Abre un diálogo que pide los días de plazo (default desde settings) y
   /// luego ejecuta el checkout a crédito.
-  Future<void> _confirmCreditCheckout() async {
+  Future<void> _confirmCreditCheckout({
+    List<SalePaymentLine> downPayments = const [],
+  }) async {
     if (_cart.isEmpty) return;
     if (_clientId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1289,6 +1362,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     final settings = ref.read(appSettingsProvider).valueOrNull;
     final defaultDays = settings?.creditDefaultDays ?? 30;
     final controller = TextEditingController(text: defaultDays.toString());
+    final downPayment = downPayments.fold<double>(0, (s, p) => s + p.amount);
     final today = DateTime.now();
 
     int parseDays() {
@@ -1315,6 +1389,14 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+                if (downPayment > 0) ...[
+                  const SizedBox(height: 4),
+                  Text('Abono inicial: ${money(downPayment)}'),
+                  Text(
+                    'Queda a crédito: ${money(_cartTotal - downPayment)}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 TextField(
                   controller: controller,
@@ -1355,7 +1437,11 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     );
 
     if (confirmed == true) {
-      await _checkout(asCredit: true, creditDueDays: parseDays());
+      await _checkout(
+        asCredit: true,
+        creditDueDays: parseDays(),
+        downPayments: downPayments,
+      );
     }
     controller.dispose();
   }
@@ -1364,6 +1450,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     required bool asCredit,
     int? creditDueDays,
     List<SalePaymentLine> payments = const [],
+    List<SalePaymentLine> downPayments = const [],
   }) async {
     if (_cart.isEmpty) return;
     if (asCredit && _clientId == null) {
@@ -1423,6 +1510,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           creditAllowSales: settings?.creditAllowSales ?? true,
           clientSkipsTax: _clientSkipsTax,
           creditDueDays: creditDueDays,
+          downPayments: asCredit ? downPayments : const [],
           cashSessionId: ref.read(activeCashSessionIdProvider),
           // Si esta venta viene de una cuenta GUARDADA reabierta, el backend la
           // absorbe: conserva su mismo número y libera su stock reservado. En
@@ -1457,7 +1545,17 @@ class _SalesPageState extends ConsumerState<SalesPage> {
 
       // Si app_settings.sale_disable_complete_confirmation = true, mostrar
       // solo un toast y no bloquear con un diálogo.
-      if (disableConfirmation) {
+      // Comprobante fiscal que volvió SIN NCF: la secuencia no existe o se
+      // agotó. La base deja pasar la venta (el trigger no falla), pero la
+      // factura sale sin NCF y el 607 la marca como faltante: hay que decirlo.
+      if (result.ncf == null && result.receiptType != 'none') {
+        AppSnackBar.error(
+          context,
+          'Venta #${result.saleNumber} registrada SIN NCF: no hay secuencia '
+          'disponible para este comprobante. Registra la secuencia en '
+          'Configuración y usa "Asignar NCF a ventas sin comprobante".',
+        );
+      } else if (disableConfirmation) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: AppTokens.success,
@@ -1500,6 +1598,17 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                 ),
             ],
           ),
+        );
+      }
+
+      // El abono inicial no entró: la venta quedó a crédito por el total.
+      if (result.downPaymentError != null) {
+        if (!mounted) return;
+        AppSnackBar.error(
+          context,
+          'Venta #${result.saleNumber} registrada a crédito, pero el abono '
+          'inicial no se registró. Regístralo en Cobros.',
+          result.downPaymentError,
         );
       }
 
@@ -1578,12 +1687,37 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         );
         return;
       }
+      // Solo se devuelve lo que se cobró: una anulada ya devolvió todo y una
+      // cuenta guardada nunca se cobró.
+      if (result.status == 'voided') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'La venta ${result.saleNumber} está anulada: su mercancía y su '
+              'dinero ya se devolvieron.',
+            ),
+          ),
+        );
+        return;
+      }
+      if (result.status != 'completed' && result.status != 'credit') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'La venta ${result.saleNumber} no está cobrada: una cuenta '
+              'guardada se descarta desde el historial.',
+            ),
+          ),
+        );
+        return;
+      }
       if (result.items.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'La venta no tiene items recuperables '
-              '(¿productos inactivos o eliminados?).',
+              result.hadReturns
+                  ? 'Todo lo de la venta ${result.saleNumber} ya se devolvió.'
+                  : 'La venta no tiene productos que se puedan devolver.',
             ),
           ),
         );
@@ -1597,6 +1731,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         // La venta original: enlaza la devolución y permite que el RPC
         // ajuste `clients.balance_due` si fue a crédito.
         _returnOriginalSaleId = result.saleId;
+        // Mismas reglas de ITBIS que la venta, para que el total en pantalla
+        // sea el que se va a reembolsar.
+        _receiptType = result.receiptType;
         // Cliente original si aplica
         if (result.clientId != null && result.clientId!.isNotEmpty) {
           _clientId = result.clientId;
@@ -1612,7 +1749,9 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           backgroundColor: const Color(0xFF22C55E),
           content: Text(
             'Venta ${result.saleNumber} cargada · '
-            '${result.items.length} línea(s).',
+            '${result.items.length} línea(s)'
+            '${result.hadReturns ? ' (sin lo ya devuelto)' : ''}'
+            '${result.skippedLines > 0 ? ' · ${result.skippedLines} producto(s) ya no existen y no se pueden devolver' : ''}.',
             style: const TextStyle(color: Colors.white),
           ),
         ),
@@ -1636,6 +1775,17 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   Future<void> _processReturn() async {
     if (_cart.isEmpty) return;
 
+    // Cómo se le devuelve el dinero. Antes siempre quedaba como efectivo: un
+    // reembolso a tarjeta descontaba de la caja un efectivo que no salió.
+    final refundMethod = await showDialog<String>(
+      context: context,
+      builder: (_) => _RefundMethodDialog(
+        total: _cartTotal,
+        linkedToSale: _returnOriginalSaleId != null,
+      ),
+    );
+    if (refundMethod == null || !mounted) return;
+
     setState(() => _isSubmitting = true);
     try {
       final repo = ref.read(salesRepositoryProvider);
@@ -1646,6 +1796,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
           originalSaleId: _returnOriginalSaleId,
           notes: _notesController.text.trim(),
           cashSessionId: ref.read(activeCashSessionIdProvider),
+          refundMethod: refundMethod,
         ),
       );
 
@@ -1653,17 +1804,47 @@ class _SalesPageState extends ConsumerState<SalesPage> {
       ref.invalidate(salesProductsProvider);
 
       if (!mounted) return;
+      // El monto registrado lo calcula el servidor desde la venta: es el que
+      // se muestra, no el del carrito.
+      final parts = <String>[
+        'Devolución ${result.returnNumber} registrada por '
+            '${money(result.totalAmount)}',
+        if (result.ncf != null) 'Nota de crédito ${result.ncf}',
+        if (result.creditApplied > 0)
+          '${money(result.creditApplied)} rebajados del saldo de la venta',
+        if (result.cashRefundAmount > 0)
+          'Devolver al cliente: ${money(result.cashRefundAmount)}',
+      ];
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: const Color(0xFFEF4444),
+          duration: const Duration(seconds: 8),
           content: Text(
-            'Devolución #${result.returnNumber} registrada · '
-            '${result.itemsCount} artículo(s)'
-            '${result.creditBalanceAdjusted ? " · saldo de cliente ajustado" : ""}.',
+            '${parts.join(' · ')}.',
             style: const TextStyle(color: Colors.white),
           ),
         ),
       );
+      if (result.ncfError != null) {
+        AppSnackBar.error(
+          context,
+          'La venta tenía comprobante fiscal, pero la devolución quedó sin NCF '
+          'de nota de crédito.',
+          Exception(result.ncfError),
+        );
+      }
+      // Nota de crédito para el cliente. La devolución ya quedó: si armar el
+      // documento falla, se reimprime desde Devoluciones.
+      try {
+        final job = await repo.prepareReturnPrintJob(
+          returnId: result.returnId,
+        );
+        if (job != null && mounted) {
+          await PrintReceiptDialog.show(context, job);
+        }
+      } catch (e) {
+        debugPrint('Nota de crédito ${result.returnNumber}: $e');
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1678,6 +1859,83 @@ class _SalesPageState extends ConsumerState<SalesPage> {
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
+  }
+}
+
+/// Pregunta cómo se le devuelve el dinero al cliente. Devuelve el método o
+/// null si se cancela.
+class _RefundMethodDialog extends StatefulWidget {
+  const _RefundMethodDialog({required this.total, required this.linkedToSale});
+
+  final double total;
+  final bool linkedToSale;
+
+  @override
+  State<_RefundMethodDialog> createState() => _RefundMethodDialogState();
+}
+
+class _RefundMethodDialogState extends State<_RefundMethodDialog> {
+  String _method = 'cash';
+
+  static const _methods = [
+    ('cash', 'Efectivo (sale de la caja)'),
+    ('card', 'Reverso a tarjeta'),
+    ('transfer', 'Transferencia'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Procesar devolución'),
+      content: SizedBox(
+        width: 400,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Total estimado: ${money(widget.total)}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            if (widget.linkedToSale) ...[
+              const SizedBox(height: 6),
+              const Text(
+                'El monto final sale de lo cobrado en la venta. Si la venta '
+                'tiene saldo pendiente, primero se rebaja de ese saldo.',
+                style: TextStyle(fontSize: 12, color: AppTokens.mutedForeground),
+              ),
+            ],
+            const SizedBox(height: AppTokens.s12),
+            DropdownButtonFormField<String>(
+              initialValue: _method,
+              decoration: const InputDecoration(
+                labelText: 'Se le devuelve por',
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                for (final (value, label) in _methods)
+                  DropdownMenuItem(value: value, child: Text(label)),
+              ],
+              onChanged: (v) {
+                if (v != null) setState(() => _method = v);
+              },
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: AppTokens.error),
+          onPressed: () => Navigator.pop(context, _method),
+          child: const Text('Registrar devolución'),
+        ),
+      ],
+    );
   }
 }
 
@@ -1921,6 +2179,16 @@ class _PaymentDialogState extends State<_PaymentDialog> {
   bool get _valid => widget.total > 0 && _sum + 0.01 >= widget.total;
   bool get _anyCredit => _lines.any((l) => l.method == 'credit' && l.value > 0);
 
+  /// Con una línea "Crédito", lo pagado en las demás es el abono inicial.
+  /// Antes se descartaba: 400 en efectivo + 600 a crédito dejaban 1,000 de
+  /// deuda y los 400 fuera de la caja.
+  double get _downPayment => _lines
+      .where((l) => l.method != 'credit')
+      .fold<double>(0, (s, l) => s + l.value);
+
+  /// El abono no puede cubrir todo: entonces no es una venta a crédito.
+  bool get _validCredit => _anyCredit && _downPayment + 0.01 < widget.total;
+
   List<SalePaymentLine> _payments() => _lines
       .where((l) => l.value > 0)
       .map((l) => SalePaymentLine(method: l.method, amount: l.value))
@@ -2077,10 +2345,18 @@ class _PaymentDialogState extends State<_PaymentDialog> {
                 ),
               ),
             if (_anyCredit)
-              const Text(
-                'Esta venta irá a crédito (requiere cliente).',
+              Text(
+                !_validCredit
+                    ? 'Lo pagado cubre el total: quita la línea de Crédito.'
+                    : _downPayment > 0
+                        ? 'Abono inicial ${money(_downPayment)} · a crédito '
+                            '${money(widget.total - _downPayment)} (requiere '
+                            'cliente).'
+                        : 'Esta venta irá a crédito (requiere cliente).',
                 style: TextStyle(
-                  color: Color(0xFF2563EB),
+                  color: _validCredit
+                      ? const Color(0xFF2563EB)
+                      : const Color(0xFFEF4444),
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
@@ -2129,10 +2405,16 @@ class _PaymentDialogState extends State<_PaymentDialog> {
           style: FilledButton.styleFrom(
             backgroundColor: const Color(0xFF22C55E),
           ),
-          onPressed: (_valid || _anyCredit)
+          onPressed: (_anyCredit ? _validCredit : _valid)
               ? () => Navigator.of(context).pop(
                   _PaymentResult(
-                    payments: _anyCredit ? const [] : _payments(),
+                    // A crédito: solo el abono (las líneas que no son crédito).
+                    payments: _anyCredit
+                        ? [
+                            for (final p in _payments())
+                              if (p.method != 'credit') p,
+                          ]
+                        : _payments(),
                     asCredit: _anyCredit,
                   ),
                 )

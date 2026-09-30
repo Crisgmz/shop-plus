@@ -231,4 +231,57 @@ void main() {
       expect(fila[6], '');
     });
   });
+
+  group('notas de crédito y anulados (migración 98)', () {
+    test('la nota de crédito va con el NCF que modifica y cómo se reembolsó',
+        () {
+      final formato = dgiiFormato607({
+        'formato_version': 2,
+        'period': '202609',
+        'rnc_negocio': '130802661',
+        'rows': [
+          {
+            'rnc_cliente': '133334781',
+            'ncf': 'B0400000001',
+            'ncf_modificado': 'B0100000200',
+            'fecha_comprobante': '20260930',
+            'monto_facturado': 6182.20,
+            'itbis_facturado': 1112.80,
+            'monto_total': 7295.00,
+            'propina_legal': 0,
+            'pagos': {'transfer': 7295.00},
+          },
+        ],
+      });
+      final fila = formato.filas.single;
+      expect(fila[2], 'B0400000001');
+      expect(fila[3], 'B0100000200');
+      expect(fila[7], 6182.20);
+      expect(fila[8], 1112.80);
+      // Formas de venta: la transferencia va en "Cheque/Transferencia".
+      expect(fila[16], null);
+      expect(fila[17], 7295.00);
+    });
+
+    test('608: NCF, fecha y tipo de anulación', () {
+      final formato = dgiiFormato608({
+        'period': '202609',
+        'rnc_negocio': '130802661',
+        'rows': [
+          {
+            'ncf': 'B0100000200',
+            'fecha_comprobante': '20260930',
+            'tipo_anulacion': '05',
+          },
+          {'ncf': 'B0200000010', 'fecha_comprobante': '20260915'},
+        ],
+      });
+      expect(
+        formato.toTxt(),
+        '608|130802661|202609|2\r\n'
+        'B0100000200|20260930|05\r\n'
+        'B0200000010|20260915|04',
+      );
+    });
+  });
 }

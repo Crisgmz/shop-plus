@@ -517,11 +517,42 @@ class PurchasesRepository {
     if (branchId == null) {
       throw Exception('No hay sucursal asignada para este usuario.');
     }
-    await _client
+    // Bajo RLS, un DELETE sin permiso afecta 0 filas SIN error: se verifica
+    // que de verdad se borró. Antes la pantalla decía "Compra eliminada" y la
+    // compra seguía ahí.
+    final deleted = await _client
         .from('purchases')
         .delete()
         .eq('id', purchaseId)
-        .eq('branch_id', branchId);
+        .eq('branch_id', branchId)
+        .select('id, supplier_id');
+    if ((deleted as List).isEmpty) {
+      throw Exception(
+        'No se pudo eliminar la compra: eliminar compras requiere rol de '
+        'administrador o supervisor.',
+      );
+    }
+    // El saldo del proveedor ya no incluye esta compra (misma regla que
+    // register_supplier_payment, migración 82).
+    final supplierId = (deleted.first as Map)['supplier_id']?.toString();
+    if (supplierId != null) {
+      final open = await _client
+          .from('purchases')
+          .select('balance_due')
+          .eq('branch_id', branchId)
+          .eq('supplier_id', supplierId)
+          .gt('balance_due', 0)
+          .neq('status', 'cancelled');
+      final balance = open.fold<double>(
+        0,
+        (sum, row) => sum + _toDouble((row as Map)['balance_due']),
+      );
+      await _client
+          .from('suppliers')
+          .update({'balance_due': (balance * 100).roundToDouble() / 100})
+          .eq('id', supplierId)
+          .eq('branch_id', branchId);
+    }
   }
 
   /// Carga una compra con sus líneas y el proveedor, para ver/editar/imprimir.

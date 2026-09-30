@@ -967,6 +967,15 @@ class ReportsRepository {
     return const {};
   }
 
+  /// 608: comprobantes anulados del mes (migración 98).
+  Future<Map<String, dynamic>> fetchDgii608(
+      {required int year, required int month}) async {
+    final result = await _client.rpc('dgii_608_data',
+        params: {'p_year': year, 'p_month': month});
+    if (result is Map) return Map<String, dynamic>.from(result);
+    return const {};
+  }
+
   Future<Map<String, dynamic>> fetchDgiiIt1(
       {required int year, required int month}) async {
     final result = await _client.rpc('dgii_it1_summary',
@@ -1016,8 +1025,17 @@ class ReportsRepository {
       query = query.neq('status', 'voided').neq('status', 'pending');
     }
 
-    final salesRows =
-        await query.order('sale_date', ascending: false).limit(500);
+    // Todas las del rango, por páginas. Antes se cortaba en 500 sin avisar:
+    // el Estado de Diario de un mes con 800 ventas salía con 500.
+    final salesRows = <dynamic>[];
+    const pageSize = 1000;
+    for (var from = 0;; from += pageSize) {
+      final page = await query
+          .order('sale_date', ascending: false)
+          .range(from, from + pageSize - 1);
+      salesRows.addAll(page);
+      if (page.length < pageSize) break;
+    }
 
     // Recolectar cashier_ids únicos y traer los nombres de profiles en una
     // sola query.
@@ -1077,10 +1095,22 @@ class ReportsRepository {
     // márgenes del sistema). sale_items no guarda snapshot de costo.
     final cogsBySale = <String, double>{};
     if (saleIds.isNotEmpty) {
-      final items = await _client
-          .from('sale_items')
-          .select('sale_id, product_id, quantity')
-          .inFilter('sale_id', saleIds.toList(growable: false));
+      // En lotes: cientos de ids en un solo `in (...)` hacen la URL enorme y
+      // la respuesta se corta en el tope de filas de PostgREST.
+      final items = <dynamic>[];
+      final ids = saleIds.toList(growable: false);
+      for (var i = 0; i < ids.length; i += 100) {
+        final chunk = ids.sublist(i, i + 100 > ids.length ? ids.length : i + 100);
+        for (var from = 0;; from += 1000) {
+          final page = await _client
+              .from('sale_items')
+              .select('sale_id, product_id, quantity')
+              .inFilter('sale_id', chunk)
+              .range(from, from + 999);
+          items.addAll(page);
+          if (page.length < 1000) break;
+        }
+      }
       final productIds = <String>{};
       for (final raw in items) {
         final pid = (raw as Map)['product_id']?.toString();

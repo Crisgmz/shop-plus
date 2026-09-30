@@ -33,6 +33,15 @@ const _defaultReceiptTypeLabels = <String, String>{
   ..._receiptTypeLabels,
 };
 
+/// Tipos del editor de secuencias NCF: los de venta más la Nota de Crédito
+/// (B04), que toman las devoluciones de ventas con comprobante fiscal
+/// (migración 97). No es un comprobante por defecto del POS: por eso no está
+/// en [_receiptTypeLabels].
+const _sequenceReceiptTypeLabels = <String, String>{
+  ..._receiptTypeLabels,
+  'credit_note': 'Nota de crédito',
+};
+
 /// Prefijo NCF según DGII (RD): serie B + tipo de comprobante (2 dígitos). El
 /// NCF se forma como prefijo + 8 dígitos de secuencia (ej. B02 + 00000001 =
 /// B0200000001, 11 caracteres). Estos son los códigos oficiales por tipo.
@@ -42,13 +51,14 @@ const _dgiiNcfPrefixes = <String, String>{
   'governmental': 'B15', // Comprobante Gubernamental
   'special': 'B14', // Comprobante de Regímenes Especiales
   'export': 'B16', // Comprobante para Exportaciones
+  'credit_note': 'B04', // Nota de Crédito (devoluciones)
 };
 
 /// Tipos cuyas secuencias NCF NO vencen, según DGII (Guía de Comprobantes
 /// Fiscales, sección 6): Facturas de Consumo (B02), Notas de Crédito (B04) y
 /// Registro Único de Ingresos (B12). El resto vence el 31 de diciembre del año
-/// siguiente al que fue autorizado. De estos, el POS solo emite B02.
-const _dgiiNonExpiringTypes = <String>{'consumer_final'};
+/// siguiente al que fue autorizado. De estos, el POS emite B02 y B04.
+const _dgiiNonExpiringTypes = <String>{'consumer_final', 'credit_note'};
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -2165,7 +2175,7 @@ class _NcfDialogState extends State<_NcfDialog> {
   void initState() {
     super.initState();
     final s = widget.sequence;
-    _receiptType = s?.receiptType ?? _receiptTypeLabels.keys.first;
+    _receiptType = s?.receiptType ?? _sequenceReceiptTypeLabels.keys.first;
     _status = s?.status ?? 'active';
     _prefixController = TextEditingController(
       text: s?.prefix ?? _dgiiNcfPrefixes[_receiptType] ?? '',
@@ -2233,7 +2243,7 @@ class _NcfDialogState extends State<_NcfDialog> {
                   decoration: const InputDecoration(
                     labelText: 'Tipo de comprobante',
                   ),
-                  items: _receiptTypeLabels.entries
+                  items: _sequenceReceiptTypeLabels.entries
                       .map((entry) {
                         final code = _dgiiNcfPrefixes[entry.key];
                         return DropdownMenuItem<String>(
@@ -2539,7 +2549,7 @@ String _roleLabel(String? role) {
 }
 
 String _receiptTypeLabel(String type) =>
-    _defaultReceiptTypeLabels[type] ?? type;
+    _defaultReceiptTypeLabels[type] ?? _sequenceReceiptTypeLabels[type] ?? type;
 
 String _date(DateTime value) {
   final day = value.day.toString().padLeft(2, '0');

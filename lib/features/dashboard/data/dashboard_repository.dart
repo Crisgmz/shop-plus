@@ -484,14 +484,25 @@ class DashboardRepository {
   /// Lee directamente de `payments` filtrando por la sucursal del usuario
   /// y el rango [day 00:00, day+1 00:00) en hora local.
   Future<DashboardPaymentBreakdown> fetchPaymentBreakdown(DateTime date) async {
+    // Medianoche LOCAL convertida a UTC: `toIso8601String()` de una hora local
+    // no lleva zona y el servidor la leía como UTC (el día corría 4 horas).
     final start = DateTime(date.year, date.month, date.day);
     final end = start.add(const Duration(days: 1));
+
+    // Solo la sucursal actual: un usuario con varias sucursales veía la suma
+    // de todas.
+    final branch = await _client.rpc('current_branch_id');
+    final branchId = branch?.toString() ?? '';
+    if (branchId.isEmpty) {
+      return const DashboardPaymentBreakdown(entries: [], total: 0);
+    }
 
     final rows = await _client
         .from('payments')
         .select('payment_method, amount')
-        .gte('paid_at', start.toIso8601String())
-        .lt('paid_at', end.toIso8601String());
+        .eq('branch_id', branchId)
+        .gte('paid_at', start.toUtc().toIso8601String())
+        .lt('paid_at', end.toUtc().toIso8601String());
 
     final totals = <String, double>{};
     final counts = <String, int>{};

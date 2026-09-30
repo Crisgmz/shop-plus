@@ -41,6 +41,7 @@ enum ReportCategory {
   estadoDiario,
   reporte606,
   reporte607,
+  reporte608,
   reporteIt1,
   cierreZFiscal,
   impuestos,
@@ -97,6 +98,8 @@ enum ReportCategory {
         return '606 — Compras DGII';
       case ReportCategory.reporte607:
         return '607 — Ventas DGII';
+      case ReportCategory.reporte608:
+        return '608 — Anulados DGII';
       case ReportCategory.reporteIt1:
         return 'IT-1 — Resumen ITBIS';
       case ReportCategory.cierreZFiscal:
@@ -158,6 +161,8 @@ enum ReportCategory {
         return 'Archivo mensual de compras con NCF de proveedores.';
       case ReportCategory.reporte607:
         return 'Archivo mensual de ventas con NCF emitidos.';
+      case ReportCategory.reporte608:
+        return 'Archivo mensual de comprobantes (NCF) anulados.';
       case ReportCategory.reporteIt1:
         return 'Resumen mensual de ITBIS recibido vs pagado.';
       case ReportCategory.cierreZFiscal:
@@ -219,6 +224,8 @@ enum ReportCategory {
         return Icons.description_outlined;
       case ReportCategory.reporte607:
         return Icons.description_outlined;
+      case ReportCategory.reporte608:
+        return Icons.block_outlined;
       case ReportCategory.reporteIt1:
         return Icons.assignment_outlined;
       case ReportCategory.cierreZFiscal:
@@ -262,6 +269,7 @@ enum ReportCategory {
       case ReportCategory.estadoDiario:
       case ReportCategory.reporte606:
       case ReportCategory.reporte607:
+      case ReportCategory.reporte608:
       case ReportCategory.reporteIt1:
       case ReportCategory.cierreZFiscal:
       case ReportCategory.impuestos:
@@ -278,6 +286,7 @@ enum ReportCategory {
       case ReportCategory.estadoDiario:
       case ReportCategory.reporte606:
       case ReportCategory.reporte607:
+      case ReportCategory.reporte608:
       case ReportCategory.reporteIt1:
       case ReportCategory.liquidacion:
         return false;

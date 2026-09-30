@@ -1097,6 +1097,11 @@ String _invoiceTitle(PrintDocumentData data) {
   if (data.documentType == PrintDocumentType.expenseVoucher) {
     return 'COMPROBANTE DE GASTO';
   }
+  // Antes que las etiquetas: "Nota de crédito" contiene "crédito" y saldría
+  // como "FACTURA CON CRÉDITO FISCAL".
+  if (data.documentType == PrintDocumentType.creditNote) {
+    return 'NOTA DE CRÉDITO';
+  }
   final label = (data.receiptTypeLabel ?? '').toLowerCase();
   if (label.contains('sin comprobante')) return 'NOTA DE VENTA';
   if (label.contains('consumidor')) return 'FACTURA PARA CONSUMIDOR FINAL';

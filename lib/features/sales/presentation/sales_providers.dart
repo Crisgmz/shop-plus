@@ -125,6 +125,7 @@ class SaleDraft {
     this.clientId,
     this.notes = '',
     this.heldSaleId,
+    this.returnOriginalSaleId,
   });
 
   final List<SaleCartItem> items;
@@ -139,6 +140,11 @@ class SaleDraft {
   /// (devuelve su stock reservado) antes de registrar la venta real, para no
   /// duplicar la cuenta ni el stock. Null en una venta nueva normal.
   final String? heldSaleId;
+
+  /// Venta original de una devolución en curso. Viaja con el borrador: sin
+  /// esto, salir y volver al POS dejaba la devolución sin enlazar (sin tope,
+  /// sin ajuste de crédito ni nota de crédito).
+  final String? returnOriginalSaleId;
 
   bool get isEmpty => items.isEmpty;
 }
@@ -178,6 +184,7 @@ String _encodeSaleDraft(SaleDraft d) => jsonEncode({
       'clientId': d.clientId,
       'notes': d.notes,
       'heldSaleId': d.heldSaleId,
+      'returnOriginalSaleId': d.returnOriginalSaleId,
       'items': [
         for (final it in d.items)
           {
@@ -227,6 +234,7 @@ SaleDraft? _decodeSaleDraft(String? raw) {
       clientId: map['clientId']?.toString(),
       notes: map['notes']?.toString() ?? '',
       heldSaleId: map['heldSaleId']?.toString(),
+      returnOriginalSaleId: map['returnOriginalSaleId']?.toString(),
     );
   } catch (_) {
     // JSON corrupto o de una versión vieja del modelo: empezar limpio.

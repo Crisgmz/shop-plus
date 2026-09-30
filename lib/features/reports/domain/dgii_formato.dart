@@ -247,6 +247,38 @@ DgiiFormato dgiiFormato607(Map<String, dynamic> data) {
   );
 }
 
+/// Columnas del 608 (comprobantes anulados).
+const dgiiColumnas608 = [
+  DgiiColumna('Número de Comprobante Fiscal'),
+  DgiiColumna('Fecha de Comprobante'),
+  DgiiColumna('Tipo de Anulación'),
+];
+
+/// 608: un registro por NCF anulado en el mes — NCF, fecha del comprobante
+/// (AAAAMMDD) y tipo de anulación (01..10). El TXT lleva la misma cabecera
+/// `608|RNC|AAAAMM|cantidad` que el 606/607.
+DgiiFormato dgiiFormato608(Map<String, dynamic> data) {
+  final filas = <List<Object?>>[
+    for (final raw in (data['rows'] as List?) ?? const [])
+      if (raw is Map)
+        [
+          _texto(raw['ncf']),
+          _texto(raw['fecha_comprobante']),
+          _texto(raw['tipo_anulacion']).isEmpty
+              ? '04'
+              : _texto(raw['tipo_anulacion']),
+        ],
+  ];
+  return DgiiFormato(
+    tipo: '608',
+    rnc: _documento(data['rnc_negocio']),
+    periodo: _texto(data['period']),
+    columnas: dgiiColumnas608,
+    filas: filas,
+    desglosado: true,
+  );
+}
+
 DgiiFormato dgiiFormato606(Map<String, dynamic> data) {
   final desglosado = data['formato_version'] != null;
   final filas = <List<Object?>>[];

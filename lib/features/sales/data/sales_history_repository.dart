@@ -151,20 +151,24 @@ class SalesHistoryRepository {
     // Nota: las ventas anuladas (voided) SÍ se incluyen — deben quedar en el
     // historial marcadas como "Anulada", no desaparecer.
 
+    // Fechas LOCALES convertidas a UTC: sin zona, el servidor las leía como
+    // UTC y el filtro corría 4 horas (las ventas de la noche caían fuera).
     if (filter.from != null) {
-      query = query.gte('sale_date', filter.from!.toIso8601String());
+      final start = DateTime(
+        filter.from!.year,
+        filter.from!.month,
+        filter.from!.day,
+      );
+      query = query.gte('sale_date', start.toUtc().toIso8601String());
     }
     if (filter.to != null) {
       // incluir todo el día
-      final endOfDay = DateTime(
+      final nextDay = DateTime(
         filter.to!.year,
         filter.to!.month,
-        filter.to!.day,
-        23,
-        59,
-        59,
+        filter.to!.day + 1,
       );
-      query = query.lte('sale_date', endOfDay.toIso8601String());
+      query = query.lt('sale_date', nextDay.toUtc().toIso8601String());
     }
     if (filter.statuses.isNotEmpty) {
       query = query.inFilter('status', filter.statuses);
@@ -282,11 +286,34 @@ class SalesHistoryRepository {
   /// Llama al RPC `void_sale_with_stock_return` que hace todo atómicamente
   /// dentro de una transacción. El trigger trg_sale_items_stock se encarga
   /// de sumar el stock devuelto al producto.
-  Future<void> voidSaleWithStockReturn(String saleId) async {
-    await _client.rpc(
-      'void_sale_with_stock_return',
-      params: {'p_sale_id': saleId},
-    );
+  ///
+  /// [reasonCode] es el tipo de anulación de la DGII (01..10) para el 608
+  /// (migración 97). Devuelve el efectivo que salió de la caja ABIERTA de
+  /// quien anula: pasa cuando la venta se cobró en un turno ya cerrado.
+  Future<double> voidSaleWithStockReturn(
+    String saleId, {
+    String? reasonCode,
+  }) async {
+    final dynamic result;
+    try {
+      result = await _client.rpc(
+        'void_sale_with_stock_return',
+        params: {'p_sale_id': saleId, 'p_reason_code': reasonCode},
+      );
+    } on PostgrestException catch (error) {
+      // Base sin la migración 97: la firma con motivo no existe. Se anula con
+      // la de siempre (sin motivo) en vez de bloquear.
+      if (error.code != 'PGRST202') rethrow;
+      await _client.rpc(
+        'void_sale_with_stock_return',
+        params: {'p_sale_id': saleId},
+      );
+      return 0;
+    }
+    if (result is Map) {
+      return _d(result['cash_refunded_from_open_session']);
+    }
+    return 0;
   }
 
   /// Actualiza notas y/o cliente de una venta. No toca items ni totales.
@@ -380,18 +407,22 @@ class SalesHistoryRepository {
       }
     }
 
-    // Método de pago primario: tomamos el de la primera fila de payments.
-    // Si la venta tiene varios pagos con métodos distintos, la UI lo va a
-    // mostrar como el primero registrado.
+    // Métodos de pago en el orden en que se registraron. El primario es el
+    // primero; la edición necesita saber si hay más de uno para no aplastar un
+    // pago dividido (efectivo + tarjeta) en un solo método.
     final paymentRows = await _client
         .from('payments')
         .select('payment_method')
         .eq('sale_id', saleId)
-        .order('created_at')
-        .limit(1);
-    final paymentMethod = paymentRows.isEmpty
-        ? null
-        : (paymentRows.first as Map)['payment_method']?.toString();
+        .order('created_at');
+    final paymentMethods = <String>[];
+    for (final row in paymentRows) {
+      final method = (row as Map)['payment_method']?.toString();
+      if (method != null && !paymentMethods.contains(method)) {
+        paymentMethods.add(method);
+      }
+    }
+    final paymentMethod = paymentMethods.isEmpty ? null : paymentMethods.first;
 
     return SalesHistoryDetail(
       sale: SalesHistoryRow.fromMap({
@@ -407,6 +438,8 @@ class SalesHistoryRepository {
       subtotal: _d(sale['subtotal']),
       taxAmount: _d(sale['tax_amount']),
       paymentMethod: paymentMethod,
+      paymentMethods: paymentMethods,
+      paymentCount: paymentRows.length,
     );
   }
 
@@ -579,6 +612,8 @@ class SalesHistoryDetail {
     required this.subtotal,
     required this.taxAmount,
     this.paymentMethod,
+    this.paymentMethods = const [],
+    this.paymentCount = 0,
   });
 
   final SalesHistoryRow sale;
@@ -589,6 +624,12 @@ class SalesHistoryDetail {
   /// Método de pago primario de la venta (de la primera fila en `payments`).
   /// Null si la venta no tiene pagos registrados todavía.
   final String? paymentMethod;
+
+  /// Métodos distintos de todos sus pagos, en orden de registro.
+  final List<String> paymentMethods;
+
+  /// Cuántos pagos tiene (abonos incluidos).
+  final int paymentCount;
 }
 
 class SalesEditResult {

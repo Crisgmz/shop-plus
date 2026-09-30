@@ -41,6 +41,7 @@ class SalePrintSource {
     this.showBarcode = true,
     this.showItbis = true,
     this.qrBytes,
+    this.hideTaxBreakdown,
   });
 
   final String saleId;
@@ -95,6 +96,12 @@ class SalePrintSource {
 
   /// Bytes del QR (descargado de company_qr_url). Null → fallback al asset.
   final List<int>? qrBytes;
+
+  /// ITBIS cobrado pero sin desglose: precios y total con el impuesto
+  /// adentro. Null = la regla de siempre (solo Consumidor Final, B02). La nota
+  /// de crédito de una venta B02 lo pasa en true: se muestra igual que la
+  /// factura que modifica.
+  final bool? hideTaxBreakdown;
 }
 
 class SalePrintItemSource {
@@ -159,7 +166,8 @@ class SalePrintDocumentAdapter {
     // Consumidor Final: el ITBIS se cobra y queda registrado en la venta (607,
     // reportes), pero el documento no lo desglosa — precios, subtotal y total
     // salen con el impuesto adentro, igual que en la caja.
-    final taxIncluded = source.receiptType == 'consumer_final';
+    final taxIncluded =
+        source.hideTaxBreakdown ?? source.receiptType == 'consumer_final';
     return PrintDocumentData(
       documentType: _documentTypeForSale(source),
       documentNumber: source.saleNumber,
@@ -182,7 +190,11 @@ class SalePrintDocumentAdapter {
       changeAmount: source.changeAmount,
       showBarcode: source.showBarcode,
       receiptTypeLabel: _receiptTypeLabel(source.receiptType),
-      paymentTermsLabel: source.balanceDue > 0.0049 ? 'CRÉDITO' : 'CONTADO',
+      paymentTermsLabel: source.receiptType == 'credit_note'
+          ? 'DEVOLUCIÓN'
+          : source.balanceDue > 0.0049
+              ? 'CRÉDITO'
+              : 'CONTADO',
       // ITBIS solo si: el toggle de config está activo, NO es venta sin
       // comprobante, y al menos un ítem realmente lleva impuesto.
       showTax:
@@ -194,7 +206,9 @@ class SalePrintDocumentAdapter {
       observation: _nullIfBlank(source.observation),
       ncf: _nullIfBlank(source.ncf),
       notes: _nullIfBlank(source.notes),
-      footerMessage: 'Gracias por su compra',
+      footerMessage: source.receiptType == 'credit_note'
+          ? 'Documento de devolución'
+          : 'Gracias por su compra',
       items: source.items
           .map(
             (item) => PrintDocumentItem(
@@ -261,6 +275,8 @@ double _unitPriceWithTax(SalePrintItemSource item) {
 double _round2(double value) => (value * 100).roundToDouble() / 100;
 
 PrintDocumentType _documentTypeForSale(SalePrintSource source) {
+  // Devolución (migración 97): NOTA DE CRÉDITO, lleve o no NCF B04.
+  if (source.receiptType == 'credit_note') return PrintDocumentType.creditNote;
   if (_hasText(source.ncf)) {
     return PrintDocumentType.fiscalInvoice;
   }
@@ -295,6 +311,8 @@ String _receiptTypeLabel(String value) {
       return 'Régimen especial';
     case 'export':
       return 'Exportación';
+    case 'credit_note':
+      return 'Nota de crédito';
     default:
       return value.trim().isEmpty ? 'Venta' : value;
   }

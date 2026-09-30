@@ -85,3 +85,26 @@ divergentes sobre una base es insostenible: hay que **fusionar los árboles o
 separar las bases**. Mientras tanto, cualquier migración nueva debe numerarse
 desde la **85** y verificarse contra el estado real con
 `supabase/diagnostico/01_estado_real_bd.sql` antes de escribirla.
+
+## 30 sep 2026 — migraciones 96, 97 y 98
+
+Correr en este orden en el SQL Editor, cada una por separado:
+
+1. `sql-next/20260930_96_nota_credito_tipos.sql` — valores nuevos de enum.
+   Sin transacción: Postgres no deja usar un valor de enum en la misma
+   transacción que lo crea.
+2. `sql-next/20260930_97_ventas_anulaciones_devoluciones.sql` — editar,
+   anular, devolver y notas de crédito.
+3. `sql-next/20260930_98_reportes_fiscales_notas_credito.sql` — 607 con NC,
+   608, IT-1, reportes y emisor de los comprobantes.
+
+Después: desplegar shop-plus. Registrar la secuencia **B04** (Nota de
+crédito) en Configuración → NCF para que las devoluciones de ventas con
+comprobante tomen NCF.
+
+**Para flutter_shop+:** estas migraciones reemplazan `edit_sale_transactional`,
+`void_sale_with_stock_return` y `process_return` con las mismas firmas. NO
+volver a correr encima versiones anteriores de esas funciones (p. ej. su
+`20260904_87` / `20260904_88`): regresarían el inventario doble al editar y
+las devoluciones sin tope. Probadas en una base local con todas las
+migraciones de los dos árboles en orden de fecha.

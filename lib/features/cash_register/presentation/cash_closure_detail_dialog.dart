@@ -127,8 +127,12 @@ class _DialogBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final metrics = bundle.metrics;
-    final expectedCash =
-        metrics.expectedCashFromOpening(session.openingAmount);
+    // Cerrada: el esperado que se guardó al cerrar. Recalcularlo con datos de
+    // hoy (una anulación o un abono posteriores) dejaba "Esperado − Conteo"
+    // distinto de la "Diferencia" guardada.
+    final expectedCash = session.isOpen
+        ? metrics.expectedCashFromOpening(session.openingAmount)
+        : session.expectedAmount;
     final diff = session.differenceAmount;
 
     return Column(
@@ -191,6 +195,24 @@ class _DialogBody extends StatelessWidget {
                 _kv('  En efectivo', money(metrics.cashPayments)),
                 _kv('Total gastos', money(metrics.totalExpenses)),
                 _kv('  En efectivo', money(metrics.cashExpenses)),
+                // Todo lo que mueve el efectivo esperado, para que la cuenta
+                // se pueda seguir de arriba abajo.
+                if (metrics.changeGiven > 0)
+                  _kv('Cambio entregado', money(metrics.changeGiven)),
+                if (metrics.supplierCashPayments > 0)
+                  _kv('Pagos a proveedores',
+                      money(metrics.supplierCashPayments)),
+                if (metrics.cashRefunds > 0)
+                  _kv('Devoluciones', money(metrics.cashRefunds)),
+                if (metrics.cashDeposits > 0)
+                  _kv('Depósitos', money(metrics.cashDeposits)),
+                if (metrics.cashAdjustments > 0)
+                  _kv('Ajustes', money(metrics.cashAdjustments)),
+                if (metrics.cashWithdrawals > 0)
+                  _kv('Sangrías', money(metrics.cashWithdrawals)),
+                if (metrics.cashVoidRefunds > 0)
+                  _kv('Anulaciones de turnos anteriores',
+                      money(metrics.cashVoidRefunds)),
                 const SizedBox(height: 12),
                 _kv('Esperado en caja', money(expectedCash), bold: true),
                 if (session.closingAmount != null)

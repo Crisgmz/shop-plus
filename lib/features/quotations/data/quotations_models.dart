@@ -161,6 +161,8 @@ class QuoteCatalogProduct {
     this.barcode,
     this.description,
     this.packaging = ProductPackaging.none,
+    this.isTaxExempt = false,
+    this.priceIncludesTax = false,
   });
 
   final String id;
@@ -172,6 +174,15 @@ class QuoteCatalogProduct {
   final double taxRate;
   final double stock;
   final bool isActive;
+
+  /// Exento: no lleva ITBIS aunque tenga tasa (como en el POS).
+  final bool isTaxExempt;
+
+  /// El precio ya trae el ITBIS: se EXTRAE en vez de sumarse encima. Antes la
+  /// cotización lo sumaba y un producto de 118 salía en 139.24.
+  final bool priceIncludesTax;
+
+  double get effectiveTaxRate => isTaxExempt ? 0 : taxRate;
 
   /// Caja / paquete y sus precios, igual que en el POS. Sin empaque, la
   /// línea se cotiza por unidad como siempre.
@@ -189,6 +200,8 @@ class QuoteCatalogProduct {
       stock: _toDouble(map['stock']),
       isActive: map['is_active'] == true,
       packaging: ProductPackaging.fromMap(map),
+      isTaxExempt: map['is_tax_exempt'] == true,
+      priceIncludesTax: map['price_includes_tax'] == true,
     );
   }
 }
@@ -271,14 +284,26 @@ class QuoteDraftLine {
 
   double get netUnitPrice =>
       QuotationsMath.round2(presentationPrice * (1 - discountPct / 100));
-  double get lineSubtotal => QuotationsMath.round2(quantity * netUnitPrice);
-  double get lineTax =>
-      QuotationsMath.round2(lineSubtotal * (product.taxRate / 100));
-  double get lineTotal => QuotationsMath.round2(lineSubtotal + lineTax);
+
+  /// Bruto menos descuento: con precio ITBIS-incluido ya es el total.
+  double get lineNet => QuotationsMath.round2(quantity * netUnitPrice);
+
+  bool get _taxIncluded =>
+      product.priceIncludesTax && product.effectiveTaxRate > 0;
+
+  double get lineTax => QuotationsMath.lineTax(
+        lineNet,
+        product.effectiveTaxRate,
+        inclusive: _taxIncluded,
+      );
+  double get lineSubtotal =>
+      _taxIncluded ? QuotationsMath.round2(lineNet - lineTax) : lineNet;
+  double get lineTotal =>
+      _taxIncluded ? lineNet : QuotationsMath.round2(lineNet + lineTax);
 
   /// Monto absoluto del descuento (para persistir en `discount_amount`).
   double get discountAmount =>
-      QuotationsMath.round2(quantity * presentationPrice - lineSubtotal);
+      QuotationsMath.round2(quantity * presentationPrice - lineNet);
 
   QuoteDraftLine copyWith({
     QuoteCatalogProduct? product,
@@ -339,6 +364,7 @@ class QuoteCreateItem {
     this.uomFactor = 1,
     this.uomPrice,
     this.unitName,
+    this.priceIncludesTax = false,
   });
 
   final String productId;
@@ -364,6 +390,9 @@ class QuoteCreateItem {
   /// Cómo se llama la presentación en el documento ("Caja").
   final String? unitName;
 
+  /// El precio ya trae el ITBIS: se extrae (ver [QuoteCatalogProduct]).
+  final bool priceIncludesTax;
+
   bool get isPresentation => uom != 'unit' && uomPrice != null && uomFactor > 0;
 
   factory QuoteCreateItem.fromMap(Map<String, dynamic> map) {
@@ -382,6 +411,9 @@ class QuoteCreateItem {
       uomFactor: map['uom_factor'] == null ? 1 : _toDouble(map['uom_factor']),
       uomPrice: map['uom_price'] == null ? null : _toDouble(map['uom_price']),
       unitName: map['unit_name']?.toString(),
+      // No hay columna: se deduce de lo guardado. Con precio ITBIS-incluido
+      // el total de la línea es el neto (bruto − descuento).
+      priceIncludesTax: _looksTaxIncluded(map),
     );
   }
 
@@ -392,13 +424,22 @@ class QuoteCreateItem {
   /// El bruto sale del precio de la presentación cuando la línea la trae, como
   /// hace el checkout desde la migración 92: una caja a 2,639.83 no es
   /// 131.99 × 20 (= 2,639.80).
-  double get lineSubtotal => isPresentation
+  /// Bruto menos descuento. El bruto sale del precio de la presentación
+  /// cuando la línea la trae, como hace el checkout desde la migración 92.
+  double get lineNet => isPresentation
       ? QuotationsMath.round2(
           uomPrice! * presentationQuantity - discountAmount,
         )
       : QuotationsMath.round2(quantity * unitPrice - discountAmount);
-  double get lineTax => QuotationsMath.round2(lineSubtotal * (taxRate / 100));
-  double get lineTotal => QuotationsMath.round2(lineSubtotal + lineTax);
+
+  bool get _taxIncluded => priceIncludesTax && taxRate > 0;
+
+  double get lineTax =>
+      QuotationsMath.lineTax(lineNet, taxRate, inclusive: _taxIncluded);
+  double get lineSubtotal =>
+      _taxIncluded ? QuotationsMath.round2(lineNet - lineTax) : lineNet;
+  double get lineTotal =>
+      _taxIncluded ? lineNet : QuotationsMath.round2(lineNet + lineTax);
 
   Map<String, dynamic> toRpcMap() {
     return {
@@ -567,6 +608,7 @@ abstract class QuotationsRepositoryContract {
     String? cashSessionId,
     bool asCredit = false,
     int? creditDueDays,
+    String receiptType = 'consumer_final',
   });
   Future<void> deleteQuote(String quoteId);
 }
@@ -582,6 +624,30 @@ class QuotationsMath {
       round2(subtotal(items) + tax(items));
 
   static double round2(double value) => (value * 100).roundToDouble() / 100;
+
+  /// ITBIS de una línea, con la fórmula del checkout: encima del neto, o
+  /// extraído de él si el precio ya lo incluye.
+  static double lineTax(double net, double rate, {bool inclusive = false}) {
+    if (rate <= 0) return 0;
+    return round2(inclusive ? net * rate / (100 + rate) : net * rate / 100);
+  }
+}
+
+/// Una línea guardada con precio ITBIS-incluido tiene total = neto.
+bool _looksTaxIncluded(Map<String, dynamic> map) {
+  final tax = _toDouble(map['line_tax']);
+  if (tax <= 0) return false;
+  final total = _toDouble(map['line_total']);
+  final subtotal = _toDouble(map['line_subtotal']);
+  final discount = _toDouble(map['discount_amount']);
+  final factor = _toDouble(map['uom_factor']);
+  final uomPrice = map['uom_price'] == null ? null : _toDouble(map['uom_price']);
+  final quantity = _toDouble(map['quantity']);
+  final gross = uomPrice != null && factor > 0
+      ? uomPrice * quantity / factor
+      : quantity * _toDouble(map['unit_price']);
+  final net = gross - discount;
+  return (net - total).abs() < (net - subtotal).abs();
 }
 
 String? _nullIfEmpty(String? value) {

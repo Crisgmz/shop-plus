@@ -320,11 +320,18 @@ class PettyCashRepository {
     if (branchId == null) {
       throw Exception('No hay sucursal asignada.');
     }
-    await _client
+    // Bajo RLS, un DELETE sin permiso afecta 0 filas SIN error: se verifica.
+    final deleted = await _client
         .from('petty_cash_movements')
         .delete()
         .eq('id', movementId)
-        .eq('branch_id', branchId);
+        .eq('branch_id', branchId)
+        .select('id');
+    if ((deleted as List).isEmpty) {
+      throw Exception(
+        'No se pudo eliminar el movimiento: requiere rol de administrador.',
+      );
+    }
   }
 
   Future<List<PettyCashMovement>> fetchMovementsForSession(

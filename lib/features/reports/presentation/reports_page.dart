@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/theme/tokens.dart';
 import '../../../shared/errors/friendly_error.dart';
+import '../../../shared/fiscal/dgii_void_reasons.dart';
 import '../../../shared/formatters/formatters.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
@@ -661,6 +662,8 @@ class _CategoryContent extends StatelessWidget {
         return const _Dgii606Report();
       case ReportCategory.reporte607:
         return const _Dgii607Report();
+      case ReportCategory.reporte608:
+        return const _Dgii608Report();
       case ReportCategory.reporteIt1:
         return const _DgiiIt1Report();
       case ReportCategory.cierreZFiscal:
@@ -3581,7 +3584,10 @@ class _EstadoDiarioReport extends ConsumerWidget {
 
         final porDia = <DateTime, List<SaleDetailRow>>{};
         for (final r in vivas) {
-          final dia = DateTime(r.saleDate.year, r.saleDate.month, r.saleDate.day);
+          // Día LOCAL: la fecha llega en UTC y una venta de las 9 de la noche
+          // se agrupaba en el día siguiente.
+          final local = r.saleDate.toLocal();
+          final dia = DateTime(local.year, local.month, local.day);
           porDia.putIfAbsent(dia, () => []).add(r);
         }
         final dias = porDia.keys.toList()..sort();
@@ -4116,6 +4122,147 @@ class _Dgii607Report extends ConsumerWidget {
   }
 }
 
+/// 608 — comprobantes anulados del mes. Sección propia: no tiene montos ni
+/// documento de cliente, así que la vista previa del 606/607 no aplica.
+class _Dgii608Report extends ConsumerWidget {
+  const _Dgii608Report();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(dgii608Provider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _DgiiYearMonthPicker(),
+        async.when(
+          loading: () => const _LoadingBox(),
+          error: (e, _) => ErrorCard(
+            message: 'No se pudo generar 608: ${friendlyErrorMessage(e)}',
+            onRetry: () => ref.invalidate(dgii608Provider),
+          ),
+          data: (data) {
+            final formato = dgiiFormato608(data);
+            final fileName = 'DGII_F_608_${formato.rnc}_${formato.periodo}';
+            final rows = (data['rows'] as List?) ?? const [];
+            final count = formato.filas.length;
+            return _ReportCard(
+              title: '608 — Anulados DGII · Período ${formato.periodo}',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Wrap(
+                    spacing: AppTokens.s12,
+                    runSpacing: AppTokens.s8,
+                    children: [
+                      _DgiiBadge(
+                        'RNC: ${formato.rnc.isEmpty ? "no configurado" : formato.rnc}',
+                        isWarning: formato.rnc.isEmpty,
+                      ),
+                      _DgiiBadge('Anulados: $count'),
+                    ],
+                  ),
+                  if (formato.rnc.isEmpty)
+                    const _DgiiAviso(
+                      'Tu empresa no tiene RNC configurado. Configúralo en '
+                      'Configuración → Datos de la empresa para descargar.',
+                    ),
+                  const SizedBox(height: AppTokens.s12),
+                  if (rows.isEmpty)
+                    const Text(
+                      'No hay comprobantes anulados en este período.',
+                      style: TextStyle(color: AppTokens.mutedForeground),
+                    )
+                  else
+                    for (final raw in rows)
+                      if (raw is Map)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: Text(
+                                  '${raw['ncf']}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Text('${raw['sale_number'] ?? ''}'),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Text(
+                                  formatDate(
+                                    DateTime.tryParse(
+                                          '${raw['fecha_comprobante']}'
+                                                  .replaceAllMapped(
+                                            RegExp(r'^(\d{4})(\d{2})(\d{2})$'),
+                                            (m) => '${m[1]}-${m[2]}-${m[3]}',
+                                          ),
+                                        ) ??
+                                        DateTime.now(),
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                flex: 4,
+                                child: Text(
+                                  dgiiVoidReasonLabel(
+                                    raw['tipo_anulacion']?.toString(),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                  const SizedBox(height: AppTokens.s16),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.icon(
+                      onPressed: formato.rnc.isEmpty || count == 0
+                          ? null
+                          : () async {
+                              final messenger = ScaffoldMessenger.of(context);
+                              final saved = await FileIoHelper.saveBytes(
+                                bytes: Uint8List.fromList(
+                                  utf8.encode(formato.toTxt()),
+                                ),
+                                fileName: '$fileName.TXT',
+                                extension: 'txt',
+                                dialogTitle: 'Guardar $fileName para DGII',
+                              );
+                              if (!saved || !context.mounted) return;
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  backgroundColor: AppTokens.success,
+                                  content: Text(
+                                    '$fileName.TXT descargado ($count '
+                                    'registros). Súbelo a la oficina virtual '
+                                    'de DGII.',
+                                    style: const TextStyle(
+                                      color: AppTokens.successForeground,
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                      icon: const Icon(Icons.download_rounded, size: 18),
+                      label: Text('Descargar TXT ($fileName)'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
 class _DgiiIt1Report extends ConsumerWidget {
   const _DgiiIt1Report();
 
@@ -4202,6 +4349,11 @@ class _DgiiIt1Report extends ConsumerWidget {
                   _KVRow('Base gravada', money(d('sales_taxable'))),
                   _KVRow('Base exenta', money(d('sales_exempt'))),
                   _KVRow('ITBIS recibido', money(d('itbis_received'))),
+                  // Informativo (migración 98): las ventas sin comprobante
+                  // no facturan ITBIS y ya no se mezclan con las gravadas.
+                  if (d('sales_without_receipt') > 0)
+                    _KVRow('Ventas sin comprobante',
+                        money(d('sales_without_receipt'))),
                   const Divider(),
                   _KVRow('Compras totales', money(d('purchases_total'))),
                   _KVRow('ITBIS pagado', money(d('itbis_paid'))),

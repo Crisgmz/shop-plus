@@ -206,7 +206,12 @@ class PayablesRepository {
         .toList(growable: false);
   }
 
-  Future<void> registerPayment(PayablePaymentInput input) async {
+  /// [cashSessionId]: la caja ACTIVA del POS. Sin ella se usa la última
+  /// abierta por el usuario, que en cajas compartidas puede ser otra gaveta.
+  Future<void> registerPayment(
+    PayablePaymentInput input, {
+    String? cashSessionId,
+  }) async {
     final branchId = await _currentBranchId();
     if (branchId == null) {
       throw Exception('No hay sucursal asignada para este usuario.');
@@ -214,7 +219,9 @@ class PayablesRepository {
 
     // Camino transaccional (migración 69), espejo del de Cobros: pago, saldo
     // de la compra y saldo del proveedor en una sola transacción.
-    final openSessionId = await _currentOpenCashSessionId(branchId);
+    final openSessionId = (cashSessionId?.isNotEmpty ?? false)
+        ? cashSessionId
+        : await _currentOpenCashSessionId(branchId);
     try {
       await _client.rpc(
         'register_supplier_payment',

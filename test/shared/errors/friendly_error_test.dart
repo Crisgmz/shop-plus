@@ -113,6 +113,30 @@ void main() {
       );
     });
 
+    test('un nombre de producto en inglés no esconde el mensaje', () {
+      expect(
+        friendlyErrorMessage(
+          const PostgrestException(
+            message: 'Stock insuficiente para "Cable USB to Lightning": '
+                'disponible 1 requerido 3',
+            code: '22023',
+          ),
+        ),
+        'Stock insuficiente para "Cable USB to Lightning": disponible 1 '
+            'requerido 3.',
+      );
+      // Pero un mensaje de Postgres sigue oculto aunque cite nombres.
+      expect(
+        friendlyErrorMessage(
+          const PostgrestException(
+            message: 'relation "public.returns_x" does not exist',
+            code: 'XX000',
+          ),
+        ),
+        genericErrorMessage,
+      );
+    });
+
     test('los ids internos no se muestran', () {
       expect(
         friendlyErrorMessage(

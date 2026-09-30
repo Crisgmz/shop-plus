@@ -73,6 +73,7 @@ class _PrintReceiptDialogState extends ConsumerState<PrintReceiptDialog> {
         PrintDocumentType.purchaseOrder => 'Orden de compra',
         PrintDocumentType.paymentReceipt => 'Recibo de abono',
         PrintDocumentType.expenseVoucher => 'Comprobante de gasto',
+        PrintDocumentType.creditNote => 'Nota de crédito',
         _ => 'Recibo de venta',
       };
 

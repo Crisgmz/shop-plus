@@ -8,6 +8,7 @@ import '../../../shared/formatters/formatters.dart';
 import '../../../shared/responsive/responsive_layout.dart';
 import '../../cash_register/presentation/cash_register_providers.dart';
 import '../../cobros/presentation/cobros_providers.dart';
+import '../../sales/presentation/sales_providers.dart' show posDefaultReceiptTypeProvider;
 import '../../settings/presentation/app_settings_providers.dart';
 import '../data/quotations_models.dart';
 import '../../../shared/packaging/product_packaging.dart';
@@ -336,7 +337,9 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
                 // ventas: así el inventario descuenta bien al convertir.
                 quantity: item.baseQuantity,
                 unitPrice: item.unitPrice,
-                taxRate: item.product.taxRate,
+                // La tasa que se cobra: 0 si el producto es exento.
+                taxRate: item.product.effectiveTaxRate,
+                priceIncludesTax: item.product.priceIncludesTax,
                 discountAmount: item.discountAmount,
                 uom: item.uom.dbValue,
                 uomFactor: item.uomFactor,
@@ -432,6 +435,11 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
     if (quoteId == null) return;
 
     final settings = ref.read(appSettingsProvider).valueOrNull;
+    // El mismo comprobante por defecto que el POS.
+    final defaultReceiptType = await ref
+        .read(posDefaultReceiptTypeProvider.future)
+        .catchError((_) => 'consumer_final');
+    if (!mounted) return;
     final choice = await showConvertPaymentDialog(
       context,
       quoteCode: _quoteCode ?? 'la cotización',
@@ -441,6 +449,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
       hasClient: _clientId != null,
       creditAllowed: settings?.creditAllowSales ?? true,
       defaultCreditDays: settings?.creditDefaultDays ?? 30,
+      defaultReceiptType: defaultReceiptType,
     );
 
     if (choice == null || !mounted) return;
@@ -454,6 +463,7 @@ class _QuotationCreatePageState extends ConsumerState<QuotationCreatePage> {
             cashSessionId: ref.read(activeCashSessionIdProvider),
             asCredit: choice.asCredit,
             creditDueDays: choice.creditDueDays,
+            receiptType: choice.receiptType,
           );
       ref.invalidate(quotationDetailProvider(quoteId));
       ref.invalidate(quotationsFoundationProvider);

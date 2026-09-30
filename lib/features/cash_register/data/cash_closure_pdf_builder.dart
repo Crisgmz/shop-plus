@@ -70,8 +70,12 @@ class CashClosurePdfBuilder {
     final titleFont = isNarrow ? 10.0 : 12.0;
     final emphasizedFont = isNarrow ? 9.5 : 11.0;
 
-    final expectedCash =
-        metrics.expectedCashFromOpening(session.openingAmount);
+    // Cerrada: el esperado que se guardó al cerrar. Recalcularlo con datos de
+    // hoy (una anulación o un abono posteriores) dejaba "Esperado − Conteo"
+    // distinto de la "Diferencia" guardada.
+    final expectedCash = session.isOpen
+        ? metrics.expectedCashFromOpening(session.openingAmount)
+        : session.expectedAmount;
     final diff = session.differenceAmount;
 
     return pw.Column(
@@ -148,6 +152,16 @@ class CashClosurePdfBuilder {
               baseFont: baseFont),
         if (metrics.cashRefunds > 0)
           _kv('Devoluciones', money(metrics.cashRefunds), baseFont: baseFont),
+        if (metrics.cashDeposits > 0)
+          _kv('Depósitos', money(metrics.cashDeposits), baseFont: baseFont),
+        if (metrics.cashAdjustments > 0)
+          _kv('Ajustes', money(metrics.cashAdjustments), baseFont: baseFont),
+        if (metrics.cashWithdrawals > 0)
+          _kv('Sangrías', money(metrics.cashWithdrawals), baseFont: baseFont),
+        if (metrics.cashVoidRefunds > 0)
+          _kv('Anulaciones de turnos anteriores',
+              money(metrics.cashVoidRefunds),
+              baseFont: baseFont),
         _divider(),
         _kv('Esperado en caja', money(expectedCash),
             baseFont: emphasizedFont, bold: true),

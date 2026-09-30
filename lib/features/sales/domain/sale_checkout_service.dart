@@ -389,25 +389,6 @@ class NormalizedSaleCheckout {
         )
         .toList(growable: false);
   }
-
-  /// Líneas vendidas por presentación (caja, paquete…) para marcarlas en
-  /// `sale_items` después del cobro con `tag_sale_item_presentations`
-  /// (migración 89). Las de unidad no hacen falta: `uom` ya nace en 'unit'.
-  ///
-  /// `quantity` y `unit_price` van con el mismo redondeo que [toRpcItems]:
-  /// el RPC los usa para encontrar la fila exacta que insertó el checkout.
-  List<Map<String, dynamic>> toPresentationTags() => [
-        for (final item in items)
-          if (item.uom != 'unit' && item.uomFactor > 0)
-            {
-              'product_id': item.productId,
-              'quantity': item.quantity,
-              'unit_price': item.unitPrice,
-              'uom': item.uom,
-              'uom_factor': item.uomFactor,
-              'unit_name': item.unitName,
-            },
-      ];
 }
 
 class NormalizedSaleCheckoutItem {

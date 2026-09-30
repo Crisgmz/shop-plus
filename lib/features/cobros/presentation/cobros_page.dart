@@ -10,6 +10,7 @@ import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/print_receipt_dialog.dart';
 import '../../../shared/widgets/ui_custom.dart';
+import '../../cash_register/presentation/cash_register_providers.dart';
 import '../../clients/presentation/clients_providers.dart';
 import '../../sales/presentation/sales_providers.dart';
 import '../../settings/presentation/app_settings_providers.dart';
@@ -223,7 +224,10 @@ class _CobrosPageState extends ConsumerState<CobrosPage> {
     final repository = ref.read(cobrosRepositoryProvider);
 
     try {
-      await repository.registerPayment(input);
+      await repository.registerPayment(
+        input,
+        cashSessionId: ref.read(activeCashSessionIdProvider),
+      );
       if (!mounted) return;
 
       ref.invalidate(cobrosReceivablesProvider);
