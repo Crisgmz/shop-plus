@@ -86,7 +86,7 @@ separar las bases**. Mientras tanto, cualquier migración nueva debe numerarse
 desde la **85** y verificarse contra el estado real con
 `supabase/diagnostico/01_estado_real_bd.sql` antes de escribirla.
 
-## 30 sep 2026 — migraciones 96, 97 y 98
+## 30 sep 2026 — migraciones 96, 97, 98 y 99
 
 Correr en este orden en el SQL Editor, cada una por separado:
 
@@ -97,13 +97,17 @@ Correr en este orden en el SQL Editor, cada una por separado:
    anular, devolver y notas de crédito.
 3. `sql-next/20260930_98_reportes_fiscales_notas_credito.sql` — 607 con NC,
    608, IT-1, reportes y emisor de los comprobantes.
+4. `sql-next/20260930_99_precio_con_itbis_b02.sql` — en B02 se cobra el
+   precio con ITBIS escrito (`sale_items.inclusive_price`). Va DESPUÉS de la
+   97: reemplaza otra vez `edit_sale_transactional`.
 
 Después: desplegar shop-plus. Registrar la secuencia **B04** (Nota de
 crédito) en Configuración → NCF para que las devoluciones de ventas con
 comprobante tomen NCF.
 
 **Para flutter_shop+:** estas migraciones reemplazan `edit_sale_transactional`,
-`void_sale_with_stock_return` y `process_return` con las mismas firmas. NO
+`void_sale_with_stock_return` y `process_return` con las mismas firmas, y la
+99 `checkout_sale_transactional` y `hold_sale_transactional`. NO
 volver a correr encima versiones anteriores de esas funciones (p. ej. su
 `20260904_87` / `20260904_88`): regresarían el inventario doble al editar y
 las devoluciones sin tope. Probadas en una base local con todas las

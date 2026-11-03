@@ -316,9 +316,22 @@ class SaleCartItem {
     this.priceTier = 'retail',
     this.uom = PackagingUom.unit,
     this.presentationPriceOverride,
+    this.taxInclusive = false,
+    this.inclusivePriceOverride,
   }) : unitPrice = unitPrice ?? product.price;
 
   final SalesProduct product;
+
+  /// Venta B02 (Consumidor Final): la línea se cobra desde su precio CON
+  /// ITBIS —el que ve y escribe el cajero— y el impuesto se extrae. Así
+  /// 3 × 600.00 da 1,800.00 exactos; antes el 600 se volvía base redondeada
+  /// (508.47) y la línea daba 1,799.98 (migración 99). Lo pone la pantalla
+  /// según el comprobante.
+  final bool taxInclusive;
+
+  /// Precio CON ITBIS de UNA presentación escrito por el cajero. Null = el
+  /// precio base con su ITBIS, redondeado al centavo.
+  final double? inclusivePriceOverride;
 
   /// Cantidad en la PRESENTACIÓN de la línea ([uom]): "2" son 2 cajas en una
   /// línea por caja, o 2 unidades en una suelta. La plata y el inventario se
@@ -355,7 +368,8 @@ class SaleCartItem {
   /// True si el precio de la línea fue editado a mano y ya no corresponde al
   /// precio del tier seleccionado.
   bool get isCustomPrice =>
-      (unitPrice - product.priceFor(priceTier)).abs() > 0.005;
+      (unitPrice - product.priceFor(priceTier)).abs() > 0.005 ||
+      inclusivePriceOverride != null;
 
   /// Tasa de ITBIS que se cobra en esta línea: 0 si el producto está exento,
   /// igual que el RPC. Cualquier cálculo o pantalla del POS debe usar ESTA;
@@ -387,6 +401,19 @@ class SaleCartItem {
       presentationPriceOverride ??
       product.packaging.priceFor(uom, unitPrice, tier: priceTier);
 
+  /// La línea se cobra desde el precio con ITBIS: modo B02, con impuesto, y
+  /// un producto cuyo precio NO lo trae ya incluido.
+  bool get inclusiveMode =>
+      taxInclusive && taxRate > 0 && !product.priceIncludesTax;
+
+  /// Precio con ITBIS de UNA presentación: el escrito, o el base con su ITBIS.
+  double get inclusivePrice =>
+      inclusivePriceOverride ??
+      round2(presentationPrice * (1 + taxRate / 100));
+
+  /// Precio de UNA presentación con que se calcula la línea.
+  double get chargedPrice => inclusiveMode ? inclusivePrice : presentationPrice;
+
   /// Si la línea respeta la venta mínima del producto. Solo aplica suelto:
   /// una presentación completa nunca se bloquea.
   bool get respectsMinimum =>
@@ -404,6 +431,9 @@ class SaleCartItem {
     PackagingUom? uom,
     double? presentationPriceOverride,
     bool clearPresentationPrice = false,
+    bool? taxInclusive,
+    double? inclusivePriceOverride,
+    bool clearInclusivePrice = false,
   }) {
     return SaleCartItem(
       product: product,
@@ -418,6 +448,12 @@ class SaleCartItem {
       presentationPriceOverride: clearPresentationPrice
           ? null
           : (presentationPriceOverride ?? this.presentationPriceOverride),
+      taxInclusive: taxInclusive ?? this.taxInclusive,
+      // El precio con ITBIS escrito a mano corre la misma suerte que el de la
+      // presentación: cambiar de presentación o de tipo de precio lo descarta.
+      inclusivePriceOverride: clearInclusivePrice || clearPresentationPrice
+          ? null
+          : (inclusivePriceOverride ?? this.inclusivePriceOverride),
     );
   }
 
@@ -429,7 +465,8 @@ class SaleCartItem {
 
   // Bruto desde el precio de la presentación × cuántas se llevan, igual que
   // el RPC. En una línea suelta es idéntico a unitario × cantidad.
-  double get _lineGrossCents => grossCents(quantity, presentationPrice);
+  // En modo B02, desde el precio CON ITBIS (ver [inclusiveMode]).
+  double get _lineGrossCents => grossCents(quantity, chargedPrice);
 
   double get _lineDiscountCents => (_lineGrossCents * (discountPct / 100))
       .roundToDouble()
@@ -440,7 +477,8 @@ class SaleCartItem {
   /// con precio ITBIS-incluido es el TOTAL a cobrar de la línea.
   double get _lineNetCents => _lineGrossCents - _lineDiscountCents;
 
-  bool get _taxIncluded => product.priceIncludesTax && taxRate > 0;
+  bool get _taxIncluded =>
+      (product.priceIncludesTax || inclusiveMode) && taxRate > 0;
 
   double get _lineTaxCents =>
       taxCents(_lineNetCents, taxRate, inclusive: _taxIncluded);
@@ -759,6 +797,7 @@ class SalesRepository {
                 uom: item.uom.dbValue,
                 uomFactor: item.uomFactor,
                 uomPrice: item.isPresentation ? item.presentationPrice : null,
+                inclusivePrice: item.inclusiveMode ? item.inclusivePrice : null,
                 unitName: item.isPresentation ? item.presentationLabel : null,
               ),
             )
@@ -938,6 +977,7 @@ class SalesRepository {
                 uom: item.uom.dbValue,
                 uomFactor: item.uomFactor,
                 uomPrice: item.isPresentation ? item.presentationPrice : null,
+                inclusivePrice: item.inclusiveMode ? item.inclusivePrice : null,
                 unitName: item.isPresentation ? item.presentationLabel : null,
               ),
             )
@@ -987,26 +1027,32 @@ class SalesRepository {
   /// migración 92: si la base todavía no la tiene, se relee sin esa columna en
   /// vez de fallar. Solo se atrapa ESE caso; cualquier otra columna que falte
   /// sigue subiendo como error.
+  ///
+  /// También `inclusive_price` (migración 99): sin ella, se relee sin esa
+  /// columna, y después sin `uom_price`.
   Future<PostgrestList> _fetchSaleItemsWithUomPrice(
     String saleId,
     String columns,
   ) async {
-    try {
-      return await _client
-          .from('sale_items')
-          .select('$columns, uom_price')
-          .eq('sale_id', saleId)
-          .order('created_at');
-    } on PostgrestException catch (error) {
-      final missingUomPrice =
-          error.code == '42703' && error.message.contains('uom_price');
-      if (!missingUomPrice) rethrow;
-      return _client
-          .from('sale_items')
-          .select(columns)
-          .eq('sale_id', saleId)
-          .order('created_at');
+    for (final extra in const [', uom_price, inclusive_price', ', uom_price']) {
+      try {
+        return await _client
+            .from('sale_items')
+            .select('$columns$extra')
+            .eq('sale_id', saleId)
+            .order('created_at');
+      } on PostgrestException catch (error) {
+        final missingColumn = error.code == '42703' &&
+            (error.message.contains('inclusive_price') ||
+                error.message.contains('uom_price'));
+        if (!missingColumn) rethrow;
+      }
     }
+    return _client
+        .from('sale_items')
+        .select(columns)
+        .eq('sale_id', saleId)
+        .order('created_at');
   }
 
   /// Descarta una cuenta GUARDADA (estado `pending`): devuelve el stock
@@ -1462,7 +1508,11 @@ class SalesRepository {
                     : '$base\nIMEI: ${imeis.join(", ")}';
               }(),
               quantity: presentationQuantity(item),
-              unitPrice: presentationUnitPrice(item),
+              // Venta B02 cobrada desde el precio con ITBIS (migración 99):
+              // se imprime ese precio, así cantidad × precio = total.
+              unitPrice: item['inclusive_price'] != null
+                  ? _toDouble(item['inclusive_price'])
+                  : presentationUnitPrice(item),
               presentationLabel: presentationLabelOf(item),
               lineDiscount: _toDouble(item['discount_amount']),
               lineSubtotal: _toDouble(item['line_subtotal']),
@@ -2147,6 +2197,9 @@ SaleCartItem? cartItemFromHeldSaleRow(
     uom: PackagingUom.fromDb(row['uom']?.toString()),
     uomFactor: _toDouble(row['uom_factor']),
     uomPrice: row['uom_price'] == null ? null : _toDouble(row['uom_price']),
+    inclusivePrice: row['inclusive_price'] == null
+        ? null
+        : _toDouble(row['inclusive_price']),
     imeis: row['imeis'] is List
         ? (row['imeis'] as List)
               .map((e) => e.toString())
@@ -2171,6 +2224,7 @@ SaleCartItem? cartItemFromSaleLine({
   PackagingUom uom = PackagingUom.unit,
   double uomFactor = 1,
   double? uomPrice,
+  double? inclusivePrice,
   List<String> imeis = const <String>[],
 }) {
   final qty = baseQuantity;
@@ -2211,12 +2265,27 @@ SaleCartItem? cartItemFromSaleLine({
           storedFactor,
         )
       : unitPrice;
+  // Venta B02 cobrada desde el precio CON ITBIS (migración 99): vuelve igual.
+  // Si el empaque cambió y la línea se reabre suelta, el precio con ITBIS se
+  // reparte por unidad.
+  final storedInclusive = inclusivePrice != null &&
+          product.effectiveTaxRate > 0 &&
+          !product.priceIncludesTax
+      ? (keepsPresentation || !soldAsPresentation
+          ? inclusivePrice
+          : ProductPackaging.unitPriceFromPresentation(
+              inclusivePrice,
+              storedFactor,
+            ))
+      : null;
   // El descuento se guarda en monto; el carrito trabaja en porcentaje,
   // sobre el mismo bruto con que lo calculó el RPC.
-  final gross = keepsPresentation
-      ? quantity *
-          (presentationPriceOverride ?? configuredPresentationPrice!)
-      : qty * lineUnitPrice;
+  final gross = storedInclusive != null
+      ? quantity * storedInclusive
+      : keepsPresentation
+          ? quantity *
+              (presentationPriceOverride ?? configuredPresentationPrice!)
+          : qty * lineUnitPrice;
   final discountPct = gross > 0
       ? (discountAmount / gross * 100).clamp(0, 100).toDouble()
       : 0.0;
@@ -2229,6 +2298,8 @@ SaleCartItem? cartItemFromSaleLine({
     presentationPriceOverride: presentationPriceOverride,
     discountPct: discountPct,
     imeis: imeis,
+    taxInclusive: storedInclusive != null,
+    inclusivePriceOverride: storedInclusive,
   );
 }
 

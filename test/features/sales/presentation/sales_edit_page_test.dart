@@ -31,7 +31,8 @@ SalesProduct _vasosCon({double stock = 580}) => SalesProduct(
   ),
 );
 
-SalesHistoryDetail _detailFor(String receiptType) => SalesHistoryDetail(
+SalesHistoryDetail _detailFor(String receiptType, {double? inclusivePrice}) =>
+    SalesHistoryDetail(
   sale: SalesHistoryRow.fromMap({
     'id': 'venta',
     'sale_number': 'FA-000008',
@@ -59,6 +60,7 @@ SalesHistoryDetail _detailFor(String receiptType) => SalesHistoryDetail(
       'uom_factor': 20,
       'uom_price': 6182.20,
       'unit_name': 'Caja',
+      'inclusive_price': ?inclusivePrice,
     }),
   ],
   subtotal: 24728.80,
@@ -70,14 +72,15 @@ SalesHistoryDetail _detailFor(String receiptType) => SalesHistoryDetail(
 
 /// Devuelve FA-000008 y guarda lo que la pantalla manda al RPC.
 class _FakeHistoryRepo implements SalesHistoryRepository {
-  _FakeHistoryRepo(this.receiptType);
+  _FakeHistoryRepo(this.receiptType, {this.inclusivePrice});
 
   final String receiptType;
+  final double? inclusivePrice;
   List<Map<String, dynamic>>? saved;
 
   @override
   Future<SalesHistoryDetail?> fetchDetail(String saleId) async =>
-      _detailFor(receiptType);
+      _detailFor(receiptType, inclusivePrice: inclusivePrice);
 
   @override
   Future<SalesEditResult> editSale({
@@ -118,12 +121,17 @@ Future<_FakeHistoryRepo> _openEdit(
   double stock = 580,
   String? clientRnc = '133334781',
   String receiptType = 'fiscal_credit',
+  bool inclusiveSupported = false,
+  double? storedInclusivePrice,
 }) async {
   tester.view.physicalSize = const Size(1400, 1000);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
 
-  final repo = _FakeHistoryRepo(receiptType);
+  final repo = _FakeHistoryRepo(
+    receiptType,
+    inclusivePrice: storedInclusivePrice,
+  );
   final router = GoRouter(
     initialLocation: '/editar',
     routes: [
@@ -158,6 +166,9 @@ Future<_FakeHistoryRepo> _openEdit(
           ],
         ),
         appSettingsProvider.overrideWith(_FakeSettings.new),
+        inclusivePricingSupportedProvider.overrideWith(
+          (ref) async => inclusiveSupported,
+        ),
       ],
       child: MaterialApp.router(routerConfig: router),
     ),
@@ -281,5 +292,82 @@ void main() {
     // Lo que se guarda sigue siendo el precio base de la caja.
     await _save(tester);
     expect(repo.saved!.single['uom_price'], 6182.20);
+  });
+
+  group('B02 con la migración 99: se cobra el precio con ITBIS escrito', () {
+    testWidgets('una línea vieja sin tocar queda como se cobró', (
+      tester,
+    ) async {
+      final repo = await _openEdit(
+        tester,
+        receiptType: 'consumer_final',
+        inclusiveSupported: true,
+      );
+
+      expect(find.widgetWithText(TextField, '7295'), findsOneWidget);
+      // No 4 × 7,295.00: el total de la factura no se mueve un centavo.
+      expect(find.text('RD\$ 29,179.98'), findsWidgets);
+
+      await _save(tester);
+      expect(repo.saved!.single.containsKey('inclusive_price'), isFalse);
+    });
+
+    testWidgets('4 cajas a 7,000.00 escrito son 28,000.00', (tester) async {
+      final repo = await _openEdit(
+        tester,
+        receiptType: 'consumer_final',
+        inclusiveSupported: true,
+      );
+
+      await tester.enterText(find.widgetWithText(TextField, '7295'), '7000');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      // Antes: 5,932.20 × 4 + 18% = 27,999.98.
+      expect(find.text('RD\$ 28,000.00'), findsWidgets);
+      expect(find.text('RD\$ 27,999.98'), findsNothing);
+
+      await _save(tester);
+      final item = repo.saved!.single;
+      expect(item['inclusive_price'], 7000);
+      // La base sigue viajando: es la que usa B01 o una base sin la 99.
+      expect(item['uom_price'], 5932.20);
+      expect(item['quantity'], 80);
+    });
+
+    testWidgets('una línea que guardó su precio con ITBIS lo conserva', (
+      tester,
+    ) async {
+      final repo = await _openEdit(
+        tester,
+        receiptType: 'consumer_final',
+        inclusiveSupported: true,
+        storedInclusivePrice: 7295,
+      );
+
+      expect(find.widgetWithText(TextField, '7295'), findsOneWidget);
+      expect(find.text('RD\$ 29,180.00'), findsWidgets);
+
+      await _save(tester);
+      expect(repo.saved!.single['inclusive_price'], 7295);
+    });
+
+    testWidgets('en B01 no se manda aunque la base lo soporte', (
+      tester,
+    ) async {
+      final repo = await _openEdit(tester, inclusiveSupported: true);
+
+      await tester.enterText(
+        find.widgetWithText(TextField, '6182.20'),
+        '6000',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      await _save(tester);
+      final item = repo.saved!.single;
+      expect(item.containsKey('inclusive_price'), isFalse);
+      expect(item['uom_price'], 6000);
+    });
   });
 }

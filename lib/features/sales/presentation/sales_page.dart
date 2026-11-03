@@ -94,6 +94,27 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// desglosa — los precios y el total se muestran con el impuesto adentro.
   bool get _hideTaxBreakdown => _chargesTax && _receiptType == 'consumer_final';
 
+  /// B02 con ITBIS: cada línea se cobra desde su precio CON ITBIS —el que se
+  /// ve y se escribe— y el impuesto se extrae (migración 99). Así 3 × 600.00
+  /// da 1,800.00, no 1,799.98. Solo si la base ya lo soporta.
+  bool get _b02Inclusive =>
+      _hideTaxBreakdown &&
+      (ref.read(inclusivePricingSupportedProvider).valueOrNull ?? false);
+
+  /// Pone cada línea en el modo del comprobante actual. Corre en cada build:
+  /// el comprobante, el cliente (si no paga ITBIS) y el soporte de la base
+  /// cambian por separado. Al volver a B02 se recupera el precio escrito.
+  /// Una devolución de una venta no se toca: muestra lo que se cobró.
+  void _syncTaxInclusive() {
+    if (_returnOriginalSaleId != null) return;
+    final want = _b02Inclusive;
+    for (var i = 0; i < _cart.length; i++) {
+      if (_cart[i].taxInclusive != want) {
+        _cart[i] = _cart[i].copyWith(taxInclusive: want);
+      }
+    }
+  }
+
   /// El cliente seleccionado no paga ITBIS ("Cobrar ITBIS" apagado o exento en
   /// su ficha). El checkout aplica la misma regla (migración 91).
   bool get _clientSkipsTax {
@@ -180,6 +201,10 @@ class _SalesPageState extends ConsumerState<SalesPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Se observa para recalcular cuando se sepa si la base soporta el precio
+    // con ITBIS (migración 99).
+    ref.watch(inclusivePricingSupportedProvider);
+    _syncTaxInclusive();
     final productsAsync = ref.watch(salesProductsProvider);
     final categoriesAsync = ref.watch(salesCategoriesProvider);
     final clientsAsync = ref.watch(salesClientsProvider);
@@ -566,7 +591,12 @@ class _SalesPageState extends ConsumerState<SalesPage> {
                           chargesTax: _chargesTax,
                           pricesIncludeTax: _hideTaxBreakdown,
                           onRemove: () => _removeItem(i),
-                          onPriceChanged: (value) => _setUnitPrice(i, value),
+                          onPriceChanged: (value, {inclusivePrice}) =>
+                              _setUnitPrice(
+                                i,
+                                value,
+                                inclusivePrice: inclusivePrice,
+                              ),
                           onQuantityChanged: (value) => _setQty(i, value),
                           onDiscountChanged: (value) =>
                               _setDiscountPct(i, value),
@@ -1119,7 +1149,7 @@ class _SalesPageState extends ConsumerState<SalesPage> {
   /// Setea el precio unitario de una línea (override manual). Conserva el tier
   /// elegido: si el nuevo precio no coincide con el del tier, la línea se
   /// mostrará como "Personalizado".
-  void _setUnitPrice(int index, double value) {
+  void _setUnitPrice(int index, double value, {double? inclusivePrice}) {
     if (value < 0) return;
     if (_blockLinkedReturnEdit()) return;
     final item = _cart[index];
@@ -1138,10 +1168,22 @@ class _SalesPageState extends ConsumerState<SalesPage> {
         ),
       );
     }
+    // En B02 se guarda además el precio CON ITBIS escrito: con él se cobra la
+    // línea exacta (migración 99). [value] es la base, para B01 o sin
+    // comprobante.
+    final inclusive = _b02Inclusive ? inclusivePrice : null;
     setState(
       () => _cart[index] = item.isPresentation
-          ? item.copyWith(presentationPriceOverride: value)
-          : item.copyWith(unitPrice: value),
+          ? item.copyWith(
+              presentationPriceOverride: value,
+              inclusivePriceOverride: inclusive,
+              clearInclusivePrice: inclusive == null,
+            )
+          : item.copyWith(
+              unitPrice: value,
+              inclusivePriceOverride: inclusive,
+              clearInclusivePrice: inclusive == null,
+            ),
     );
     _persistDraft();
   }

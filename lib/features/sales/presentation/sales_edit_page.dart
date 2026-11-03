@@ -24,10 +24,16 @@ import 'sales_providers.dart';
 /// [id] no cambia mientras la pantalla está abierta: es la llave del widget
 /// aunque la línea cambie de presentación o se borre otra antes que ella.
 class _EditLine {
-  _EditLine(this.id, this.item);
+  _EditLine(this.id, this.item, {this.b02 = false});
 
   final int id;
   SaleCartItem item;
+
+  /// En B02 la línea se cobra desde su precio CON ITBIS (migración 99). Las
+  /// líneas viejas que no lo guardaron quedan como se cobraron —si no, el
+  /// total cambiaría un centavo sin que nadie las toque— hasta que se les
+  /// escriba el precio o se les cambie la presentación o el tipo de precio.
+  bool b02;
 }
 
 /// Lo que viaja a `edit_sale_transactional` por cada línea: los mismos campos
@@ -45,6 +51,9 @@ Map<String, dynamic> _toRpcItem(SaleCartItem item) => {
       // Sin esto el RPC devolvería los equipos al inventario y la venta
       // quedaría sin IMEIs.
       if (item.imeis.isNotEmpty) 'imeis': item.imeis,
+      // B02: el precio con ITBIS que se ve. El RPC cobra con él y saca el
+      // impuesto de adentro (migración 99).
+      if (item.inclusiveMode) 'inclusive_price': item.inclusivePrice,
       // Sin esto el RPC cobraría unitario × unidades base y la caja perdería
       // su precio (migración 92).
       if (item.isPresentation) ...{
@@ -134,8 +143,27 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
   bool get _imeiModeEnabled =>
       ref.read(appSettingsProvider).valueOrNull?.invImeiMode ?? false;
 
-  void _addLine(SaleCartItem item) =>
-      _lines.add(_EditLine(_nextLineId++, item));
+  void _addLine(SaleCartItem item, {bool b02 = true}) =>
+      _lines.add(_EditLine(_nextLineId++, item, b02: b02));
+
+  /// B02 con ITBIS y la base ya guarda el precio con ITBIS: igual que el POS,
+  /// 3 × 600.00 da 1,800.00 y no 1,799.98.
+  bool get _b02Inclusive =>
+      _pricesIncludeTax &&
+      (ref.read(inclusivePricingSupportedProvider).valueOrNull ?? false);
+
+  /// Pone cada línea en el modo del comprobante y cliente actuales. Corre en
+  /// cada build, como en el POS: al volver a B02 se recupera el precio
+  /// escrito.
+  void _syncTaxInclusive() {
+    final want = _b02Inclusive;
+    for (final line in _lines) {
+      final inclusive = line.b02 && want;
+      if (line.item.taxInclusive != inclusive) {
+        line.item = line.item.copyWith(taxInclusive: inclusive);
+      }
+    }
+  }
 
   void _snack(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -177,10 +205,11 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
         uom: si.uom,
         uomFactor: si.uomFactor,
         uomPrice: si.uomPrice,
+        inclusivePrice: si.inclusivePrice,
         imeis: si.imeis,
       );
       if (item == null) continue;
-      _addLine(item);
+      _addLine(item, b02: item.taxInclusive);
       _originalBase[pid] = (_originalBase[pid] ?? 0) + si.quantity;
       if (si.imeis.isNotEmpty) {
         _originalImeis.putIfAbsent(pid, () => <String>{}).addAll(si.imeis);
@@ -250,21 +279,33 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     setState(() => _lines[index].item = next);
   }
 
-  /// En una línea por caja el campo ES el precio de la caja.
-  void _setPrice(int index, double value) {
+  /// En una línea por caja el campo ES el precio de la caja. En B02 llega
+  /// además [inclusivePrice], el precio con ITBIS escrito: con él se cobra.
+  void _setPrice(int index, double value, {double? inclusivePrice}) {
     if (value < 0) return;
-    final item = _lines[index].item;
+    final line = _lines[index];
+    final item = line.item;
     _warnBelowCost(
       item.product,
       item.isPresentation
           ? ProductPackaging.unitPriceFromPresentation(value, item.uomFactor)
           : value,
     );
-    setState(
-      () => _lines[index].item = item.isPresentation
-          ? item.copyWith(presentationPriceOverride: value)
-          : item.copyWith(unitPrice: value),
-    );
+    final inclusive = _b02Inclusive ? inclusivePrice : null;
+    setState(() {
+      if (inclusive != null) line.b02 = true;
+      line.item = item.isPresentation
+          ? item.copyWith(
+              presentationPriceOverride: value,
+              inclusivePriceOverride: inclusive,
+              clearInclusivePrice: inclusive == null,
+            )
+          : item.copyWith(
+              unitPrice: value,
+              inclusivePriceOverride: inclusive,
+              clearInclusivePrice: inclusive == null,
+            );
+    });
   }
 
   void _setDiscount(int index, double value) {
@@ -280,13 +321,15 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     final item = _lines[index].item;
     final newPrice = item.product.priceFor(tierKey);
     _warnBelowCost(item.product, newPrice);
-    setState(
-      () => _lines[index].item = item.copyWith(
+    setState(() {
+      // Precio nuevo del catálogo: se cobra como en el POS.
+      _lines[index].b02 = true;
+      _lines[index].item = item.copyWith(
         unitPrice: newPrice,
         priceTier: tierKey,
         clearPresentationPrice: true,
-      ),
-    );
+      );
+    });
   }
 
   /// Caja ↔ Paquete ↔ Suelto. Reinicia la cantidad (1, o la venta mínima si
@@ -312,6 +355,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     );
     setState(() {
       if (target == -1) {
+        _lines[index].b02 = true;
         _lines[index].item = candidate;
       } else {
         final merged = _lines[target].item;
@@ -546,6 +590,8 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
     final lineProductsAsync =
         ref.watch(saleLineProductsProvider(widget.saleId));
     final clientsAsync = ref.watch(salesClientsProvider);
+    // Si la base guarda el precio con ITBIS (migración 99), ver _b02Inclusive.
+    ref.watch(inclusivePricingSupportedProvider);
 
     return ModulePage(
       title: 'Editar venta',
@@ -622,6 +668,7 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
                 products,
                 lineProductsAsync.valueOrNull ?? const [],
               );
+              _syncTaxInclusive();
               final shades = shadesByProduct([
                 for (final line in _lines) line.item.product.id,
               ]);
@@ -638,7 +685,8 @@ class _SalesEditPageState extends ConsumerState<SalesEditPage> {
                       // Con IMEIs la cantidad son los equipos.
                       quantityReadOnly: _lines[i].item.imeis.isNotEmpty,
                       onRemove: () => setState(() => _lines.removeAt(i)),
-                      onPriceChanged: (v) => _setPrice(i, v),
+                      onPriceChanged: (v, {inclusivePrice}) =>
+                          _setPrice(i, v, inclusivePrice: inclusivePrice),
                       onQuantityChanged: (v) => _setQty(i, v),
                       onDiscountChanged: (v) => _setDiscount(i, v),
                       onPriceTierChanged: (tier) => _setPriceTier(i, tier),

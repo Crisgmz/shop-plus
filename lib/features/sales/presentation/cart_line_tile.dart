@@ -94,7 +94,10 @@ class CartLineTile extends ConsumerStatefulWidget {
   final bool pricesIncludeTax;
 
   final VoidCallback onRemove;
-  final ValueChanged<double> onPriceChanged;
+  /// Precio escrito. [price] es el BASE (sin ITBIS). Si la línea muestra el
+  /// precio con ITBIS (B02), [inclusivePrice] trae lo que escribió el cajero:
+  /// con él se cobra la línea exacta (migración 99).
+  final void Function(double price, {double? inclusivePrice}) onPriceChanged;
   final ValueChanged<double> onQuantityChanged;
   final ValueChanged<double> onDiscountChanged;
   final ValueChanged<String> onPriceTierChanged;
@@ -161,7 +164,9 @@ class _CartLineTileState extends ConsumerState<CartLineTile> {
     final uomChanged = oldWidget.item.uom != widget.item.uom;
     if (uomChanged ||
         oldWidget.pricesIncludeTax != widget.pricesIncludeTax ||
-        oldWidget.item.presentationPrice != widget.item.presentationPrice) {
+        oldWidget.item.presentationPrice != widget.item.presentationPrice ||
+        oldWidget.item.inclusiveMode != widget.item.inclusiveMode ||
+        oldWidget.item.inclusivePrice != widget.item.inclusivePrice) {
       _priceCtrl.text = _fmtNum(_displayPrice);
     }
     if (uomChanged || oldWidget.item.quantity != widget.item.quantity) {
@@ -196,7 +201,12 @@ class _CartLineTileState extends ConsumerState<CartLineTile> {
 
   double _withTax(double base) => _round2(base * _taxFactor);
 
-  double get _displayPrice => _withTax(widget.item.presentationPrice);
+  /// En B02 con la línea cobrada desde el precio con ITBIS, se muestra ESE
+  /// precio tal cual (600.00), no la base × 1.18 redondeada (599.99).
+  double get _displayPrice =>
+      widget.pricesIncludeTax && widget.item.inclusiveMode
+          ? widget.item.inclusivePrice
+          : _withTax(widget.item.presentationPrice);
 
   static String _fmtNum(double v) {
     if (v == v.roundToDouble()) return v.toInt().toString();
@@ -408,7 +418,16 @@ class _CartLineTileState extends ConsumerState<CartLineTile> {
                         // el precio base, que al revertir el ITBIS podría moverse
                         // un centavo.
                         if (v == null || v == _displayPrice) return;
-                        widget.onPriceChanged(_round2(v / _taxFactor));
+                        if (_taxFactor == 1) {
+                          widget.onPriceChanged(v);
+                          return;
+                        }
+                        // Precio con ITBIS: va la base (para B01 o sin
+                        // comprobante) y el escrito, que es el que se cobra.
+                        widget.onPriceChanged(
+                          _round2(v / _taxFactor),
+                          inclusivePrice: v,
+                        );
                       },
                     ),
                   ),

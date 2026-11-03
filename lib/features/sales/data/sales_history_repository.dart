@@ -373,23 +373,25 @@ class SalesHistoryRepository {
         'id, product_id, description, quantity, unit_price, '
         'discount_amount, tax_rate, line_subtotal, line_tax, line_total, '
         'uom, uom_factor, unit_name, imeis';
-    PostgrestList itemRows;
-    try {
-      itemRows = await _client
-          .from('sale_items')
-          .select('$itemColumns, uom_price')
-          .eq('sale_id', saleId)
-          .order('created_at');
-    } on PostgrestException catch (error) {
-      final missingUomPrice =
-          error.code == '42703' && error.message.contains('uom_price');
-      if (!missingUomPrice) rethrow;
-      itemRows = await _client
-          .from('sale_items')
-          .select(itemColumns)
-          .eq('sale_id', saleId)
-          .order('created_at');
+    // `inclusive_price` llega con la migración 99: sin ella se relee sin esa
+    // columna, y después sin `uom_price`.
+    PostgrestList? itemRows;
+    for (final extra in const [', uom_price, inclusive_price', ', uom_price', '']) {
+      try {
+        itemRows = await _client
+            .from('sale_items')
+            .select('$itemColumns$extra')
+            .eq('sale_id', saleId)
+            .order('created_at');
+        break;
+      } on PostgrestException catch (error) {
+        final missingColumn = error.code == '42703' &&
+            (error.message.contains('inclusive_price') ||
+                error.message.contains('uom_price'));
+        if (!missingColumn || extra.isEmpty) rethrow;
+      }
     }
+    itemRows ??= const [];
 
     final clientId = sale['client_id']?.toString();
     // Sin ficha puede haber un nombre escrito a mano (venta que vino de una
@@ -669,6 +671,7 @@ class SalesHistoryItem {
     this.uomPrice,
     this.unitName,
     this.imeis = const <String>[],
+    this.inclusivePrice,
   });
 
   final String id;
@@ -693,6 +696,10 @@ class SalesHistoryItem {
 
   /// Cómo se llamó la presentación en la factura ("Caja").
   final String? unitName;
+
+  /// Precio CON ITBIS de una presentación con que se cobró (venta B02,
+  /// migración 99). Null = precio base de siempre.
+  final double? inclusivePrice;
 
   /// Equipos vendidos en la línea. La edición tiene que reenviarlos: el RPC
   /// devuelve al inventario los de las líneas viejas y solo vuelve a sacar
@@ -740,6 +747,8 @@ class SalesHistoryItem {
       uomFactor: _d(map['uom_factor']) > 0 ? _d(map['uom_factor']) : 1,
       uomPrice: map['uom_price'] == null ? null : _d(map['uom_price']),
       unitName: _s(map['unit_name']),
+      inclusivePrice:
+          map['inclusive_price'] == null ? null : _d(map['inclusive_price']),
       imeis: map['imeis'] is List
           ? (map['imeis'] as List)
               .map((e) => e.toString().trim())

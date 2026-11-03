@@ -78,6 +78,7 @@ class SaleCheckoutService {
           uomFactor: item.uomFactor,
           uomPrice: item.uomPrice,
           unitName: item.unitName,
+          inclusivePrice: item.inclusivePrice,
         );
       } else {
         existing.quantity = round3(existing.quantity + item.quantity);
@@ -114,10 +115,19 @@ class SaleCheckoutService {
           // sale de él; si no, de unitario × unidades base. Si la pantalla
           // redondeara distinto, el pago dividido rebotaría por centavos.
           final presentationPrice = line.uomPrice;
-          final grossC = (presentationPrice != null && line.uomFactor > 0)
-              ? grossCents(
-                  round3(line.quantity / line.uomFactor), presentationPrice)
-              : grossCents(line.quantity, line.unitPrice);
+          final presentationQty =
+              (presentationPrice != null && line.uomFactor > 0)
+                  ? round3(line.quantity / line.uomFactor)
+                  : line.quantity;
+          // Venta B02 con precio CON ITBIS (migración 99): el bruto sale de
+          // él y el impuesto se extrae, igual que el RPC. Sin tasa (sin
+          // comprobante, exento) el RPC lo ignora y aquí también.
+          final inclusivePrice = taxRate > 0 ? line.inclusivePrice : null;
+          final grossC = inclusivePrice != null
+              ? grossCents(presentationQty, inclusivePrice)
+              : (presentationPrice != null && line.uomFactor > 0)
+                  ? grossCents(presentationQty, presentationPrice)
+                  : grossCents(line.quantity, line.unitPrice);
           final discountC = (grossC * (line.discountPct / 100))
               .roundToDouble()
               .clamp(0, grossC)
@@ -125,7 +135,8 @@ class SaleCheckoutService {
           final netC = grossC - discountC;
           // Precio con ITBIS incluido: el neto ES el total y el impuesto se
           // extrae. Si no, se agrega encima.
-          final inclusive = line.priceIncludesTax && taxRate > 0;
+          final inclusive =
+              (line.priceIncludesTax || inclusivePrice != null) && taxRate > 0;
           final taxC = taxCents(netC, taxRate, inclusive: inclusive);
           final subtotalC = inclusive ? netC - taxC : netC;
           final totalC = inclusive ? netC : netC + taxC;
@@ -152,6 +163,7 @@ class SaleCheckoutService {
             uomFactor: line.uomFactor,
             uomPrice: line.uomPrice,
             unitName: line.unitName,
+            inclusivePrice: inclusivePrice,
           );
         })
         .toList(growable: false);
@@ -260,9 +272,14 @@ class SaleCheckoutSourceItem {
     this.uomFactor = 1,
     this.uomPrice,
     this.unitName,
+    this.inclusivePrice,
   });
 
   final SaleCheckoutSourceProduct product;
+
+  /// Venta B02: precio CON ITBIS de UNA presentación (migración 99). La línea
+  /// se cobra desde él y el ITBIS se extrae. Null = precio base de siempre.
+  final double? inclusivePrice;
 
   /// Cantidad en UNIDADES BASE (2 cajas de 12 = 24). Es lo que descuenta el
   /// trigger de stock, que no conoce los empaques.
@@ -385,6 +402,11 @@ class NormalizedSaleCheckout {
               if (item.unitName != null) 'unit_name': item.unitName,
             },
             if (item.imeis.isNotEmpty) 'imeis': item.imeis,
+            // Venta B02: el RPC cobra la línea desde el precio con ITBIS y lo
+            // extrae (migración 99). Un servidor sin la 99 lo ignora y cobra
+            // como antes.
+            if (item.inclusivePrice != null)
+              'inclusive_price': item.inclusivePrice,
           },
         )
         .toList(growable: false);
@@ -409,10 +431,14 @@ class NormalizedSaleCheckoutItem {
     this.uomFactor = 1,
     this.uomPrice,
     this.unitName,
+    this.inclusivePrice,
   });
 
   final String productId;
   final String description;
+
+  /// Precio con ITBIS de una presentación (venta B02, migración 99).
+  final double? inclusivePrice;
 
   /// Cantidad en unidades base.
   final double quantity;
@@ -460,6 +486,7 @@ class _MutableSaleLine {
     required this.uomFactor,
     this.uomPrice,
     this.unitName,
+    this.inclusivePrice,
     List<String>? imeis,
   }) : imeis = [...?imeis];
 
@@ -477,6 +504,7 @@ class _MutableSaleLine {
   final double uomFactor;
   final double? uomPrice;
   final String? unitName;
+  final double? inclusivePrice;
   final List<String> imeis;
 }
 

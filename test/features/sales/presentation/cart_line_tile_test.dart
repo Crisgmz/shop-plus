@@ -56,7 +56,7 @@ Future<void> _pumpTile(
                 shaded: shaded,
                 chargesTax: true,
                 onRemove: () {},
-                onPriceChanged: (_) {},
+                onPriceChanged: (_, {inclusivePrice}) {},
                 onQuantityChanged: (_) {},
                 onDiscountChanged: (_) {},
                 onPriceTierChanged: (_) {},
@@ -72,6 +72,8 @@ Future<void> _pumpTile(
 }
 
 void main() {
+  _b02Tests();
+
   testWidgets('con espacio, tipo de precio y presentación van junto al '
       'nombre', (tester) async {
     await _pumpTile(tester, 1000);
@@ -142,6 +144,125 @@ void main() {
       final plain = background();
       await _pumpTile(tester, 1000, shaded: true);
       expect(background(), isNot(plain));
+    });
+  });
+}
+
+/// B02: el cajero escribe el precio CON ITBIS y ese es el que se cobra
+/// (migración 99). El tile manda la base y, aparte, el precio escrito.
+void _b02Tests() {
+  final unitItem = SaleCartItem(
+    product: SalesProduct(
+      id: 'p',
+      name: 'Producto',
+      price: 508.47,
+      cost: 200,
+      taxRate: 18,
+      stock: 50,
+      isActive: true,
+    ),
+    quantity: 3,
+  );
+
+  Future<List<(double, double?)>> typePrice(
+    WidgetTester tester,
+    SaleCartItem item,
+    String typed, {
+    bool pricesIncludeTax = true,
+  }) async {
+    final calls = <(double, double?)>[];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appSettingsProvider.overrideWith(_FakeSettings.new)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 1000,
+              child: CartLineTile(
+                item: item,
+                chargesTax: true,
+                pricesIncludeTax: pricesIncludeTax,
+                onRemove: () {},
+                onPriceChanged: (v, {inclusivePrice}) =>
+                    calls.add((v, inclusivePrice)),
+                onQuantityChanged: (_) {},
+                onDiscountChanged: (_) {},
+                onPriceTierChanged: (_) {},
+                onUomChanged: (_) {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final field = find.byWidgetPredicate(
+      (w) =>
+          w is TextField &&
+          w.controller?.text ==
+              (pricesIncludeTax ? '599.99' : '508.47'),
+    );
+    expect(field, findsOneWidget);
+    await tester.enterText(field, typed);
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    // Enter y el blur envían los dos: aquí la línea no se actualiza, así que
+    // llegan dos llamadas iguales. En la pantalla la segunda no hace nada.
+    return calls;
+  }
+
+  group('B02: precio con ITBIS escrito', () {
+    testWidgets('manda la base y el precio escrito', (tester) async {
+      final calls = await typePrice(tester, unitItem, '600');
+      expect(calls.toSet(), {(508.47, 600.0)});
+    });
+
+    testWidgets('en B01 solo viaja la base', (tester) async {
+      final calls = await typePrice(
+        tester,
+        unitItem,
+        '510',
+        pricesIncludeTax: false,
+      );
+      expect(calls.toSet(), {(510.0, null)});
+    });
+
+    testWidgets('muestra el precio con ITBIS guardado, no el recalculado', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appSettingsProvider.overrideWith(_FakeSettings.new)],
+          child: MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 1000,
+                child: CartLineTile(
+                  item: unitItem.copyWith(
+                    taxInclusive: true,
+                    inclusivePriceOverride: 600,
+                  ),
+                  chargesTax: true,
+                  pricesIncludeTax: true,
+                  onRemove: () {},
+                  onPriceChanged: (_, {inclusivePrice}) {},
+                  onQuantityChanged: (_) {},
+                  onDiscountChanged: (_) {},
+                  onPriceTierChanged: (_) {},
+                  onUomChanged: (_) {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is TextField && w.controller?.text == '600',
+        ),
+        findsOneWidget,
+      );
     });
   });
 }

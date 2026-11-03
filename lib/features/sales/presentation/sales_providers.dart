@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 
 import '../../../core/web/kv_store.dart';
 import '../../auth/presentation/auth_providers.dart';
@@ -200,6 +201,9 @@ String _encodeSaleDraft(SaleDraft d) => jsonEncode({
             // Precio de caja escrito a mano: sin esto, recargar la página lo
             // devolvería al precio configurado y cobraría otra cosa.
             'presentationPrice': it.presentationPriceOverride,
+            // Precio con ITBIS escrito en B02 (migración 99).
+            'taxInclusive': it.taxInclusive,
+            'inclusivePrice': it.inclusivePriceOverride,
           },
       ],
     });
@@ -225,6 +229,8 @@ SaleDraft? _decodeSaleDraft(String? raw) {
             uom: PackagingUom.fromDb(e['uom']?.toString()),
             presentationPriceOverride:
                 (e['presentationPrice'] as num?)?.toDouble(),
+            taxInclusive: e['taxInclusive'] == true,
+            inclusivePriceOverride: (e['inclusivePrice'] as num?)?.toDouble(),
           ),
     ];
     return SaleDraft(
@@ -343,4 +349,19 @@ final salesFilteredProductsProvider =
 final salesClientsByIdProvider = Provider<Map<String, SalesClient>>((ref) {
   final clients = ref.watch(salesClientsProvider).valueOrNull ?? const [];
   return {for (final c in clients) c.id: c};
+});
+
+/// La base cobra las líneas B02 desde el precio CON ITBIS (migración 99:
+/// `sale_items.inclusive_price`). Sin ella la app calcula como antes, para
+/// que la pantalla y lo que registra el servidor siempre coincidan.
+final inclusivePricingSupportedProvider = FutureProvider<bool>((ref) async {
+  final client = ref.watch(supabaseClientProvider);
+  try {
+    await client.from('sale_items').select('inclusive_price').limit(1);
+    return true;
+  } on PostgrestException {
+    return false;
+  } catch (_) {
+    return false;
+  }
 });

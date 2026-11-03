@@ -80,4 +80,40 @@ void main() {
     expect(document.totals.tax, 0);
     expect(document.totals.total, 236);
   });
+
+  test('B02 cobrada desde el precio con ITBIS imprime ese precio', () {
+    // Migración 99: el job manda `inclusive_price` como precio unitario.
+    final document = const SalePrintDocumentAdapter().toDocumentData(
+      SalePrintSource(
+        saleId: 's3',
+        branchId: 'b1',
+        saleNumber: 'FA-000010',
+        status: 'completed',
+        saleDate: DateTime(2026, 9, 30),
+        receiptType: 'consumer_final',
+        branchName: 'Soplasora',
+        ncf: 'B0200000010',
+        items: const [
+          SalePrintItemSource(
+            description: 'Producto',
+            quantity: 3,
+            unitPrice: 600,
+            lineSubtotal: 1525.42,
+            lineTax: 274.58,
+            lineTotal: 1800,
+          ),
+        ],
+        subtotal: 1525.42,
+        taxAmount: 274.58,
+        totalAmount: 1800,
+        paidAmount: 1800,
+      ),
+    );
+
+    // Ya trae el ITBIS adentro: no se le vuelve a sumar.
+    expect(document.items.single.unitPrice, 600);
+    expect(document.items.single.lineSubtotal, 1800);
+    expect(document.totals.subtotal, 1800);
+    expect(document.totals.tax, 0);
+  });
 }

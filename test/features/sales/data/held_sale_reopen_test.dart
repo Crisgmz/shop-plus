@@ -108,4 +108,38 @@ void main() {
   test('una fila sin cantidad se descarta', () {
     expect(cartItemFromHeldSaleRow(_boxRow(quantity: 0), _vasos()), isNull);
   });
+
+  group('B02 con precio con ITBIS guardado (migración 99)', () {
+    test('la caja vuelve cobrando el precio con ITBIS escrito', () {
+      final item = cartItemFromHeldSaleRow(
+        {..._boxRow(uomPrice: 5932.20), 'inclusive_price': 7000},
+        _vasos(),
+      )!;
+
+      expect(item.taxInclusive, isTrue);
+      expect(item.inclusivePrice, 7000);
+      expect(item.presentationPrice, 5932.20);
+      // 4 × 7,000.00 exactos, no 27,999.98.
+      expect(item.lineTotal, 28000);
+    });
+
+    test('una línea suelta también', () {
+      final item = cartItemFromHeldSaleRow({
+        'product_id': 'vasos',
+        'quantity': 3,
+        'unit_price': 508.47,
+        'discount_amount': 0,
+        'inclusive_price': 600,
+      }, _vasos())!;
+
+      expect(item.inclusivePrice, 600);
+      expect(item.lineTotal, 1800);
+    });
+
+    test('sin precio con ITBIS guardado vuelve como siempre', () {
+      final item = cartItemFromHeldSaleRow(_boxRow(), _vasos())!;
+      expect(item.taxInclusive, isFalse);
+      expect(item.inclusivePriceOverride, isNull);
+    });
+  });
 }

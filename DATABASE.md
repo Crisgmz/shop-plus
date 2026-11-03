@@ -289,6 +289,29 @@ idempotentes y conservan las firmas que usa `flutter_shop+`.
   recalcula ITBIS con la configuración actual del producto. Las notas de
   crédito electrónicas (E34) no se envían aún.
 
+### B02: se cobra el precio con ITBIS que se ve (migración 99, 30 sep 2026)
+`20260930_99_precio_con_itbis_b02.sql`, después de la 98. En Consumidor Final
+el cajero ve y escribe el precio CON ITBIS. Antes se guardaba la base
+(600 / 1.18 = 508.47) y el RPC le volvía a sumar el impuesto: 3 × 600 daba
+1,799.98 y 2 × 320 daba 640.01.
+
+- Columna nueva `sale_items.inclusive_price numeric(14,2)`: precio con ITBIS de
+  UNA presentación (la caja, si es por caja). Null = línea cobrada desde la
+  base, como siempre.
+- Cambia el CUERPO de `checkout_sale_transactional`, `hold_sale_transactional`
+  y `edit_sale_transactional`, no la firma. Si la línea trae `inclusive_price`
+  y la venta lleva ITBIS (`v_rate > 0`), el bruto es `inclusive_price ×
+  cantidad de presentaciones` y el ITBIS se extrae (`neto × r / (100 + r)`),
+  igual que con un producto `price_includes_tax`. Sin ITBIS (sin comprobante,
+  cliente que no paga ITBIS) se ignora y se cobra la base. `flutter_shop+` no
+  lo manda y sigue igual.
+- El app manda siempre `unit_price` / `uom_price` base además de
+  `inclusive_price`, y solo lo manda si la columna existe (si no, el cobro es
+  el de antes). La factura imprime `inclusive_price` como precio unitario.
+- Las ventas viejas no cambian. Al editarlas, una línea sin `inclusive_price`
+  conserva su total hasta que se le escriba el precio o se le cambie la
+  presentación o el tipo de precio.
+
 ### Tiempo real
 Migración `20260916_93_realtime_todas_las_pantallas.sql`: fuente ÚNICA de las
 tablas publicadas en `supabase_realtime` (20). Reaplica las de las migraciones
