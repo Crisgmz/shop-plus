@@ -87,11 +87,13 @@ class _EcfSequenceDialogState extends ConsumerState<EcfSequenceDialog> {
                   decoration: const InputDecoration(
                     labelText: 'Tipo de comprobante',
                   ),
-                  items: ecfTypeLabels.entries
+                  // Solo los que el POS emite: una E34 cargada aquí competía
+                  // con la E31 en las facturas de crédito fiscal.
+                  items: emittableEcfTypes
                       .map(
-                        (e) => DropdownMenuItem(
-                          value: e.key,
-                          child: Text('${e.key} — ${e.value}'),
+                        (t) => DropdownMenuItem(
+                          value: t,
+                          child: Text('$t — ${ecfTypeLabels[t] ?? t}'),
                         ),
                       )
                       .toList(growable: false),
