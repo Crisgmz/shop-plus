@@ -37,16 +37,25 @@ final ncfSequenceAvailableProvider =
 /// Prefijo NCF que se va a usar por cada tipo de comprobante en la sucursal
 /// actual (ej. `consumer_final` → `B02`, o `E32` si esa es la activa).
 ///
-/// Espeja la elección de `assign_next_ncf` (migración 56): secuencia activa,
-/// vigente, con capacidad y, si hay varias del mismo tipo, la de menor
-/// número siguiente. Así el POS muestra la serie con la que realmente sale la
-/// factura. Un tipo sin secuencia disponible no aparece en el mapa.
+/// Espeja la elección de `assign_next_ncf` (migración 63 de flutter_shop+, la
+/// que corre en la base compartida): secuencia activa, vigente y con
+/// capacidad, filtrada por la modalidad e-CF de la empresa (`physical` → sin
+/// serie E, `electronic` → solo E, `hybrid` → las dos, prefiriendo la E) y,
+/// a igual serie, la de menor número siguiente. Así el POS muestra la serie
+/// con la que realmente sale la factura. Un tipo sin secuencia disponible no
+/// aparece en el mapa.
 final activeNcfPrefixesProvider =
     FutureProvider.autoDispose<Map<String, String>>((ref) async {
   final client = ref.watch(supabaseClientProvider);
   try {
     final branchId = await client.rpc('current_branch_id');
     if (branchId == null) return const {};
+    // La RLS filtra company_ecf_settings a la empresa del usuario. Sin fila
+    // (e-CF nunca configurado) la modalidad es física, igual que en el RPC.
+    final mode = await ref.watch(companyEcfSettingsProvider.future).then(
+          (s) => s?.mode ?? 'physical',
+          onError: (_) => 'physical',
+        );
     final rows = await client
         .from('vw_ncf_stock')
         .select(
@@ -64,6 +73,9 @@ final activeNcfPrefixesProvider =
       if ((row['status'] ?? 'active').toString() != 'active') continue;
       final prefix = (row['prefix'] ?? '').toString().trim();
       if (prefix.isEmpty) continue;
+      final electronic = prefix.startsWith('E');
+      if (mode == 'physical' && electronic) continue;
+      if (mode == 'electronic' && !electronic) continue;
       // Siguiente número efectivo, igual que el RPC cuando next_number es NULL.
       final start = asInt(row['sequence_start']) ?? 1;
       final current = asInt(row['current_number']) ?? 0;
@@ -73,7 +85,12 @@ final activeNcfPrefixesProvider =
       if (end != null && next > end) continue;
       final type = (row['receipt_type'] ?? '').toString();
       final previous = best[type];
-      if (previous == null || next < previous.next) {
+      // La serie E gana siempre (en híbrido el RPC la prefiere); a igual
+      // serie, el número más bajo.
+      final previousElectronic = previous?.prefix.startsWith('E') ?? false;
+      if (previous == null ||
+          (electronic && !previousElectronic) ||
+          (electronic == previousElectronic && next < previous.next)) {
         best[type] = (prefix: prefix, next: next);
       }
     }

@@ -27,6 +27,7 @@ import '../features/sales/presentation/sales_edit_page.dart';
 import '../features/sales/presentation/sales_entry_page.dart';
 import '../features/sales/presentation/sales_history_page.dart';
 import '../features/settings/presentation/app_settings_page.dart';
+import '../features/settings/presentation/ecf_onboarding_page.dart';
 import '../features/settings/presentation/settings_page.dart';
 import '../features/setup/presentation/setup_page.dart';
 import '../features/shell/presentation/app_shell.dart';
@@ -192,6 +193,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
                     path: 'cuenta',
                     pageBuilder: (_, _) =>
                         const NoTransitionPage(child: SettingsPage()),
+                  ),
+                  // Trámite e-CF paso a paso (ecfOnboardingRoute).
+                  GoRoute(
+                    path: 'facturacion-electronica',
+                    pageBuilder: (_, _) =>
+                        const NoTransitionPage(child: EcfOnboardingPage()),
                   ),
                 ],
               ),

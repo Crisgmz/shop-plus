@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart'
     show debugPrint, kIsWeb, visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../fiscal_documents/data/fiscal_documents_repository.dart';
 import '../../printing/data/printing.dart';
 import '../../../shared/errors/friendly_error.dart';
 import '../../../shared/packaging/presentation_row.dart';
@@ -1372,6 +1373,19 @@ class SalesRepository {
     final logoBytes = ctx.logoBytes;
     final qrBytes = ctx.qrBytes;
 
+    // e-CF: si la venta salió con NCF electrónico (serie E), aseguramos la
+    // emisión síncrona (para tener el QR DGII antes de imprimir) y armamos
+    // los datos de la representación impresa. También cubre reimpresiones:
+    // cada preparación refresca el estado e-CF más reciente.
+    PrintEcfData? ecfData;
+    final saleNcf = (sale['ncf'] ?? '').toString();
+    if (saleNcf.startsWith('E')) {
+      ecfData = await _prepareEcfPrintData(
+        saleId: saleId,
+        emitterRnc: (settings['company_tax_id'] ?? '').toString(),
+      );
+    }
+
     // Cash session → nombre legible para "Caja registradora".
     final cashSessionId = sale['cash_session_id']?.toString();
     String? cashRegisterName;
@@ -1490,6 +1504,7 @@ class SalesRepository {
       clientEmail: client['email']?.toString(),
       cashierName: cashier['full_name']?.toString(),
       ncf: sale['ncf']?.toString(),
+      ecf: ecfData,
       notes: sale['notes']?.toString(),
       items: itemRows
           .map((row) => Map<String, dynamic>.from(row as Map))
@@ -1555,6 +1570,65 @@ class SalesRepository {
       sale: saleSource,
       paperSize: paperSize,
     );
+  }
+
+  /// Emisión síncrona del e-CF y datos para la representación impresa.
+  ///
+  /// Concepto portado de mangospos: al cobrar, el POS invoca la Edge Function
+  /// `emit-document` con timeout corto para tener el código de seguridad y el
+  /// QR DGII ANTES de imprimir (Norma 01-2020). Si Alanube no responde a
+  /// tiempo, el recibo sale con el mensaje de estado ("En proceso DGII…") y
+  /// el cron de respaldo + webhook completan el documento después.
+  /// Nunca lanza: el e-CF no puede romper el cobro ni la impresión.
+  Future<PrintEcfData?> _prepareEcfPrintData({
+    required String saleId,
+    required String emitterRnc,
+  }) async {
+    try {
+      final fiscalRepo = FiscalDocumentsRepository(_client);
+      var doc = await fiscalRepo.fetchDocumentBySaleId(saleId);
+      if (doc == null || !doc.isElectronic) return null;
+
+      // Incierto: no se reenvía al imprimir (se resuelve en Comprobantes).
+      if (!doc.hasQrData &&
+          doc.ecfStatus != 'rejected' &&
+          doc.ecfStatus != 'uncertain') {
+        doc = await fiscalRepo.emitElectronicDocument(doc.id) ?? doc;
+      }
+
+      // Ambiente (sandbox/producción) para la URL DGII del QR. La RLS filtra
+      // company_ecf_settings a la empresa del usuario (igual que app_settings).
+      var sandbox = true;
+      try {
+        final rows = await _client
+            .from('company_ecf_settings')
+            .select('environment')
+            .limit(1);
+        if (rows.isNotEmpty) {
+          final env = Map<String, dynamic>.from(rows.first as Map)['environment'];
+          sandbox = env?.toString() != 'production';
+        }
+      } catch (_) {
+        // Sin config accesible: asumimos sandbox (QR de prueba, inofensivo).
+      }
+
+      final publicUrl = doc.publicUrl?.trim() ?? '';
+      final qrUrl = publicUrl.isNotEmpty
+          ? publicUrl
+          : (doc.hasQrData
+              ? doc.buildDgiiVerifyUrl(emitterRnc: emitterRnc, sandbox: sandbox)
+              : null);
+
+      return PrintEcfData(
+        qrUrl: qrUrl,
+        securityCode: doc.ecfSecurityCode,
+        signedAt: doc.ecfSignedAt,
+        statusMessage: qrUrl == null ? doc.ecfStatusMessage : null,
+      );
+    } catch (error) {
+      debugPrint('e-CF: no se pudo preparar la impresión: $error');
+      return null;
+    }
   }
 
   /// Busca una venta por número en la sucursal actual y devuelve sus líneas

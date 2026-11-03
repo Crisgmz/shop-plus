@@ -12,6 +12,7 @@ import '../../../shared/widgets/ncf_stock_banner.dart'
     show missingNcfCountProvider;
 import '../../../shared/widgets/ui_custom.dart';
 import '../data/settings_repository.dart';
+import 'ecf_request_card.dart';
 import 'settings_providers.dart';
 
 const _receiptTypeLabels = <String, String>{
@@ -52,6 +53,17 @@ const _dgiiNcfPrefixes = <String, String>{
   'special': 'B14', // Comprobante de Regímenes Especiales
   'export': 'B16', // Comprobante para Exportaciones
   'credit_note': 'B04', // Nota de Crédito (devoluciones)
+};
+
+/// Prefijos e-CF (facturación electrónica) por tipo. El e-NCF se forma como
+/// 'E' + tipo (2 dígitos) + 10 dígitos de secuencia (ej. E32 + 0000000001 =
+/// E320000000001, 13 caracteres — Norma DGII 01-2020).
+const _dgiiEcfPrefixes = <String, String>{
+  'consumer_final': 'E32', // Factura de Consumo Electrónica
+  'fiscal_credit': 'E31', // Factura de Crédito Fiscal Electrónica
+  'governmental': 'E45', // Comprobante Gubernamental Electrónico
+  'special': 'E44', // Regímenes Especiales Electrónico
+  'export': 'E46', // Exportaciones Electrónico
 };
 
 /// Tipos cuyas secuencias NCF NO vencen, según DGII (Guía de Comprobantes
@@ -105,6 +117,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               _branchCard(data),
               const SizedBox(height: AppTokens.s24),
               _fiscalSettingsCard(data),
+              const SizedBox(height: AppTokens.s24),
+              const EcfRequestCard(),
               const SizedBox(height: AppTokens.s24),
               _businessProfileCard(),
               const SizedBox(height: AppTokens.s24),
@@ -2159,6 +2173,11 @@ class _NcfDialogState extends State<_NcfDialog> {
   final _formKey = GlobalKey<FormState>();
   late String _receiptType;
   late String _status;
+  late bool _electronic;
+
+  /// Prefijos sugeridos según la serie seleccionada (B física / E electrónica).
+  Map<String, String> get _prefixMap =>
+      _electronic ? _dgiiEcfPrefixes : _dgiiNcfPrefixes;
   late final TextEditingController _prefixController;
   late final TextEditingController _seriesController;
   late final TextEditingController _documentCodeController;
@@ -2177,6 +2196,7 @@ class _NcfDialogState extends State<_NcfDialog> {
     final s = widget.sequence;
     _receiptType = s?.receiptType ?? _sequenceReceiptTypeLabels.keys.first;
     _status = s?.status ?? 'active';
+    _electronic = (s?.prefix ?? '').startsWith('E');
     _prefixController = TextEditingController(
       text: s?.prefix ?? _dgiiNcfPrefixes[_receiptType] ?? '',
     );
@@ -2245,7 +2265,7 @@ class _NcfDialogState extends State<_NcfDialog> {
                   ),
                   items: _sequenceReceiptTypeLabels.entries
                       .map((entry) {
-                        final code = _dgiiNcfPrefixes[entry.key];
+                        final code = _prefixMap[entry.key];
                         return DropdownMenuItem<String>(
                           value: entry.key,
                           child: Text(
@@ -2259,18 +2279,41 @@ class _NcfDialogState extends State<_NcfDialog> {
                   onChanged: (value) {
                     if (value == null) return;
                     setState(() {
-                      final prevPrefix = _dgiiNcfPrefixes[_receiptType];
+                      final prevPrefix = _prefixMap[_receiptType];
                       _receiptType = value;
                       // Auto-completar el prefijo DGII al cambiar de tipo, sin
                       // pisar uno que el usuario haya escrito a mano.
                       final cur = _prefixController.text.trim();
                       if (cur.isEmpty || cur == prevPrefix) {
-                        _prefixController.text = _dgiiNcfPrefixes[value] ?? cur;
+                        _prefixController.text = _prefixMap[value] ?? cur;
                       }
                     });
                   },
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 4),
+                SwitchListTile.adaptive(
+                  value: _electronic,
+                  onChanged: (value) {
+                    setState(() {
+                      final prevPrefix = _prefixMap[_receiptType];
+                      _electronic = value;
+                      // Cambiar de serie B↔E actualiza el prefijo sugerido,
+                      // sin pisar uno escrito a mano.
+                      final cur = _prefixController.text.trim();
+                      if (cur.isEmpty || cur == prevPrefix) {
+                        _prefixController.text =
+                            _prefixMap[_receiptType] ?? cur;
+                      }
+                    });
+                  },
+                  title: const Text('Secuencia electrónica (e-CF, serie E)'),
+                  subtitle: const Text(
+                    'e-NCF = prefijo E + 10 dígitos (13 caracteres). Requiere '
+                    'modalidad e-CF activa en la configuración fiscal.',
+                  ),
+                  contentPadding: EdgeInsets.zero,
+                ),
+                const SizedBox(height: 8),
                 Row(
                   children: [
                     Expanded(

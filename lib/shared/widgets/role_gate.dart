@@ -75,3 +75,16 @@ class RoleGate extends ConsumerWidget {
     return access.hasAny(allowed) ? child : fallback;
   }
 }
+
+/// Código del permiso "Administrar NCF" (`permissions.code`). En la base lo
+/// exige `resolve_uncertain_ecf_emission` (migración 101 de flutter_shop+):
+/// pasa el admin (`is_admin()`) o quien tenga el override.
+const kNcfManagePermission = 'ncf.manage';
+
+/// ¿Puede el usuario resolver un envío e-CF incierto (Comprobantes)?
+///
+/// Solo admin. shop-plus no lee overrides por usuario: un empleado con el
+/// override `ncf.manage` puede resolver en la base, pero aquí no ve el botón.
+final canManageNcfProvider = Provider<bool>((ref) {
+  return ref.watch(roleAccessProvider).isAdmin;
+});

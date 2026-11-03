@@ -580,3 +580,21 @@ Si el trabajo toca DB, asumir esto:
 - si el cambio es de roles/caja/fiscal, revisar también la referencia de `mangospos`
 
 Eso evita inventar estructura y mantiene coherencia con el roadmap real.
+
+## 14) Facturación electrónica (e-CF): el servidor vive en flutter_shop+
+
+shop-plus comparte la base con flutter_shop+ (Busi Pos Web), y la parte de
+servidor del e-CF está SOLO en ese repo (`/Users/cristiangomez/dev/flutter_shop+`):
+
+- Migraciones (`flutter_shop+/supabase/sql-next/`): 63 (base e-CF:
+  `company_ecf_settings`, `ecf_emit_outbox`, `assign_next_ncf` por modalidad),
+  90 y 102 (solicitud), 101 (envío incierto), 105 (certificación DGII).
+- Edge Functions (`flutter_shop+/supabase/functions/`): `ecf-onboarding`,
+  `emit-document`, `alanube-webhook`, `register-company`, `alanube-health`.
+  Se publican con `flutter_shop+/tool/deploy_edge_functions.sh`.
+
+Lo de la app (la tarjeta y el trámite de 5 pasos en Configuración, la emisión
+al imprimir, el QR en el recibo y los estados en Comprobantes) está portado
+igual que en flutter_shop+ (3 nov 2026). Si allá cambia, se cambia aquí.
+`activeNcfPrefixesProvider` espeja el `assign_next_ncf` de la 63 (filtra por
+modalidad), no el de la 56 de este repo.

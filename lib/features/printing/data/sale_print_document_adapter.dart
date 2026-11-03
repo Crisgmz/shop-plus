@@ -42,6 +42,7 @@ class SalePrintSource {
     this.showItbis = true,
     this.qrBytes,
     this.hideTaxBreakdown,
+    this.ecf,
   });
 
   final String saleId;
@@ -102,6 +103,10 @@ class SalePrintSource {
   /// de crédito de una venta B02 lo pasa en true: se muestra igual que la
   /// factura que modifica.
   final bool? hideTaxBreakdown;
+
+  /// Datos e-CF (QR DGII, código de seguridad, firma digital). Solo cuando la
+  /// venta lleva NCF electrónico (serie E).
+  final PrintEcfData? ecf;
 }
 
 class SalePrintItemSource {
@@ -203,6 +208,7 @@ class SalePrintDocumentAdapter {
           !taxIncluded &&
           source.items.any((i) => i.lineTax > 0.0049),
       qrBytes: source.qrBytes,
+      ecf: source.ecf,
       observation: _nullIfBlank(source.observation),
       ncf: _nullIfBlank(source.ncf),
       notes: _nullIfBlank(source.notes),

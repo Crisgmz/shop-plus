@@ -314,6 +314,11 @@ class PdfReceiptBuilder {
             ),
           ),
         ],
+        // ── 8) e-CF: QR DGII + código de seguridad (Norma 01-2020) ────────
+        if (data.ecf != null) ...[
+          _thermalDashedDivider(),
+          ..._thermalEcfBlock(data.ecf!, base: base, bold: bold, muted: muted),
+        ],
         if (data.showBarcode) ...[
           _thermalDashedDivider(),
           pw.Center(
@@ -329,6 +334,57 @@ class PdfReceiptBuilder {
         ],
       ],
     );
+  }
+
+  /// Bloque e-CF de la representación impresa: QR de verificación DGII,
+  /// código de seguridad y fecha de firma digital. Si el documento aún no
+  /// tiene QR (Alanube no respondió a tiempo o DGII lo rechazó), imprime el
+  /// mensaje de estado en su lugar.
+  List<pw.Widget> _thermalEcfBlock(
+    PrintEcfData ecf, {
+    required pw.TextStyle base,
+    required pw.TextStyle bold,
+    required pw.TextStyle muted,
+  }) {
+    if (!ecf.hasQr) {
+      return [
+        pw.Center(
+          child: pw.Text(
+            ecf.statusMessage ?? 'e-CF en proceso DGII',
+            textAlign: pw.TextAlign.center,
+            style: bold,
+          ),
+        ),
+      ];
+    }
+
+    return [
+      pw.Center(
+        child: pw.BarcodeWidget(
+          barcode: pw.Barcode.qrCode(),
+          data: ecf.qrUrl!,
+          width: 96,
+          height: 96,
+        ),
+      ),
+      pw.SizedBox(height: 3),
+      if (_hasText(ecf.securityCode))
+        pw.Center(
+          child: pw.Text(
+            'Código de Seguridad: ${ecf.securityCode}',
+            textAlign: pw.TextAlign.center,
+            style: base,
+          ),
+        ),
+      if (ecf.signedAt != null)
+        pw.Center(
+          child: pw.Text(
+            'Fecha de Firma Digital: ${formatDateTime(ecf.signedAt!)}',
+            textAlign: pw.TextAlign.center,
+            style: muted,
+          ),
+        ),
+    ];
   }
 
   /// Separador discontinuo estilo ticket térmico clásico (- - - - -).
@@ -1075,7 +1131,47 @@ class PdfReceiptBuilder {
                 ],
               ),
             ),
-            if (qrBytes != null) ...[
+            // e-CF: el QR de verificación DGII (Norma 01-2020) tiene
+            // prioridad sobre el QR decorativo de la empresa.
+            if (data.ecf?.hasQr ?? false) ...[
+              pw.SizedBox(width: 16),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.center,
+                children: [
+                  pw.BarcodeWidget(
+                    barcode: pw.Barcode.qrCode(),
+                    data: data.ecf!.qrUrl!,
+                    width: 92,
+                    height: 92,
+                  ),
+                  if (_hasText(data.ecf!.securityCode))
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(top: 3),
+                      child: pw.Text(
+                        'Código de Seguridad: ${data.ecf!.securityCode}',
+                        style: const pw.TextStyle(fontSize: 8),
+                      ),
+                    ),
+                  if (data.ecf!.signedAt != null)
+                    pw.Text(
+                      'Firma Digital: ${formatDateTime(data.ecf!.signedAt!)}',
+                      style: const pw.TextStyle(
+                        fontSize: 8,
+                        color: PdfColors.grey600,
+                      ),
+                    ),
+                ],
+              ),
+            ] else if (data.ecf?.statusMessage != null) ...[
+              pw.SizedBox(width: 16),
+              pw.Text(
+                data.ecf!.statusMessage!,
+                style: pw.TextStyle(
+                  fontSize: 9,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+            ] else if (qrBytes != null) ...[
               pw.SizedBox(width: 16),
               pw.Image(pw.MemoryImage(qrBytes), width: 92, height: 92),
             ],
@@ -1103,17 +1199,31 @@ String _invoiceTitle(PrintDocumentData data) {
     return 'NOTA DE CRÉDITO';
   }
   final label = (data.receiptTypeLabel ?? '').toLowerCase();
+  // e-CF: la representación impresa debe identificar el documento electrónico.
+  final electronic = (data.ncf ?? '').startsWith('E');
   if (label.contains('sin comprobante')) return 'NOTA DE VENTA';
-  if (label.contains('consumidor')) return 'FACTURA PARA CONSUMIDOR FINAL';
+  if (label.contains('consumidor')) {
+    return electronic
+        ? 'FACTURA DE CONSUMO ELECTRÓNICA'
+        : 'FACTURA PARA CONSUMIDOR FINAL';
+  }
   if (label.contains('crédito') ||
       label.contains('credito') ||
       label.contains('fiscal')) {
-    return 'FACTURA CON CRÉDITO FISCAL';
+    return electronic
+        ? 'FACTURA DE CRÉDITO FISCAL ELECTRÓNICA'
+        : 'FACTURA CON CRÉDITO FISCAL';
   }
-  if (label.contains('gubernamental')) return 'FACTURA GUBERNAMENTAL';
-  if (label.contains('especial')) return 'FACTURA RÉGIMEN ESPECIAL';
-  if (label.contains('exporta')) return 'FACTURA DE EXPORTACIÓN';
-  return 'FACTURA';
+  if (label.contains('gubernamental')) {
+    return electronic ? 'FACTURA GUBERNAMENTAL ELECTRÓNICA' : 'FACTURA GUBERNAMENTAL';
+  }
+  if (label.contains('especial')) {
+    return electronic ? 'FACTURA RÉGIMEN ESPECIAL ELECTRÓNICA' : 'FACTURA RÉGIMEN ESPECIAL';
+  }
+  if (label.contains('exporta')) {
+    return electronic ? 'FACTURA DE EXPORTACIÓN ELECTRÓNICA' : 'FACTURA DE EXPORTACIÓN';
+  }
+  return electronic ? 'FACTURA ELECTRÓNICA' : 'FACTURA';
 }
 
 /// Divide un texto multilínea en líneas no vacías (para dirección / banco).

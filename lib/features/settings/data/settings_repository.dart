@@ -233,6 +233,55 @@ class SettingsNcfSequence {
   }
 }
 
+/// Configuración de facturación electrónica (e-CF) de la empresa.
+/// Espeja `company_ecf_settings` (concepto portado de mangospos/Alanube).
+class CompanyEcfSettings {
+  CompanyEcfSettings({
+    required this.companyId,
+    this.provider = 'alanube',
+    this.alanubeCompanyId,
+    this.environment = 'sandbox',
+    this.certificationStatus = 'pending',
+    this.mode = 'physical',
+    this.webhooksConfigured = false,
+  });
+
+  final String companyId;
+  final String provider;
+
+  /// ULID que devuelve Alanube al registrar la empresa. Null = sin registrar.
+  final String? alanubeCompanyId;
+
+  /// 'sandbox' | 'production'
+  final String environment;
+
+  /// 'pending' | 'in_progress' | 'certified' | 'rejected'
+  final String certificationStatus;
+
+  /// 'physical' (solo NCF B), 'electronic' (solo e-CF E), 'hybrid' (E con
+  /// fallback a B). Controla qué serie consume `assign_next_ncf`.
+  final String mode;
+
+  final bool webhooksConfigured;
+
+  bool get isRegistered =>
+      alanubeCompanyId != null && alanubeCompanyId!.trim().isNotEmpty;
+  bool get electronicEnabled => mode != 'physical';
+
+  factory CompanyEcfSettings.fromMap(Map<String, dynamic> map) {
+    return CompanyEcfSettings(
+      companyId: (map['company_id'] ?? '').toString(),
+      provider: (map['provider'] ?? 'alanube').toString(),
+      alanubeCompanyId: map['alanube_company_id']?.toString(),
+      environment: (map['environment'] ?? 'sandbox').toString(),
+      certificationStatus:
+          (map['certification_status'] ?? 'pending').toString(),
+      mode: (map['mode'] ?? 'physical').toString(),
+      webhooksConfigured: map['webhooks_configured'] == true,
+    );
+  }
+}
+
 class BranchFiscalSettings {
   BranchFiscalSettings({
     required this.branchId,
@@ -803,6 +852,62 @@ class SettingsRepository {
       },
       onConflict: 'branch_id',
     );
+  }
+
+  // ─── Facturación electrónica (e-CF) ────────────────────────────────────
+
+  /// Config e-CF de la empresa del usuario (la RLS filtra a su empresa).
+  /// Null si la empresa aún no tiene fila (e-CF nunca configurado).
+  Future<CompanyEcfSettings?> fetchCompanyEcfSettings() async {
+    final rows = await _client.from('company_ecf_settings').select().limit(1);
+    if (rows.isEmpty) return null;
+    return CompanyEcfSettings.fromMap(
+      Map<String, dynamic>.from(rows.first as Map),
+    );
+  }
+
+  /// Crea/actualiza la modalidad y el ambiente e-CF de la empresa actual.
+  Future<void> saveCompanyEcfSettings({
+    required String mode,
+    required String environment,
+  }) async {
+    final companyId = await _client.rpc('current_company_id');
+    if (companyId == null || companyId.toString().isEmpty) {
+      throw Exception('No se pudo determinar la empresa actual.');
+    }
+
+    await _client.from('company_ecf_settings').upsert(
+      {
+        'company_id': companyId.toString(),
+        'mode': mode,
+        'environment': environment,
+      },
+      onConflict: 'company_id',
+    );
+  }
+
+  /// Da de alta la empresa en el proveedor e-CF (Alanube) vía la Edge
+  /// Function `register-company`. Idempotente: si ya está registrada, el
+  /// backend responde 409 y aquí se trata como éxito.
+  Future<void> registerEcfCompany() async {
+    final companyId = await _client.rpc('current_company_id');
+    if (companyId == null || companyId.toString().isEmpty) {
+      throw Exception('No se pudo determinar la empresa actual.');
+    }
+
+    try {
+      await _client.functions.invoke(
+        'register-company',
+        body: {'company_id': companyId.toString()},
+      );
+    } on FunctionException catch (error) {
+      if (error.status == 409) return; // ya registrada
+      final detail = error.details is Map
+          ? ((error.details as Map)['error'] ?? error.details).toString()
+          : (error.details ?? error.reasonPhrase ?? 'Error desconocido')
+              .toString();
+      throw Exception('No se pudo registrar la empresa en Alanube: $detail');
+    }
   }
 
   Future<SettingsProfile?> _fetchProfile(String userId) async {

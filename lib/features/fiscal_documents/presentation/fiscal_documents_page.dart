@@ -38,6 +38,23 @@ const _statusColors = <String, Color>{
   'voided': Color(0xFF64748B),
 };
 
+/// Estados del documento electrónico (e-CF vía Alanube/DGII).
+const _ecfStatusLabels = <String, String>{
+  'pending': 'e-CF pendiente',
+  'sent': 'e-CF en proceso',
+  'accepted': 'e-CF aceptado',
+  'rejected': 'e-CF rechazado',
+  'uncertain': 'e-CF sin confirmar',
+};
+
+const _ecfStatusColors = <String, Color>{
+  'pending': Color(0xFFF59E0B),
+  'sent': Color(0xFF3B82F6),
+  'accepted': Color(0xFF22C55E),
+  'rejected': Color(0xFFEF4444),
+  'uncertain': AppTokens.warning,
+};
+
 const _receiptTypes = <String>[
   'consumer_final',
   'fiscal_credit',
@@ -286,23 +303,51 @@ class _DocsList extends ConsumerWidget {
         ),
         DataCell(Text(receiptLabel, style: const TextStyle(fontSize: 13))),
         DataCell(
-          Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppTokens.s8,
-              vertical: 3,
-            ),
-            decoration: BoxDecoration(
-              color: statusColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(AppTokens.radiusS),
-            ),
-            child: Text(
-              statusLabel,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: statusColor,
+          Wrap(
+            spacing: 4,
+            runSpacing: 2,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppTokens.s8,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(AppTokens.radiusS),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: statusColor,
+                  ),
+                ),
               ),
-            ),
+              if (doc.isElectronic && doc.ecfStatus != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppTokens.s8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: (_ecfStatusColors[doc.ecfStatus] ??
+                            AppTokens.mutedForeground)
+                        .withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(AppTokens.radiusS),
+                  ),
+                  child: Text(
+                    _ecfStatusLabels[doc.ecfStatus] ?? doc.ecfStatus!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: _ecfStatusColors[doc.ecfStatus] ??
+                          AppTokens.mutedForeground,
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
         DataCell(Text(
@@ -345,6 +390,131 @@ class _FiscalDocDetailDialog extends ConsumerStatefulWidget {
 class _FiscalDocDetailDialogState
     extends ConsumerState<_FiscalDocDetailDialog> {
   bool _voiding = false;
+  bool _emitting = false;
+  bool _resolving = false;
+
+  /// Re-dispara la emisión del e-CF (Edge Function `emit-document`). Útil
+  /// cuando quedó pendiente (proveedor caído, empresa sin registrar) o para
+  /// refrescar el estado tras corregir la causa de un rechazo.
+  Future<void> _onEmit() async {
+    setState(() => _emitting = true);
+    try {
+      final repo = ref.read(fiscalDocumentsRepositoryProvider);
+      final updated = await repo.emitElectronicDocument(widget.doc.id);
+      if (!mounted) return;
+      widget.listRef.invalidate(fiscalDocumentsProvider);
+      Navigator.of(context).pop();
+      final status = updated?.ecfStatus;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            status == null
+                ? 'Emisión disparada; el estado se actualizará en breve.'
+                : 'Estado e-CF: ${_ecfStatusLabels[status] ?? status}',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _emitting = false);
+    }
+  }
+
+  /// Un envío incierto (migración 101) pudo llegar a Alanube: no se reenvía
+  /// solo. Quien administra comprobantes lo busca en Alanube por su e-NCF y
+  /// dice si está (con su id) o no (se reenvía con el mismo e-NCF).
+  Future<void> _onResolveUncertain() async {
+    final idController = TextEditingController();
+    final noteController = TextEditingController();
+
+    final found = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Resolver envío sin confirmar'),
+        content: SizedBox(
+          width: 440,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'No se sabe si Alanube recibió el ${widget.doc.ncf}. Búscalo en '
+                'el portal de Alanube por ese e-NCF antes de decidir: '
+                'reenviarlo si ya está lo duplicaría ante la DGII.',
+                style: const TextStyle(color: AppTokens.mutedForeground),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              TextField(
+                controller: idController,
+                decoration: const InputDecoration(
+                  labelText: 'ID del documento en Alanube',
+                  helperText: 'Solo si lo encontraste.',
+                ),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              TextField(
+                controller: noteController,
+                decoration: const InputDecoration(
+                  labelText: 'Nota (opcional)',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('No está: reenviar'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (idController.text.trim().isEmpty) return;
+              Navigator.of(dialogContext).pop(true);
+            },
+            child: const Text('Sí está en Alanube'),
+          ),
+        ],
+      ),
+    );
+
+    if (found == null || !mounted) return;
+    final alanubeId = idController.text.trim();
+    final note = noteController.text.trim();
+
+    setState(() => _resolving = true);
+    try {
+      final repo = ref.read(fiscalDocumentsRepositoryProvider);
+      await repo.resolveUncertainEmission(
+        fiscalDocumentId: widget.doc.id,
+        foundInAlanube: found,
+        alanubeDocumentId: found ? alanubeId : null,
+        note: note.isEmpty ? null : note,
+      );
+      // Confirmado que no está: se reenvía ya, no al próximo cron.
+      if (!found) await repo.emitElectronicDocument(widget.doc.id);
+      if (!mounted) return;
+      widget.listRef.invalidate(fiscalDocumentsProvider);
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            found
+                ? 'Comprobante conciliado con Alanube.'
+                : 'Comprobante reenviado con el mismo e-NCF.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _resolving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo resolver: $error')),
+      );
+    }
+  }
 
   /// Comprobante de una venta: se anula LA VENTA (stock, dinero y NCF) con
   /// el motivo DGII. Antes solo se marcaba el comprobante —y ni eso: el
@@ -520,10 +690,16 @@ class _FiscalDocDetailDialogState
     final access = ref.watch(roleAccessProvider);
     // Una nota de crédito no se anula desde aquí: su devolución ya movió
     // stock y dinero, y anularla no los revierte.
+    // Incierto: podría existir ante la DGII; la base tampoco deja anularlo.
     final canVoid = !doc.isVoided &&
         doc.fiscalStatus != 'voided' &&
         doc.receiptType != 'credit_note' &&
+        doc.ecfStatus != 'uncertain' &&
         access.canVoidSale;
+    final canResolve = doc.isElectronic &&
+        !doc.isVoided &&
+        doc.ecfStatus == 'uncertain' &&
+        ref.watch(canManageNcfProvider);
 
     return AlertDialog(
       title: Row(
@@ -615,6 +791,35 @@ class _FiscalDocDetailDialogState
                   ],
                 ),
               ],
+              if (doc.isElectronic) ...[
+                const SizedBox(height: AppTokens.s16),
+                _DetailSection(
+                  title: 'Facturación electrónica (DGII)',
+                  rows: [
+                    _DetailRow(
+                      'Estado',
+                      _ecfStatusLabels[doc.ecfStatus] ??
+                          doc.ecfStatus ??
+                          'Sin emitir',
+                    ),
+                    if (doc.ecfTrackingNumber != null)
+                      _DetailRow('Track ID', doc.ecfTrackingNumber!),
+                    if (doc.ecfSecurityCode != null)
+                      _DetailRow('Código seguridad', doc.ecfSecurityCode!),
+                    if (doc.ecfSignedAt != null)
+                      _DetailRow(
+                        'Firma digital',
+                        formatDateTime(doc.ecfSignedAt),
+                      ),
+                    if (doc.submittedAt != null)
+                      _DetailRow('Enviado', formatDateTime(doc.submittedAt)),
+                    if (doc.acceptedAt != null)
+                      _DetailRow('Aceptado', formatDateTime(doc.acceptedAt)),
+                    if (doc.lastError != null && doc.lastError!.isNotEmpty)
+                      _DetailRow('Último error', doc.lastError!),
+                  ],
+                ),
+              ],
               const SizedBox(height: AppTokens.s16),
               _DetailSection(
                 title: 'Montos',
@@ -637,6 +842,32 @@ class _FiscalDocDetailDialogState
         ),
       ),
       actions: [
+        if (doc.isElectronic &&
+            !doc.isVoided &&
+            (doc.ecfStatus == 'pending' || doc.ecfStatus == 'rejected'))
+          TextButton.icon(
+            onPressed: _emitting ? null : _onEmit,
+            icon: _emitting
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.send_outlined, size: 16),
+            label: const Text('Emitir a DGII'),
+          ),
+        if (canResolve)
+          TextButton.icon(
+            onPressed: _resolving ? null : _onResolveUncertain,
+            icon: _resolving
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.help_outline, size: 16),
+            label: const Text('Resolver envío'),
+          ),
         if (canVoid)
           TextButton.icon(
             onPressed: _voiding ? null : _onVoid,
