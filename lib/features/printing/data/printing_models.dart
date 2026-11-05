@@ -255,7 +255,7 @@ class PrintEcfData {
   final DateTime? signedAt;
 
   /// Mensaje a imprimir cuando todavía no hay QR ("En proceso DGII…",
-  /// "Rechazado DGII: …"). Null cuando hasQr es true o no aplica.
+  /// "e-CF no validado aún por la DGII"). Null cuando hasQr es true o no aplica.
   final String? statusMessage;
 
   bool get hasQr => qrUrl != null && qrUrl!.trim().isNotEmpty;

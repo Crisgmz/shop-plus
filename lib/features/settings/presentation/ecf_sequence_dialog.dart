@@ -87,13 +87,14 @@ class _EcfSequenceDialogState extends ConsumerState<EcfSequenceDialog> {
                   decoration: const InputDecoration(
                     labelText: 'Tipo de comprobante',
                   ),
-                  // Solo los que el POS emite: una E34 cargada aquí competía
-                  // con la E31 en las facturas de crédito fiscal.
-                  items: emittableEcfTypes
+                  // E34 incluida: el servidor la guarda como nota de crédito
+                  // (nunca como crédito fiscal, donde competía con la E31) y
+                  // solo la usa la nota automática al anular una e-CF.
+                  items: ecfTypeLabels.entries
                       .map(
-                        (t) => DropdownMenuItem(
-                          value: t,
-                          child: Text('$t — ${ecfTypeLabels[t] ?? t}'),
+                        (e) => DropdownMenuItem(
+                          value: e.key,
+                          child: Text('${e.key} — ${e.value}'),
                         ),
                       )
                       .toList(growable: false),

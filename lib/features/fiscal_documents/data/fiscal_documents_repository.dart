@@ -156,11 +156,12 @@ class FiscalDocument {
         return 'En proceso DGII (esperando confirmación)';
       case 'uncertain':
         return 'Envío a DGII sin confirmar';
+      // Va impreso en el recibo del cliente: nada de errores técnicos (el
+      // detalle queda en Comprobantes → "Último error"). Tampoco "rechazado
+      // por la DGII": casi siempre lo frena el proveedor al validar, antes de
+      // llegar a ella, y se reenvía con el mismo e-NCF una vez corregido.
       case 'rejected':
-        final err = lastError ?? '';
-        return err.isNotEmpty
-            ? 'Rechazado DGII: ${err.substring(0, err.length.clamp(0, 80))}'
-            : 'Rechazado por DGII';
+        return 'e-CF no validado aún por la DGII';
       default:
         return null;
     }
@@ -286,10 +287,16 @@ class FiscalDocumentsRepository {
   }
 
   Future<FiscalDocument?> fetchDocumentBySaleId(String saleId) async {
+    // La nota de crédito (E34 al anular, B04 de una devolución) cuelga de la
+    // MISMA venta: sin este filtro, al ser la más reciente, se tomaba la nota
+    // en vez de la factura. Por prefijo y no por receipt_type, para no
+    // depender de que el tipo 'credit_note' exista en la base.
     final rows = await _client
         .from('fiscal_documents')
         .select()
         .eq('sale_id', saleId)
+        .not('ncf', 'like', 'E34%')
+        .not('ncf', 'like', 'B04%')
         .order('created_at', ascending: false)
         .limit(1);
 
