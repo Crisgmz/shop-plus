@@ -8,6 +8,7 @@ import '../../../shared/widgets/app_snackbar.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/ui_custom.dart';
+import '../../auth/presentation/auth_providers.dart';
 import '../../permissions/data/permissions_repository.dart';
 import '../../permissions/presentation/permissions_providers.dart';
 import '../data/users_repository.dart';
@@ -69,6 +70,11 @@ class UsersPage extends ConsumerStatefulWidget {
 
 class _UsersPageState extends ConsumerState<UsersPage> {
   final _searchController = TextEditingController();
+
+  /// El usuario conectado. Sobre su propia fila no se ofrece nada que lo deje
+  /// fuera: sin una sucursal activa, la RLS ya no lo deja volver a activarse
+  /// (pasó el 1 y el 6 nov 2026; la migración 104 lo bloquea en la base).
+  String? get _myId => ref.read(supabaseClientProvider).auth.currentUser?.id;
 
   @override
   void dispose() {
@@ -261,28 +267,42 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                 visualDensity: VisualDensity.compact,
                               ),
                               IconButton(
-                                tooltip: user.isActive
+                                tooltip: user.id == _myId && user.isActive
+                                    ? 'No puedes desactivar tu propio usuario'
+                                    : user.isActive
                                     ? 'Desactivar'
                                     : 'Activar',
-                                onPressed: () => _onToggleActive(user),
+                                onPressed: user.id == _myId && user.isActive
+                                    ? null
+                                    : () => _onToggleActive(user),
                                 icon: Icon(
                                   user.isActive
                                       ? Icons.block_outlined
                                       : Icons.check_circle_outline,
                                   size: AppTokens.iconSizeS,
-                                  color: user.isActive
+                                  // Sin color propio cuando está bloqueado,
+                                  // para que se vea gris (deshabilitado).
+                                  color: user.id == _myId && user.isActive
+                                      ? null
+                                      : user.isActive
                                       ? AppTokens.destructive
                                       : AppTokens.success,
                                 ),
                                 visualDensity: VisualDensity.compact,
                               ),
                               IconButton(
-                                tooltip: 'Eliminar',
-                                onPressed: () => _onDeleteUser(user),
-                                icon: const Icon(
+                                tooltip: user.id == _myId
+                                    ? 'No puedes eliminar tu propio usuario'
+                                    : 'Eliminar',
+                                onPressed: user.id == _myId
+                                    ? null
+                                    : () => _onDeleteUser(user),
+                                icon: Icon(
                                   Icons.delete_outline,
                                   size: AppTokens.iconSizeS,
-                                  color: AppTokens.destructive,
+                                  color: user.id == _myId
+                                      ? null
+                                      : AppTokens.destructive,
                                 ),
                                 visualDensity: VisualDensity.compact,
                               ),
@@ -468,13 +488,21 @@ class _UsersPageState extends ConsumerState<UsersPage> {
                                       visualDensity: VisualDensity.compact,
                                     ),
                                     IconButton(
-                                      tooltip: branch.isActive
+                                      tooltip:
+                                          _isOwnLastBranch(selectedUser, branch)
+                                          ? 'Es tu única sucursal activa: si '
+                                                'la quitas pierdes el acceso'
+                                          : branch.isActive
                                           ? 'Desactivar'
                                           : 'Activar',
-                                      onPressed: () => _onToggleMembership(
-                                        membershipId: branch.membershipId,
-                                        isActive: !branch.isActive,
-                                      ),
+                                      onPressed:
+                                          _isOwnLastBranch(selectedUser, branch)
+                                          ? null
+                                          : () => _onToggleMembership(
+                                              membershipId:
+                                                  branch.membershipId,
+                                              isActive: !branch.isActive,
+                                            ),
                                       icon: Icon(
                                         branch.isActive
                                             ? Icons.link_off_outlined
@@ -533,10 +561,16 @@ class _UsersPageState extends ConsumerState<UsersPage> {
     }
   }
 
+  /// Su propia y única asignación activa: quitarla lo deja "Sin sucursal".
+  bool _isOwnLastBranch(UserEntity user, UserBranchAssignment branch) =>
+      user.id == _myId &&
+      branch.isActive &&
+      user.branches.where((b) => b.isActive).length <= 1;
+
   Future<void> _onEditUser(UserEntity user) async {
     final result = await showDialog<_EditUserResult>(
       context: context,
-      builder: (_) => _EditUserDialog(user: user),
+      builder: (_) => _EditUserDialog(user: user, isSelf: user.id == _myId),
     );
     if (result == null || !mounted) return;
 
@@ -835,9 +869,12 @@ class _UsersKpis extends StatelessWidget {
 }
 
 class _EditUserDialog extends StatefulWidget {
-  const _EditUserDialog({required this.user});
+  const _EditUserDialog({required this.user, this.isSelf = false});
 
   final UserEntity user;
+
+  /// Editando el propio usuario: no se puede apagar "Usuario activo".
+  final bool isSelf;
 
   @override
   State<_EditUserDialog> createState() => _EditUserDialogState();
@@ -987,8 +1024,13 @@ class _EditUserDialogState extends State<_EditUserDialog> {
                 const SizedBox(height: 8),
                 SwitchListTile.adaptive(
                   value: _isActive,
-                  onChanged: (value) => setState(() => _isActive = value),
+                  onChanged: widget.isSelf && _isActive
+                      ? null
+                      : (value) => setState(() => _isActive = value),
                   title: const Text('Usuario activo'),
+                  subtitle: widget.isSelf && _isActive
+                      ? const Text('No puedes desactivar tu propio usuario.')
+                      : null,
                   contentPadding: EdgeInsets.zero,
                 ),
                 const SizedBox(height: 16),

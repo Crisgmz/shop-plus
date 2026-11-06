@@ -8,6 +8,8 @@ import '../../../shared/responsive/responsive_layout.dart';
 import '../../../shared/widgets/empty_state.dart';
 import '../../../shared/widgets/module_page.dart';
 import '../../../shared/widgets/ui_custom.dart';
+import '../../auth/presentation/auth_providers.dart';
+import '../../shell/presentation/shell_providers.dart';
 import '../data/branches_repository.dart';
 import 'branches_providers.dart';
 
@@ -257,6 +259,16 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
     );
   }
 
+  /// Su propia y única asignación activa: quitarla lo deja "Sin sucursal" y
+  /// la RLS ya no lo deja reactivarse (la migración 104 lo bloquea en la base).
+  /// Las sucursales activas propias salen del selector de sucursal del menú.
+  bool _isOwnLastBranch(BranchMember member) {
+    final myId = ref.read(supabaseClientProvider).auth.currentUser?.id;
+    if (member.userId != myId || !member.isActive) return false;
+    final mine = ref.watch(shellBranchOptionsProvider).valueOrNull;
+    return (mine?.length ?? 1) <= 1;
+  }
+
   Widget _membersCard({
     required BranchEntity? selectedBranch,
     required AsyncValue<List<BranchMember>> membersAsync,
@@ -355,13 +367,18 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
                                     visualDensity: VisualDensity.compact,
                                   ),
                                   IconButton(
-                                    tooltip: member.isActive
+                                    tooltip: _isOwnLastBranch(member)
+                                        ? 'Es tu única sucursal activa: si la '
+                                            'quitas pierdes el acceso'
+                                        : member.isActive
                                         ? 'Desactivar asignación'
                                         : 'Activar asignación',
-                                    onPressed: () => _onToggleMembership(
-                                      membershipId: member.membershipId,
-                                      isActive: !member.isActive,
-                                    ),
+                                    onPressed: _isOwnLastBranch(member)
+                                        ? null
+                                        : () => _onToggleMembership(
+                                            membershipId: member.membershipId,
+                                            isActive: !member.isActive,
+                                          ),
                                     icon: Icon(
                                       member.isActive ? Icons.person_off_outlined : Icons.person_outline,
                                       size: AppTokens.iconSizeS,
@@ -552,6 +569,8 @@ class _BranchesPageState extends ConsumerState<BranchesPage> {
       if (!mounted) return;
       ref.invalidate(branchesListProvider);
       ref.invalidate(branchMembersProvider);
+      // Cuenta las sucursales activas propias (ver _isOwnLastBranch).
+      ref.invalidate(shellBranchOptionsProvider);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
