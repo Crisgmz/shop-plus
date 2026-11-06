@@ -514,7 +514,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 child: Align(
                   alignment: Alignment.centerRight,
                   child: FilledButton.icon(
-                    onPressed: data.currentBranch == null ? null : _onCreateNcf,
+                    onPressed: data.currentBranch == null
+                        ? null
+                        : () => _onCreateNcf(data.ncfSequences),
                     icon: const Icon(Icons.add, size: 18),
                     label: const Text('Nueva secuencia'),
                   ),
@@ -594,7 +596,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                   children: [
                                     IconButton(
                                       tooltip: 'Editar',
-                                      onPressed: () => _onEditNcf(item),
+                                      onPressed: () =>
+                                          _onEditNcf(item, data.ncfSequences),
                                       icon: const Icon(
                                         Icons.edit_outlined,
                                         size: AppTokens.iconSizeS,
@@ -841,19 +844,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     }
   }
 
-  Future<void> _onCreateNcf() async {
+  Future<void> _onCreateNcf(List<SettingsNcfSequence> existing) async {
     final result = await showDialog<_NcfDialogResult>(
       context: context,
-      builder: (_) => const _NcfDialog(),
+      builder: (_) => _NcfDialog(existing: existing),
     );
     if (result == null || !mounted) return;
     await _saveNcf(result);
   }
 
-  Future<void> _onEditNcf(SettingsNcfSequence sequence) async {
+  Future<void> _onEditNcf(
+    SettingsNcfSequence sequence,
+    List<SettingsNcfSequence> existing,
+  ) async {
     final result = await showDialog<_NcfDialogResult>(
       context: context,
-      builder: (_) => _NcfDialog(sequence: sequence),
+      builder: (_) => _NcfDialog(sequence: sequence, existing: existing),
     );
     if (result == null || !mounted) return;
     await _saveNcf(result);
@@ -2161,9 +2167,13 @@ class _NcfDialogResult {
 }
 
 class _NcfDialog extends StatefulWidget {
-  const _NcfDialog({this.sequence});
+  const _NcfDialog({this.sequence, this.existing = const []});
 
   final SettingsNcfSequence? sequence;
+
+  /// Secuencias de la sucursal, para avisar antes de guardar una que repite
+  /// tipo y prefijo (`ncf_sequences_branch_id_receipt_type_prefix_key`).
+  final List<SettingsNcfSequence> existing;
 
   @override
   State<_NcfDialog> createState() => _NcfDialogState();
@@ -2319,12 +2329,23 @@ class _NcfDialogState extends State<_NcfDialog> {
                     Expanded(
                       child: TextFormField(
                         controller: _prefixController,
-                        decoration: const InputDecoration(labelText: 'Prefijo'),
+                        decoration: const InputDecoration(
+                          labelText: 'Prefijo',
+                          errorMaxLines: 3,
+                        ),
                         validator: (value) {
-                          if ((value ?? '').trim().isEmpty) {
+                          final prefix = (value ?? '').trim();
+                          if (prefix.isEmpty) {
                             return 'Este campo es requerido';
                           }
-                          return null;
+                          final taken = widget.existing.any(
+                            (s) =>
+                                s.id != widget.sequence?.id &&
+                                s.receiptType == _receiptType &&
+                                s.prefix.trim().toUpperCase() ==
+                                    prefix.toUpperCase(),
+                          );
+                          return taken ? _duplicateNcfMessage(prefix) : null;
                         },
                       ),
                     ),
@@ -2590,6 +2611,13 @@ String _roleLabel(String? role) {
       return role == null || role.isEmpty ? '-' : role;
   }
 }
+
+/// Una sola secuencia por tipo y prefijo en cada sucursal: un rango nuevo de
+/// la DGII se carga ampliando la que ya existe, no creando otra.
+String _duplicateNcfMessage(String prefix) =>
+    'Ya existe la secuencia ${prefix.trim()} de este tipo en la sucursal '
+    '(puede estar inactiva). Edítala con el lápiz para cargar el rango nuevo: '
+    'sube el máximo y el vencimiento.';
 
 String _receiptTypeLabel(String type) =>
     _defaultReceiptTypeLabels[type] ?? _sequenceReceiptTypeLabels[type] ?? type;

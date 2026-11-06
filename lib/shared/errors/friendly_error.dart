@@ -199,6 +199,12 @@ String _duplicate(String raw) {
   if (raw.contains('rnc') || raw.contains('document_number')) {
     return 'Ya existe un registro con ese RNC o cédula.';
   }
+  // Antes que 'ncf': el índice de secuencias también lo contiene, y "Ese NCF
+  // ya fue utilizado" confundía al cargar una secuencia repetida.
+  if (raw.contains('ncf_sequences')) {
+    return 'Ya existe una secuencia de ese tipo y prefijo en la sucursal '
+        '(puede estar inactiva). Edítala para cargar el rango nuevo.';
+  }
   if (raw.contains('ncf')) return 'Ese NCF ya fue utilizado.';
   if (raw.contains('email')) return 'Ya existe un registro con ese correo.';
   if (raw.contains('name')) return 'Ya existe un registro con ese nombre.';

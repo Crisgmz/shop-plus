@@ -77,6 +77,19 @@ void main() {
       );
     });
 
+    test('secuencia NCF repetida: no dice "Ese NCF ya fue utilizado"', () {
+      expect(
+        friendlyErrorMessage(
+          const PostgrestException(
+            message: 'duplicate key value violates unique constraint '
+                '"ncf_sequences_branch_id_receipt_type_prefix_key"',
+            code: '23505',
+          ),
+        ),
+        startsWith('Ya existe una secuencia de ese tipo y prefijo'),
+      );
+    });
+
     test('RLS de Postgres → sin permiso', () {
       expect(
         friendlyErrorMessage(
